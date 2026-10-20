@@ -115,16 +115,6 @@ function recall(key) {
 }
 
 // Minimal rendering: fenced code blocks become <pre>, the rest stays plain text.
-function richText(text) {
-  const out = [];
-  const parts = text.split(/```[^\n]*\n?/);
-  parts.forEach((p, i) => {
-    if (!p) return;
-    out.push(i % 2 ? h('pre', {}, p.replace(/\n$/, '')) : document.createTextNode(p));
-  });
-  return out;
-}
-
 function trunc(s, n) {
   s = (s || '').replace(/\s+/g, ' ').trim();
   return s.length > n ? s.slice(0, n) + '…' : s;
@@ -669,7 +659,7 @@ function messageEl(m) {
     case 'error':
       return h('div', { class: 'msg error' }, '✗ ' + m.content);
     default:
-      return h('div', { class: 'msg ' + m.role }, richText(m.content));
+      return h('div', { class: 'msg md ' + m.role }, markdown(m.content));
   }
 }
 
