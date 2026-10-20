@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jeanpetric/assistant/internal/agent"
 	"github.com/jeanpetric/assistant/internal/app"
@@ -185,6 +186,25 @@ func TestLanesFieldsAndSchedules(t *testing.T) {
 		t.Fatalf("updated = %+v", sched)
 	}
 	c.do("DELETE", "/api/schedules/"+itoa(sched.ID), nil, 204, nil)
+}
+
+func TestTaskDueAt(t *testing.T) {
+	c := newClient(t)
+	var task store.Task
+	c.do("POST", "/api/tasks", map[string]any{"title": "Call Ana", "kind": "reminder", "due_at": "2026-10-20T15:00:00Z"}, 201, &task)
+	want := time.Date(2026, 10, 20, 15, 0, 0, 0, time.UTC)
+	if task.DueAt == nil || !task.DueAt.Equal(want) {
+		t.Fatalf("created %+v", task)
+	}
+	c.do("PATCH", "/api/tasks/"+itoa(task.ID), map[string]any{"title": "Call Ana back"}, 200, &task)
+	if task.DueAt == nil || !task.DueAt.Equal(want) {
+		t.Fatalf("absent due_at changed it: %+v", task)
+	}
+	c.do("PATCH", "/api/tasks/"+itoa(task.ID), map[string]any{"due_at": "tomorrow"}, 400, nil)
+	c.do("PATCH", "/api/tasks/"+itoa(task.ID), map[string]any{"due_at": nil}, 200, &task)
+	if task.DueAt != nil {
+		t.Fatalf("null due_at kept %v", task.DueAt)
+	}
 }
 
 func TestGuard(t *testing.T) {

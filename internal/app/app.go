@@ -280,13 +280,35 @@ func (a *App) RunDueSchedules(ctx context.Context) error {
 	return nil
 }
 
-// RunScheduler checks schedules every interval until ctx is done.
+// RunDueReminders notifies once for every task whose due time has been reached.
+func (a *App) RunDueReminders(ctx context.Context) error {
+	now := a.Now()
+	due, err := a.Store.DueTasks(ctx, now)
+	if err != nil {
+		return err
+	}
+	for _, t := range due {
+		if err := a.Store.MarkReminded(ctx, t.ID, now); err != nil {
+			return err
+		}
+		taskID := t.ID
+		if err := a.Store.Notify(ctx, &taskID, "Due: "+t.Title); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// RunScheduler checks schedules and due reminders every interval until ctx is done.
 func (a *App) RunScheduler(ctx context.Context, interval time.Duration) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
 		if err := a.RunDueSchedules(ctx); err != nil {
 			log.Printf("scheduler: %v", err)
+		}
+		if err := a.RunDueReminders(ctx); err != nil {
+			log.Printf("reminders: %v", err)
 		}
 		select {
 		case <-ctx.Done():

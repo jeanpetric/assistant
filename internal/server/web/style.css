@@ -132,6 +132,8 @@ main { padding: 20px; }
 .badge.kind-research { color: #8a4bd8; }
 .badge.kind-discussion { color: #c06a12; }
 .badge.kind-reminder { color: #c2397a; }
+.badge.due { color: var(--text); }
+.badge.due.overdue { color: var(--danger); border-color: var(--danger); }
 .badge.running { color: var(--ok); border-color: var(--ok); }
 .badge.status-running { color: var(--ok); border-color: var(--ok); }
 .badge.status-error { color: var(--danger); border-color: var(--danger); }
@@ -201,6 +203,7 @@ dialog {
   width: min(560px, 92vw); padding: 18px;
 }
 dialog::backdrop { background: rgba(0, 0, 0, .35); }
+.presets { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 .toast {
   position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);

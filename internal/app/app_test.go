@@ -263,6 +263,33 @@ func TestSchedules(t *testing.T) {
 	}
 }
 
+func TestDueReminders(t *testing.T) {
+	a, _ := newApp(t)
+	ctx := context.Background()
+	now := time.Date(2026, 10, 20, 14, 59, 58, 0, time.Local)
+	a.Now = func() time.Time { return now }
+	due := time.Date(2026, 10, 20, 15, 0, 0, 0, time.Local)
+	task, _ := a.Store.CreateTask(ctx, store.Task{Title: "Call Ana", Kind: "reminder", DueAt: &due})
+
+	if err := a.RunDueReminders(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := a.Store.Notifications(ctx, true); len(n) != 0 {
+		t.Fatalf("notified early: %+v", n)
+	}
+
+	now = due
+	a.RunDueReminders(ctx)
+	a.RunDueReminders(ctx)
+	n, _ := a.Store.Notifications(ctx, true)
+	if len(n) != 1 || n[0].Message != "Due: Call Ana" || *n[0].TaskID != task.ID {
+		t.Fatalf("notifications = %+v", n)
+	}
+	if got, _ := a.Store.Task(ctx, task.ID); got.RemindedAt == nil || !got.RemindedAt.Equal(due) {
+		t.Fatalf("reminded_at = %v", got.RemindedAt)
+	}
+}
+
 func TestTaskContext(t *testing.T) {
 	got := TaskContext(store.Task{ID: 7, Title: "T", Description: "desc",
 		Fields: map[string]string{"slack": "s", "productive": "p"}})

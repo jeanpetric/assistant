@@ -24,6 +24,8 @@ type Task struct {
 	Position    int               `json:"position"`
 	Workdir     string            `json:"workdir"`
 	Fields      map[string]string `json:"fields"`
+	DueAt       *time.Time        `json:"due_at"`      // notify when reached
+	RemindedAt  *time.Time        `json:"reminded_at"` // set once the due notification fired
 	CreatedAt   time.Time         `json:"created_at"`
 	UpdatedAt   time.Time         `json:"updated_at"`
 }
@@ -138,13 +140,15 @@ func (s *Store) DeleteFieldDef(ctx context.Context, key string) error {
 
 // ---- tasks ----
 
-const taskCols = `id, title, description, kind, lane_id, position, workdir, created_at, updated_at`
+const taskCols = `id, title, description, kind, lane_id, position, workdir, due_at, reminded_at, created_at, updated_at`
 
 func scanTask(sc interface{ Scan(...any) error }) (Task, error) {
 	var t Task
 	var created, updated int64
-	err := sc.Scan(&t.ID, &t.Title, &t.Description, &t.Kind, &t.LaneID, &t.Position, &t.Workdir, &created, &updated)
+	var due, reminded sql.NullInt64
+	err := sc.Scan(&t.ID, &t.Title, &t.Description, &t.Kind, &t.LaneID, &t.Position, &t.Workdir, &due, &reminded, &created, &updated)
 	t.CreatedAt, t.UpdatedAt = fromMillis(created), fromMillis(updated)
+	t.DueAt, t.RemindedAt = fromNullMillis(due), fromNullMillis(reminded)
 	t.Fields = map[string]string{}
 	return t, err
 }
@@ -225,9 +229,9 @@ func (s *Store) CreateTask(ctx context.Context, t Task) (Task, error) {
 		}
 		now := s.ts()
 		res, err := tx.ExecContext(ctx, `
-			INSERT INTO tasks (title, description, kind, lane_id, position, workdir, created_at, updated_at)
-			VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(position), -1) + 1 FROM tasks WHERE lane_id = ?), ?, ?, ?)`,
-			t.Title, t.Description, t.Kind, t.LaneID, t.LaneID, t.Workdir, now, now)
+			INSERT INTO tasks (title, description, kind, lane_id, position, workdir, due_at, created_at, updated_at)
+			VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(position), -1) + 1 FROM tasks WHERE lane_id = ?), ?, ?, ?, ?)`,
+			t.Title, t.Description, t.Kind, t.LaneID, t.LaneID, t.Workdir, toNullMillis(t.DueAt), now, now)
 		if err != nil {
 			return err
 		}
@@ -241,12 +245,14 @@ func (s *Store) CreateTask(ctx context.Context, t Task) (Task, error) {
 }
 
 // UpdateTask overwrites the editable attributes (not lane/position) and merges fields:
-// an empty field value removes that field.
+// an empty field value removes that field. Changing the due time re-arms its reminder.
 func (s *Store) UpdateTask(ctx context.Context, t Task) error {
 	return s.tx(ctx, func(tx *sql.Tx) error {
+		due := toNullMillis(t.DueAt)
 		err := affected(tx.ExecContext(ctx,
-			`UPDATE tasks SET title = ?, description = ?, kind = ?, workdir = ?, updated_at = ? WHERE id = ?`,
-			t.Title, t.Description, t.Kind, t.Workdir, s.ts(), t.ID))
+			`UPDATE tasks SET title = ?, description = ?, kind = ?, workdir = ?,
+				reminded_at = CASE WHEN due_at IS ? THEN reminded_at END, due_at = ?, updated_at = ? WHERE id = ?`,
+			t.Title, t.Description, t.Kind, t.Workdir, due, due, s.ts(), t.ID))
 		if err != nil {
 			return err
 		}
@@ -270,6 +276,30 @@ func setFields(ctx context.Context, tx *sql.Tx, taskID int64, fields map[string]
 		}
 	}
 	return nil
+}
+
+// DueTasks returns tasks whose due time is at or before now and that haven't been reminded yet.
+// Fields are not loaded.
+func (s *Store) DueTasks(ctx context.Context, now time.Time) ([]Task, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+taskCols+` FROM tasks
+		WHERE reminded_at IS NULL AND due_at IS NOT NULL AND due_at <= ? ORDER BY due_at, id`, now.UnixMilli())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Task{}
+	for rows.Next() {
+		t, err := scanTask(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) MarkReminded(ctx context.Context, id int64, at time.Time) error {
+	return affected(s.db.ExecContext(ctx, `UPDATE tasks SET reminded_at = ? WHERE id = ?`, at.UnixMilli(), id))
 }
 
 func (s *Store) DeleteTask(ctx context.Context, id int64) error {

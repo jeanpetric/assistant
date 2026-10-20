@@ -74,7 +74,7 @@ func main() {
 
 	runner := agent.ClaudeRunner{Command: cfg.Claude, ExtraArgs: strings.Fields(cfg.ClaudeArgs)}
 	a := app.New(st, runner, cfg.Workdir, cfg.Mode)
-	go a.RunScheduler(ctx, 20*time.Second)
+	go a.RunScheduler(ctx, 5*time.Second)
 
 	srv := &http.Server{Addr: addr, Handler: server.New(a), ReadHeaderTimeout: 10 * time.Second}
 	go func() {

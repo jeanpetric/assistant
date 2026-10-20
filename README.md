@@ -19,8 +19,12 @@ One Go binary, one SQLite file, no JavaScript build step.
 - **Transition rules**: when a task moves from lane A (or any lane) to lane B, start an agent
   session with a prompt template — e.g. run a skill like `/p-dev:code` when a task enters
   *In progress*.
+- **Due times & quick reminders**: any task can have a due time; when it's reached you get a
+  notification. *⏰ Reminder* (or press `r`) creates a reminder task in two keystrokes, with
+  presets like *15 min* or *Tomorrow 9:00*.
 - **Recurring schedules** per task (cron syntax): start an agent session or create a reminder.
-- **Notifications** for reminders and failed automations.
+- **Notifications** for reminders, due tasks and failed automations — also as desktop
+  notifications while the board is open in a browser tab (allow them when asked).
 
 ## Run
 

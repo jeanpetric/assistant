@@ -98,6 +98,11 @@ INSERT INTO field_defs (key, label, type, position) VALUES
 	('pull_request', 'Pull request', 'url', 1),
 	('slack', 'Slack thread', 'url', 2);
 `,
+	`
+ALTER TABLE tasks ADD COLUMN due_at INTEGER;
+ALTER TABLE tasks ADD COLUMN reminded_at INTEGER;
+CREATE INDEX tasks_due ON tasks(due_at) WHERE reminded_at IS NULL;
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

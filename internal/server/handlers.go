@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -246,6 +247,7 @@ func (s *Server) updateTask(w http.ResponseWriter, r *http.Request) {
 		Description *string           `json:"description"`
 		Kind        *string           `json:"kind"`
 		Workdir     *string           `json:"workdir"`
+		DueAt       json.RawMessage   `json:"due_at"` // absent: keep, null: clear
 		Fields      map[string]string `json:"fields"`
 	}
 	if err := decode(r, &in); err != nil {
@@ -267,6 +269,13 @@ func (s *Server) updateTask(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.Workdir != nil {
 		cur.Workdir = *in.Workdir
+	}
+	if in.DueAt != nil {
+		cur.DueAt = nil
+		if err := json.Unmarshal(in.DueAt, &cur.DueAt); err != nil {
+			writeErr(w, badRequest{"due_at must be an RFC 3339 time or null"})
+			return
+		}
 	}
 	cur.Fields = in.Fields
 	if err := s.app.Store.UpdateTask(r.Context(), cur); err != nil {

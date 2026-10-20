@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func open(t *testing.T) *Store {
@@ -225,5 +226,50 @@ func TestDeletingLaneCascadesRules(t *testing.T) {
 	s.DeleteLane(ctx, l.ID)
 	if _, err := s.Rule(ctx, r.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatal("rule should be gone")
+	}
+}
+
+func TestDueTasks(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	at := func(h int) *time.Time { x := time.Date(2026, 10, 20, h, 0, 0, 0, time.Local); return &x }
+	early, _ := s.CreateTask(ctx, Task{Title: "early", Kind: "reminder", DueAt: at(9)})
+	s.CreateTask(ctx, Task{Title: "late", DueAt: at(15)})
+	s.CreateTask(ctx, Task{Title: "no due"})
+	if !early.DueAt.Equal(*at(9)) || early.RemindedAt != nil {
+		t.Fatalf("created %+v", early)
+	}
+
+	due, err := s.DueTasks(ctx, *at(10))
+	if err != nil || len(due) != 1 || due[0].ID != early.ID {
+		t.Fatalf("due = %+v err %v", due, err)
+	}
+	if err := s.MarkReminded(ctx, early.ID, *at(10)); err != nil {
+		t.Fatal(err)
+	}
+	if due, _ := s.DueTasks(ctx, *at(10)); len(due) != 0 {
+		t.Fatalf("reminded task still due: %+v", due)
+	}
+
+	// Editing other attributes keeps the reminder state.
+	got, _ := s.Task(ctx, early.ID)
+	got.Title = "early!"
+	s.UpdateTask(ctx, got)
+	if got, _ = s.Task(ctx, early.ID); got.RemindedAt == nil {
+		t.Fatal("unrelated edit re-armed the reminder")
+	}
+	// Moving the due time re-arms it; clearing it removes it.
+	got.DueAt = at(11)
+	s.UpdateTask(ctx, got)
+	if got, _ = s.Task(ctx, early.ID); got.RemindedAt != nil || !got.DueAt.Equal(*at(11)) {
+		t.Fatalf("rescheduled %+v", got)
+	}
+	if due, _ := s.DueTasks(ctx, *at(16)); len(due) != 2 {
+		t.Fatalf("due later = %+v", due)
+	}
+	got.DueAt = nil
+	s.UpdateTask(ctx, got)
+	if due, _ := s.DueTasks(ctx, *at(16)); len(due) != 1 || due[0].Title != "late" {
+		t.Fatalf("after clearing = %+v", due)
 	}
 }

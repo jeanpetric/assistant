@@ -55,6 +55,18 @@ function fmtTime(ts) {
   return ts ? new Date(ts).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '';
 }
 
+// <input type="datetime-local"> works in local time without a zone.
+function toLocalInput(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+  return d.toISOString().slice(0, 16);
+}
+
+function fromLocalInput(v) {
+  return v ? new Date(v).toISOString() : null;
+}
+
 function select(options, value, attrs) {
   return h('select', attrs, options.map(([v, label]) => h('option', { value: v, selected: String(v) === String(value) }, label)));
 }
@@ -133,6 +145,12 @@ function kindBadge(kind) {
   return kind && kind !== 'task' ? h('span', { class: 'badge kind-' + kind }, kind) : null;
 }
 
+function dueBadge(t) {
+  if (!t.due_at) return null;
+  const overdue = new Date(t.due_at) <= Date.now();
+  return h('span', { class: 'badge due' + (overdue ? ' overdue' : ''), title: 'Due ' + fmtTime(t.due_at) }, '⏰ ' + ago(t.due_at));
+}
+
 function runningBadge(n) {
   return n ? h('span', { class: 'badge running' }, h('span', { class: 'pulse' }), n > 1 ? `${n} agents` : 'agent') : null;
 }
@@ -185,7 +203,7 @@ async function renderBoardInPlace() {
 function card(t) {
   const el = h('article', { class: 'card', draggable: 'true', onclick: () => { location.hash = `#/task/${t.id}`; } },
     h('div', { class: 'card-title' }, t.title),
-    h('div', { class: 'card-meta' }, kindBadge(t.kind), runningBadge(state.board.running[t.id]), fieldLinks(t)));
+    h('div', { class: 'card-meta' }, kindBadge(t.kind), dueBadge(t), runningBadge(state.board.running[t.id]), fieldLinks(t)));
   el.dataset.id = t.id;
   el.addEventListener('dragstart', e => {
     dragId = t.id;
@@ -259,13 +277,14 @@ async function renderList() {
       h('td', {}, h('div', {}, t.title), t.description ? h('div', { class: 'muted small' }, trunc(t.description, 120)) : null),
       h('td', {}, laneName(t.lane_id)),
       h('td', {}, kindBadge(t.kind) || 'task'),
+      h('td', { class: 'small', title: fmtTime(t.due_at) }, dueBadge(t)),
       h('td', {}, runningBadge(b.running[t.id]), fieldLinks(t)),
       h('td', { class: 'muted small' }, ago(t.updated_at)))));
   }
   draw();
   view.replaceChildren(h('div', { class: 'panel' },
     h('div', { class: 'toolbar' }, filter, laneSel),
-    h('table', {}, h('thead', {}, h('tr', {}, ['Task', 'Lane', 'Kind', 'Links', 'Updated'].map(x => h('th', {}, x)))), tbody)));
+    h('table', {}, h('thead', {}, h('tr', {}, ['Task', 'Lane', 'Kind', 'Due', 'Links', 'Updated'].map(x => h('th', {}, x)))), tbody)));
   filter.focus();
 }
 
@@ -291,6 +310,9 @@ async function renderTask(id, focusSession) {
     return [h('label', {}, f.label), h('div', { class: 'field-row' }, input, open)];
   });
 
+  const due = h('input', { type: 'datetime-local', value: toLocalInput(t.due_at), onchange: () => save({ due_at: fromLocalInput(due.value) }) });
+  const clearDue = h('button', { class: 'ghost small', title: 'No due time', onclick: async () => { due.value = ''; await save({ due_at: null }); } }, '✕');
+
   side.append(h('div', { class: 'panel' },
     h('input', { class: 'title-input', value: t.title, onchange: e => save({ title: e.target.value }) }),
     h('label', {}, 'Lane'),
@@ -302,6 +324,8 @@ async function renderTask(id, focusSession) {
     }),
     h('label', {}, 'Kind'),
     select(state.meta.kinds.map(k => [k, k]), t.kind, { onchange: e => save({ kind: e.target.value }) }),
+    h('label', {}, 'Due — you get a notification at this time'),
+    h('div', { class: 'field-row' }, due, clearDue),
     h('label', {}, 'Description'),
     h('textarea', { rows: 6, onchange: e => save({ description: e.target.value }) }, t.description),
     h('label', {}, 'Working directory for agents'),
@@ -603,6 +627,46 @@ function ruleDialog(rule, lanes, done) {
   dlg.showModal();
 }
 
+// ---------- quick reminder ----------
+
+function askNotificationPermission() {
+  if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
+}
+
+function reminderPresets() {
+  const inMin = m => new Date(Date.now() + m * 60000);
+  const tomorrow9 = new Date();
+  tomorrow9.setDate(tomorrow9.getDate() + 1);
+  tomorrow9.setHours(9, 0, 0, 0);
+  return [['15 min', inMin(15)], ['30 min', inMin(30)], ['1 h', inMin(60)], ['3 h', inMin(180)], ['Tomorrow 9:00', tomorrow9]];
+}
+
+async function reminderDialog() {
+  if (!state.board) await loadBoard();
+  askNotificationPermission();
+  const dlg = document.getElementById('dialog');
+  const title = h('input', { placeholder: 'e.g. Call Ana about the release' });
+  const when = h('input', { type: 'datetime-local', value: toLocalInput(Date.now() + 3600000) });
+  const create = async () => {
+    if (!title.value.trim() || !when.value) return;
+    await api('POST', '/api/tasks', { title: title.value, kind: 'reminder', due_at: fromLocalInput(when.value) });
+    dlg.close();
+    toast('Reminder set for ' + fmtTime(fromLocalInput(when.value)));
+    if (location.hash === '' || location.hash.startsWith('#/board')) renderBoardInPlace();
+  };
+  title.addEventListener('keydown', e => { if (e.key === 'Enter') create(); });
+  when.addEventListener('keydown', e => { if (e.key === 'Enter') create(); });
+  dlg.replaceChildren(h('h2', {}, 'Remind me'),
+    h('label', {}, 'What'), title,
+    h('label', {}, 'When'), when,
+    h('div', { class: 'presets' }, reminderPresets().map(([label, d]) => h('button', {
+      class: 'ghost small', onclick: () => { when.value = toLocalInput(d); title.focus(); },
+    }, label))),
+    h('div', { class: 'dialog-actions' }, h('button', { class: 'ghost', onclick: () => dlg.close() }, 'Cancel'), h('button', { onclick: create }, 'Set reminder')));
+  dlg.showModal();
+  title.focus();
+}
+
 // ---------- new task dialog ----------
 
 async function newTaskDialog() {
@@ -612,15 +676,20 @@ async function newTaskDialog() {
   const desc = h('textarea', { rows: 4, placeholder: 'Description' });
   const kind = select(state.meta.kinds.map(k => [k, k]), 'task');
   const lane = select(state.board.lanes.map(l => [l.id, l.name]), state.board.lanes[0]?.id);
+  const due = h('input', { type: 'datetime-local' });
   const create = async () => {
     if (!title.value.trim()) return;
-    const t = await api('POST', '/api/tasks', { title: title.value, description: desc.value, kind: kind.value, lane_id: Number(lane.value) });
+    if (due.value) askNotificationPermission();
+    const t = await api('POST', '/api/tasks', {
+      title: title.value, description: desc.value, kind: kind.value, lane_id: Number(lane.value), due_at: fromLocalInput(due.value),
+    });
     dlg.close();
     location.hash = `#/task/${t.id}`;
   };
   title.addEventListener('keydown', e => { if (e.key === 'Enter') create(); });
   dlg.replaceChildren(h('h2', {}, 'New task'), h('label', {}, 'Title'), title, h('label', {}, 'Description'), desc,
     h('div', { class: 'row' }, h('div', { class: 'grow' }, h('label', {}, 'Kind'), kind), h('div', { class: 'grow' }, h('label', {}, 'Lane'), lane)),
+    h('label', {}, 'Due (optional) — you get a notification at this time'), due,
     h('div', { class: 'dialog-actions' }, h('button', { class: 'ghost', onclick: () => dlg.close() }, 'Cancel'), h('button', { onclick: create }, 'Create')));
   dlg.showModal();
   title.focus();
@@ -628,9 +697,26 @@ async function newTaskDialog() {
 
 // ---------- notifications & global counters ----------
 
+let lastNoteId = null; // highest notification id already announced; null until the first poll
+
+function announce(n) {
+  toast(n.message);
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  // The tag makes the OS show it once even with several tabs open.
+  const desktop = new Notification(n.message, { body: n.task_title || '', tag: 'assistant-' + n.id });
+  desktop.onclick = () => {
+    window.focus();
+    if (n.task_id) location.hash = `#/task/${n.task_id}`;
+  };
+}
+
 async function refreshGlobal() {
   try {
     const [notes, running] = await Promise.all([api('GET', '/api/notifications?unread=1'), api('GET', '/api/sessions?status=running')]);
+    const maxId = notes.reduce((m, n) => Math.max(m, n.id), 0);
+    if (lastNoteId !== null) notes.filter(n => n.id > lastNoteId).reverse().forEach(announce);
+    lastNoteId = Math.max(lastNoteId ?? 0, maxId);
+    document.title = notes.length ? `(${notes.length}) Assistant` : 'Assistant';
     const nc = document.getElementById('notif-count');
     nc.textContent = notes.length;
     nc.classList.toggle('hidden', !notes.length);
@@ -662,9 +748,17 @@ async function toggleNotifications() {
 (async function boot() {
   state.meta = await api('GET', '/api/meta');
   document.getElementById('new-task-btn').addEventListener('click', newTaskDialog);
+  document.getElementById('reminder-btn').addEventListener('click', reminderDialog);
+  // "r" anywhere outside a text field opens the quick reminder.
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'r' || e.metaKey || e.ctrlKey || e.altKey || document.getElementById('dialog').open) return;
+    if (e.target.closest('input, textarea, select, [contenteditable]')) return;
+    e.preventDefault();
+    reminderDialog();
+  });
   document.getElementById('notif-btn').addEventListener('click', toggleNotifications);
   window.addEventListener('hashchange', route);
   route();
   refreshGlobal();
-  setInterval(refreshGlobal, 5000);
+  setInterval(refreshGlobal, 3000);
 })();
