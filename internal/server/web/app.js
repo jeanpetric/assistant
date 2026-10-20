@@ -1307,13 +1307,14 @@ async function newTaskDialog(opts = {}) {
     location.hash = `#/task/${t.id}`;
   };
   title.addEventListener('keydown', e => { if (e.key === 'Enter') create(); });
-  dlg.replaceChildren(h('h2', {}, from ? 'New follow-up task' : 'New task'),
+  // replaceChildren would draw a null as the text "null", unlike h().
+  dlg.replaceChildren(...[h('h2', {}, from ? 'New follow-up task' : 'New task'),
     from ? h('p', { class: 'muted small' }, `Builds on #${from.id} ${from.title}: its agents' results go into this task's agent context.`) : null,
     h('label', {}, 'Title'), title, h('label', {}, 'Description'), desc,
     h('label', {}, 'Project'), project,
     h('div', { class: 'row' }, h('div', { class: 'grow' }, h('label', {}, 'Kind'), kind), h('div', { class: 'grow' }, h('label', {}, 'Lane'), lane)),
     h('label', {}, 'Due (optional) — you get a notification at this time'), due,
-    h('div', { class: 'dialog-actions' }, cancelButton(dlg), h('button', { onclick: create }, 'Create', hint('↵'))));
+    h('div', { class: 'dialog-actions' }, cancelButton(dlg), h('button', { onclick: create }, 'Create', hint('↵')))].filter(Boolean));
   dlg.showModal();
   title.focus();
 }
