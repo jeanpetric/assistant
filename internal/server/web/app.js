@@ -789,7 +789,7 @@ async function renderSessions() {
   const tbody = h('tbody');
   async function draw() {
     const xs = await api('GET', '/api/sessions' + (statusSel.value ? `?status=${statusSel.value}` : ''));
-    tbody.replaceChildren(...xs.map(s => h('tr', { class: 'clickable', onclick: () => { location.hash = sessionHref(s); } },
+    tbody.replaceChildren(...xs.map(s => h('tr', { class: 'clickable', onclick: () => openFromSessions(s) },
       h('td', {}, h('span', { class: 'badge status-' + s.status }, s.status === 'running' ? h('span', { class: 'pulse' }) : null, s.status)),
       h('td', {}, s.task_id ? h('div', {}, s.task_title) : h('div', { class: 'muted' }, 'No task'), h('div', { class: 'muted small' }, s.title)),
       h('td', { class: 'small' }, trunc(s.last_message, 220)),
@@ -802,6 +802,12 @@ async function renderSessions() {
     h('table', {}, h('thead', {}, h('tr', {}, ['Status', 'Task / session', 'Latest', 'Trigger', 'Updated'].map(x => h('th', {}, x)))), tbody)));
   await draw();
   every(3000, draw);
+}
+
+// A task's session opens with the task's project in focus.
+function openFromSessions(s) {
+  location.hash = sessionHref(s);
+  if (s.task_project_id && s.task_project_id !== state.projectId) switchProject(s.task_project_id);
 }
 
 function sessionHref(s) {

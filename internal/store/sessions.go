@@ -19,6 +19,7 @@ type Session struct {
 	ID              int64     `json:"id"`
 	TaskID          int64     `json:"task_id"` // 0: standalone session
 	TaskTitle       string    `json:"task_title,omitempty"`
+	TaskProjectID   int64     `json:"task_project_id,omitempty"`
 	Title           string    `json:"title"`
 	Status          string    `json:"status"`
 	Mode            string    `json:"mode"`
@@ -45,7 +46,7 @@ type Message struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-const sessionCols = `s.id, COALESCE(s.task_id, 0), COALESCE(t.title, ''), s.title, s.status, s.mode, s.model, s.workdir, s.trigger, s.done_lane_id, s.parent_id,
+const sessionCols = `s.id, COALESCE(s.task_id, 0), COALESCE(t.title, ''), COALESCE(t.project_id, 0), s.title, s.status, s.mode, s.model, s.workdir, s.trigger, s.done_lane_id, s.parent_id,
 	(SELECT MAX(c.id) FROM sessions c WHERE c.parent_id = s.id), s.claude_session_id, s.cost_usd, s.error, s.created_at, s.updated_at,
 	COALESCE((SELECT content FROM messages m WHERE m.session_id = s.id AND m.kind IN ('text', 'result', 'error') ORDER BY m.id DESC LIMIT 1), '')`
 
@@ -53,7 +54,7 @@ func scanSession(sc interface{ Scan(...any) error }) (Session, error) {
 	var x Session
 	var created, updated int64
 	var doneLane, parent, child sql.NullInt64
-	err := sc.Scan(&x.ID, &x.TaskID, &x.TaskTitle, &x.Title, &x.Status, &x.Mode, &x.Model, &x.Workdir, &x.Trigger,
+	err := sc.Scan(&x.ID, &x.TaskID, &x.TaskTitle, &x.TaskProjectID, &x.Title, &x.Status, &x.Mode, &x.Model, &x.Workdir, &x.Trigger,
 		&doneLane, &parent, &child, &x.ClaudeSessionID, &x.CostUSD, &x.Error, &created, &updated, &x.LastMessage)
 	x.DoneLaneID, x.ParentID, x.ChildID = fromNullID(doneLane), fromNullID(parent), fromNullID(child)
 	x.CreatedAt, x.UpdatedAt = fromMillis(created), fromMillis(updated)

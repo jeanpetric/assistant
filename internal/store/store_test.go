@@ -189,7 +189,7 @@ func TestSessionsListing(t *testing.T) {
 		t.Fatalf("all = %d", len(all))
 	}
 	mine, _ := s.Sessions(ctx, t1.ID, "")
-	if len(mine) != 1 || mine[0].TaskTitle != "one" || mine[0].LastMessage != "hello" {
+	if len(mine) != 1 || mine[0].TaskTitle != "one" || mine[0].TaskProjectID != t1.ProjectID || mine[0].TaskProjectID == 0 || mine[0].LastMessage != "hello" {
 		t.Fatalf("mine = %+v", mine)
 	}
 	running, _ := s.Sessions(ctx, 0, StatusRunning)
