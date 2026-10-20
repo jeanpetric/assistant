@@ -7,12 +7,15 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/jeanpetric/assistant/internal/agent"
 	"github.com/jeanpetric/assistant/internal/app"
+	"github.com/jeanpetric/assistant/internal/config"
 	"github.com/jeanpetric/assistant/internal/store"
 )
 
@@ -33,11 +36,13 @@ type client struct {
 
 func newClient(t *testing.T) *client {
 	t.Helper()
-	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "t.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	a := app.New(st, echoRunner{}, "/tmp", "plan")
+	a.Workdirs = config.NewWorkdirs(filepath.Join(dir, "config.json"), config.Config{Workspace: filepath.Join(dir, "ws")})
 	srv := httptest.NewServer(New(a))
 	t.Cleanup(func() { srv.Close(); a.Wait(); st.Close() })
 	return &client{t, srv, a}
@@ -75,6 +80,36 @@ type board struct {
 	Lanes  []store.Lane     `json:"lanes"`
 	Tasks  []store.Task     `json:"tasks"`
 	Fields []store.FieldDef `json:"fields"`
+}
+
+func TestWorkdirs(t *testing.T) {
+	c := newClient(t)
+	repo := filepath.Join(c.app.Workdirs.Workspace(), "repo")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	type workdirs struct {
+		Workdirs []string `json:"workdirs"`
+		Repos    []string `json:"repos"`
+	}
+	var got workdirs
+	c.do("GET", "/api/workdirs", nil, 200, &got)
+	if !reflect.DeepEqual(got.Workdirs, []string{repo}) || !reflect.DeepEqual(got.Repos, []string{repo}) {
+		t.Fatalf("defaults: %+v", got)
+	}
+
+	c.do("PUT", "/api/workdirs", map[string]any{"workdirs": []string{" /a ", "", "/b", "/a"}}, 200, &got)
+	if !reflect.DeepEqual(got.Workdirs, []string{"/a", "/b"}) {
+		t.Fatalf("saved: %v", got.Workdirs)
+	}
+	var meta struct {
+		Workdirs []string `json:"workdirs"`
+	}
+	c.do("GET", "/api/meta", nil, 200, &meta)
+	if !reflect.DeepEqual(meta.Workdirs, []string{"/a", "/b"}) {
+		t.Fatalf("meta: %v", meta.Workdirs)
+	}
+	c.do("PUT", "/api/workdirs", map[string]any{"workdirs": []string{"relative/dir"}}, 400, nil)
 }
 
 func TestBoardFlow(t *testing.T) {

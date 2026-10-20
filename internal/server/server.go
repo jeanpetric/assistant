@@ -36,6 +36,8 @@ func (s *Server) routes() {
 	m := s.mux
 	m.HandleFunc("GET /api/board", s.board)
 	m.HandleFunc("GET /api/meta", s.meta)
+	m.HandleFunc("GET /api/workdirs", s.getWorkdirs)
+	m.HandleFunc("PUT /api/workdirs", s.setWorkdirs)
 
 	m.HandleFunc("POST /api/lanes", s.createLane)
 	m.HandleFunc("PATCH /api/lanes/{id}", s.updateLane)

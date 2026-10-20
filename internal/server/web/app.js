@@ -59,6 +59,13 @@ function select(options, value, attrs) {
   return h('select', attrs, options.map(([v, label]) => h('option', { value: v, selected: String(v) === String(value) }, label)));
 }
 
+// Working-directory picker: the configured choices, plus value if it is not one of them.
+function workdirSelect(value, defaultLabel, attrs) {
+  const dirs = state.meta.workdirs.slice();
+  if (value && !dirs.includes(value)) dirs.unshift(value);
+  return select([['', defaultLabel], ...dirs.map(d => [d, d])], value || '', attrs);
+}
+
 function modeOptions(includeDefault) {
   const labels = {
     bypassPermissions: 'Autopilot (bypass permissions)',
@@ -305,7 +312,7 @@ async function renderTask(id, focusSession) {
     h('label', {}, 'Description'),
     h('textarea', { rows: 6, onchange: e => save({ description: e.target.value }) }, t.description),
     h('label', {}, 'Working directory for agents'),
-    h('input', { value: t.workdir, placeholder: state.meta.workdir, onchange: e => save({ workdir: e.target.value }) }),
+    workdirSelect(t.workdir, `App default (${state.meta.workdir})`, { onchange: e => save({ workdir: e.target.value }) }),
     fields,
     h('div', { class: 'row', style: 'margin-top:14px' },
       h('span', { class: 'muted small grow' }, 'Created ' + fmtTime(t.created_at)),
@@ -354,7 +361,7 @@ function newSessionPanel(task, onStarted) {
   const prompt = h('textarea', { rows: 4, placeholder: 'What should the agent do? Skills work too, e.g. /p-dev:review 123' });
   const mode = select(modeOptions(false), state.meta.default_mode);
   const ctx = h('input', { type: 'checkbox', checked: true });
-  const workdir = h('input', { placeholder: task.workdir || state.meta.workdir });
+  const workdir = workdirSelect('', `Default (${task.workdir || state.meta.workdir})`);
   const start = async () => {
     if (!prompt.value.trim()) return;
     const s = await api('POST', `/api/tasks/${task.id}/sessions`, {
@@ -511,6 +518,7 @@ async function renderSessions() {
 async function renderSettings() {
   const b = await loadBoard();
   const rules = await api('GET', '/api/rules');
+  const wd = await api('GET', '/api/workdirs');
   const rerender = () => renderSettings();
 
   const lanes = h('div', { class: 'panel' }, h('h2', {}, 'Lanes'),
@@ -535,6 +543,24 @@ async function renderSettings() {
     h('input', {
       placeholder: '+ New lane (Enter)', onkeydown: async e => {
         if (e.key === 'Enter' && e.target.value.trim()) { await api('POST', '/api/lanes', { name: e.target.value }); rerender(); }
+      },
+    }));
+
+  const saveWorkdirs = async dirs => {
+    state.meta.workdirs = (await api('PUT', '/api/workdirs', { workdirs: dirs })).workdirs;
+    rerender();
+  };
+  const newRepos = wd.repos.filter(r => !wd.workdirs.includes(r));
+  const workdirs = h('div', { class: 'panel' },
+    h('div', { class: 'row' }, h('h2', { class: 'grow' }, 'Working directories'),
+      h('button', { class: 'ghost', disabled: !newRepos.length, onclick: () => saveWorkdirs([...wd.workdirs, ...newRepos]) },
+        newRepos.length ? `+ Add ${newRepos.length} new repos from ${wd.workspace}` : `All repos from ${wd.workspace} added`)),
+    h('p', { class: 'muted small' }, 'Choices in the working-directory dropdowns on tasks, sessions and rules.'),
+    wd.workdirs.map(d => h('div', { class: 'row', style: 'margin-bottom:6px' }, h('code', { class: 'grow' }, d),
+      h('button', { class: 'danger small', onclick: () => saveWorkdirs(wd.workdirs.filter(x => x !== d)) }, 'Remove'))),
+    h('input', {
+      placeholder: '+ Add directory, absolute path (Enter)', onkeydown: e => {
+        if (e.key === 'Enter' && e.target.value.trim()) saveWorkdirs([...wd.workdirs, e.target.value]);
       },
     }));
 
@@ -568,7 +594,7 @@ async function renderSettings() {
           h('button', { class: 'danger small', onclick: async () => { await api('DELETE', `/api/rules/${r.id}`); rerender(); } }, 'Delete'))))))
       : h('p', { class: 'muted' }, 'No rules yet.'));
 
-  view.replaceChildren(h('div', { style: 'max-width:900px' }, lanes, rulesPanel, fields));
+  view.replaceChildren(h('div', { style: 'max-width:900px' }, lanes, rulesPanel, workdirs, fields));
 }
 
 function ruleDialog(rule, lanes, done) {
@@ -579,7 +605,7 @@ function ruleDialog(rule, lanes, done) {
   const to = select(lanes.map(l => [l.id, l.name]), rule.to_lane_id);
   const prompt = h('textarea', { rows: 6 }, rule.prompt);
   const mode = select(modeOptions(true), rule.mode);
-  const workdir = h('input', { value: rule.workdir, placeholder: 'Task workdir, else app default' });
+  const workdir = workdirSelect(rule.workdir, 'Task workdir, else app default');
   dlg.replaceChildren(h('h2', {}, rule.id ? 'Edit rule' : 'New rule'),
     h('label', {}, 'Name'), name,
     h('div', { class: 'row' }, h('div', { class: 'grow' }, h('label', {}, 'From'), from), h('div', { class: 'grow' }, h('label', {}, 'To'), to)),

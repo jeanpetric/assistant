@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/jeanpetric/assistant/internal/agent"
+	"github.com/jeanpetric/assistant/internal/config"
 	"github.com/jeanpetric/assistant/internal/cron"
 	"github.com/jeanpetric/assistant/internal/store"
 )
@@ -31,6 +32,7 @@ type App struct {
 	Runner         agent.Runner
 	DefaultWorkdir string
 	DefaultMode    string
+	Workdirs       *config.Workdirs // choices offered when picking a working directory
 	Now            func() time.Time
 
 	mu      sync.Mutex

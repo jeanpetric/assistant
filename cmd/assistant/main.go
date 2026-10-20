@@ -31,6 +31,7 @@ func main() {
 	flag.StringVar(&f.Claude, "claude", "", "claude CLI binary (config: claude)")
 	flag.StringVar(&f.ClaudeArgs, "claude-args", "", "extra arguments for every claude run, space separated, e.g. \"--model opus\" (config: claude_args)")
 	flag.StringVar(&f.Workdir, "workdir", "", "default working directory for agent sessions (config: workdir)")
+	flag.StringVar(&f.Workspace, "workspace", "", "folder whose git repositories are the default working-directory choices (config: workspace)")
 	flag.StringVar(&f.Mode, "mode", "", "default permission mode: "+strings.Join(agent.Modes, ", ")+" (config: mode)")
 	flag.Parse()
 
@@ -53,6 +54,8 @@ func main() {
 			cfg.Workdir = f.Workdir
 		case "mode":
 			cfg.Mode = f.Mode
+		case "workspace":
+			cfg.Workspace = f.Workspace
 		}
 	})
 	// Always loopback: agents run with your permissions.
@@ -74,6 +77,7 @@ func main() {
 
 	runner := agent.ClaudeRunner{Command: cfg.Claude, ExtraArgs: strings.Fields(cfg.ClaudeArgs)}
 	a := app.New(st, runner, cfg.Workdir, cfg.Mode)
+	a.Workdirs = config.NewWorkdirs(*configPath, cfg)
 	go a.RunScheduler(ctx, 20*time.Second)
 
 	srv := &http.Server{Addr: addr, Handler: server.New(a), ReadHeaderTimeout: 10 * time.Second}

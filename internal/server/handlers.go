@@ -2,12 +2,14 @@ package server
 
 import (
 	"net/http"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/jeanpetric/assistant/internal/agent"
 	"github.com/jeanpetric/assistant/internal/app"
+	"github.com/jeanpetric/assistant/internal/config"
 	"github.com/jeanpetric/assistant/internal/store"
 )
 
@@ -47,8 +49,45 @@ func (s *Server) meta(w http.ResponseWriter, r *http.Request) {
 		"modes":        agent.Modes,
 		"default_mode": s.app.DefaultMode,
 		"workdir":      s.app.DefaultWorkdir,
+		"workdirs":     s.app.Workdirs.List(),
 		"kinds":        []string{"task", "coding", "research", "discussion", "reminder"},
 	})
+}
+
+// ---- working directories ----
+
+func (s *Server) getWorkdirs(w http.ResponseWriter, r *http.Request) {
+	ws := s.app.Workdirs.Workspace()
+	writeJSON(w, 200, map[string]any{"workdirs": s.app.Workdirs.List(), "workspace": ws, "repos": config.Repos(ws)})
+}
+
+func (s *Server) setWorkdirs(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Workdirs []string `json:"workdirs"`
+	}
+	if err := decode(r, &in); err != nil {
+		writeErr(w, err)
+		return
+	}
+	dirs := []string{}
+	seen := map[string]bool{}
+	for _, d := range in.Workdirs {
+		d = strings.TrimSpace(d)
+		if d == "" || seen[d] {
+			continue
+		}
+		if !filepath.IsAbs(d) {
+			writeErr(w, badRequest{"working directories must be absolute paths: " + d})
+			return
+		}
+		seen[d] = true
+		dirs = append(dirs, d)
+	}
+	if err := s.app.Workdirs.Set(dirs); err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"workdirs": dirs})
 }
 
 // ---- lanes ----
