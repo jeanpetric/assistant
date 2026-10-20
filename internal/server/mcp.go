@@ -337,7 +337,8 @@ func (s *Server) mcpTools() []mcpTool {
 		{
 			Name: "get_session",
 			Description: "One agent session with its whole transcript and its summary (summary: empty if none; summary_stale: messages came after it; " +
-				"summarizing: one is being written). Tasks that build on the session's task get the summary instead of the transcript.",
+				"summarizing: one is being written) and how full its context is (context_tokens of context_window; 0: not known yet). " +
+				"Tasks that build on the session's task get the summary instead of the transcript.",
 			InputSchema: schema([]string{"session_id"}, map[string]any{"session_id": prop("integer", "Session id")}),
 			call:        byID("GET", "/api/sessions/%d", "session_id", false),
 		},

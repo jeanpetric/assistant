@@ -27,13 +27,24 @@ type fakeRunner struct {
 	fail   func(agent.Request) error
 	tools  []string // if set, emitted as tool_use events
 	denied []string // if set, the result's permission denials
+	// If set, the session's model, the context sizes after each message and
+	// the result's context windows.
+	model   string
+	usage   []int
+	windows map[string]int
 }
 
 func (f *fakeRunner) Run(ctx context.Context, req agent.Request, emit func(agent.Event)) error {
 	f.mu.Lock()
 	f.reqs = append(f.reqs, req)
 	f.mu.Unlock()
-	emit(agent.Event{Role: "system", Kind: "init", ClaudeSessionID: "claude-1"})
+	f.mu.Lock()
+	model, usage, windows := f.model, f.usage, f.windows
+	f.mu.Unlock()
+	emit(agent.Event{Role: "system", Kind: "init", ClaudeSessionID: "claude-1", Model: model})
+	for _, n := range usage {
+		emit(agent.Event{Role: "system", Kind: "usage", ContextTokens: n})
+	}
 	f.mu.Lock()
 	limits := f.limits
 	f.mu.Unlock()
@@ -63,7 +74,7 @@ func (f *fakeRunner) Run(ctx context.Context, req agent.Request, emit func(agent
 	for _, t := range tools {
 		emit(agent.Event{Role: "assistant", Kind: "tool_use", Content: t})
 	}
-	emit(agent.Event{Role: "system", Kind: "result", Content: reply, CostUSD: 0.5, Denied: denied})
+	emit(agent.Event{Role: "system", Kind: "result", Content: reply, CostUSD: 0.5, Denied: denied, ContextWindows: windows})
 	if failOn != "" && strings.HasPrefix(req.Prompt, failOn) {
 		return errors.New("failed: " + failOn)
 	}
@@ -239,6 +250,48 @@ func TestRateLimits(t *testing.T) {
 	a.Wait()
 	if l := a.Limits(other.ID); l.FiveHour != nil || l.SevenDay != nil {
 		t.Fatalf("other session limits = %+v", l)
+	}
+}
+
+func TestSessionContext(t *testing.T) {
+	a, r := newApp(t)
+	ctx := context.Background()
+	// The session's own model's window counts, not its subagents'.
+	r.model, r.usage, r.windows = "main", []int{1000, 5000}, map[string]int{"main": 200000, "sub": 1000000}
+	sess, err := a.StartSession(ctx, StartOpts{Prompt: "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Wait()
+	got, _ := a.Store.Session(ctx, sess.ID)
+	if got.ContextTokens != 5000 || got.ContextWindow != 200000 {
+		t.Fatalf("session = %+v", got)
+	}
+	msgs, _ := a.Store.Messages(ctx, sess.ID, 0)
+	for _, m := range msgs {
+		if m.Kind == "usage" {
+			t.Fatalf("usage should not land in the transcript: %+v", m)
+		}
+	}
+
+	// A turn whose windows don't name the model keeps the known window.
+	r.mu.Lock()
+	r.usage, r.windows = []int{8000}, map[string]int{"sub": 1000000, "other": 500000}
+	r.mu.Unlock()
+	a.SendMessage(ctx, sess.ID, "more")
+	a.Wait()
+	if got, _ := a.Store.Session(ctx, sess.ID); got.ContextTokens != 8000 || got.ContextWindow != 200000 {
+		t.Fatalf("after second turn = %+v", got)
+	}
+
+	// With only one model in the turn, that is the session's.
+	r.mu.Lock()
+	r.model, r.usage, r.windows = "", []int{100}, map[string]int{"x": 300000}
+	r.mu.Unlock()
+	other, _ := a.StartSession(ctx, StartOpts{Prompt: "other"})
+	a.Wait()
+	if got, _ := a.Store.Session(ctx, other.ID); got.ContextTokens != 100 || got.ContextWindow != 300000 {
+		t.Fatalf("other = %+v", got)
 	}
 }
 

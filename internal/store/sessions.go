@@ -36,6 +36,10 @@ type Session struct {
 	// NeedsInput says why the agent is waiting for the user, e.g. it asked a
 	// question; empty when it is not. Cleared when the user continues the session.
 	NeedsInput string `json:"needs_input"`
+	// ContextTokens is how many tokens the session's context held after the
+	// agent's latest message, out of the model's ContextWindow; 0 when not known.
+	ContextTokens int `json:"context_tokens"`
+	ContextWindow int `json:"context_window"`
 	// Summary of the session for agents that build on its task; empty until one
 	// is written. It covers messages up to SummaryUpto; later ones make it stale.
 	Summary      string     `json:"summary"`
@@ -58,7 +62,8 @@ type Message struct {
 const sessionCols = `s.id, COALESCE(s.task_id, 0), COALESCE(t.title, ''), COALESCE(t.project_id, 0), s.title, s.status, s.mode, s.model, s.workdir, s.trigger, s.done_lane_id, s.parent_id,
 	(SELECT MAX(c.id) FROM sessions c WHERE c.parent_id = s.id), s.claude_session_id, s.cost_usd, s.error, s.created_at, s.updated_at,
 	COALESCE((SELECT content FROM messages m WHERE m.session_id = s.id AND m.kind IN ('text', 'result', 'error') ORDER BY m.id DESC LIMIT 1), ''),
-	s.summary, s.summary_upto, s.summary_at, COALESCE((SELECT MAX(m.id) FROM messages m WHERE m.session_id = s.id), 0), s.needs_input`
+	s.summary, s.summary_upto, s.summary_at, COALESCE((SELECT MAX(m.id) FROM messages m WHERE m.session_id = s.id), 0), s.needs_input,
+	s.context_tokens, s.context_window`
 
 func scanSession(sc interface{ Scan(...any) error }) (Session, error) {
 	var x Session
@@ -67,7 +72,8 @@ func scanSession(sc interface{ Scan(...any) error }) (Session, error) {
 	var lastID int64
 	err := sc.Scan(&x.ID, &x.TaskID, &x.TaskTitle, &x.TaskProjectID, &x.Title, &x.Status, &x.Mode, &x.Model, &x.Workdir, &x.Trigger,
 		&doneLane, &parent, &child, &x.ClaudeSessionID, &x.CostUSD, &x.Error, &created, &updated, &x.LastMessage,
-		&x.Summary, &x.SummaryUpto, &summaryAt, &lastID, &x.NeedsInput)
+		&x.Summary, &x.SummaryUpto, &summaryAt, &lastID, &x.NeedsInput,
+		&x.ContextTokens, &x.ContextWindow)
 	x.DoneLaneID, x.ParentID, x.ChildID = fromNullID(doneLane), fromNullID(parent), fromNullID(child)
 	x.SummaryAt = fromNullMillis(summaryAt)
 	x.SummaryStale = x.Summary != "" && lastID > x.SummaryUpto
@@ -166,6 +172,14 @@ func (s *Store) SetClaudeSessionID(ctx context.Context, id int64, claudeID strin
 func (s *Store) AddSessionCost(ctx context.Context, id int64, usd float64) error {
 	return affected(s.db.ExecContext(ctx,
 		`UPDATE sessions SET cost_usd = cost_usd + ?, updated_at = ? WHERE id = ?`, usd, s.ts(), id))
+}
+
+// SetSessionContext records how full the session's context is; a zero
+// argument keeps that value. Like a summary, it is not activity in the session.
+func (s *Store) SetSessionContext(ctx context.Context, id int64, tokens, window int) error {
+	return affected(s.db.ExecContext(ctx,
+		`UPDATE sessions SET context_tokens = COALESCE(NULLIF(?, 0), context_tokens),
+			context_window = COALESCE(NULLIF(?, 0), context_window) WHERE id = ?`, tokens, window, id))
 }
 
 // SetSessionSummary stores the session's summary, which covers its messages

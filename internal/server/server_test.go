@@ -24,6 +24,7 @@ func (echoRunner) Run(ctx context.Context, req agent.Request, emit func(agent.Ev
 	emit(agent.Event{Kind: "init", ClaudeSessionID: "c-1"})
 	emit(agent.Event{Kind: "rate_limit", Limits: &agent.RateLimits{
 		FiveHour: &agent.LimitWindow{UsedPercent: 28, ResetsAt: time.Now().Add(2 * time.Hour)}}})
+	emit(agent.Event{Kind: "usage", ContextTokens: 42000})
 	if req.Prompt == "block" { // runs until cancelled
 		<-ctx.Done()
 		return ctx.Err()
@@ -265,9 +266,12 @@ func TestSessionLimits(t *testing.T) {
 	var sess store.Session
 	c.do("POST", "/api/tasks/"+itoa(task.ID)+"/sessions", map[string]any{"prompt": "block"}, 201, &sess)
 
-	// While it runs, the board shows the session's limits on its task's card.
+	// While it runs, the board shows the session's limits and context on its task's card.
 	var b struct {
-		RunningLimits map[string]agent.RateLimits `json:"running_limits"`
+		RunningLimits  map[string]agent.RateLimits `json:"running_limits"`
+		RunningContext map[string]struct {
+			Tokens int `json:"tokens"`
+		} `json:"running_context"`
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for {
@@ -280,6 +284,9 @@ func TestSessionLimits(t *testing.T) {
 	if w := b.RunningLimits[itoa(task.ID)].FiveHour; w == nil || w.UsedPercent != 28 || b.RunningLimits[itoa(task.ID)].SevenDay != nil {
 		t.Fatalf("running limits = %+v", b.RunningLimits)
 	}
+	if got := b.RunningContext[itoa(task.ID)].Tokens; got != 42000 {
+		t.Fatalf("running context = %+v", b.RunningContext)
+	}
 
 	// After the turn the session keeps its last known limits; the board no longer shows them.
 	c.do("POST", "/api/sessions/"+itoa(sess.ID)+"/cancel", nil, 202, nil)
@@ -291,12 +298,13 @@ func TestSessionLimits(t *testing.T) {
 		} `json:"session"`
 	}
 	c.do("GET", "/api/sessions/"+itoa(sess.ID), nil, 200, &got)
-	if w := got.Session.Limits.FiveHour; got.Session.Status != store.StatusCancelled || w == nil || w.UsedPercent != 28 || w.ResetsAt.Before(time.Now()) {
+	if w := got.Session.Limits.FiveHour; got.Session.Status != store.StatusCancelled || w == nil || w.UsedPercent != 28 || w.ResetsAt.Before(time.Now()) ||
+		got.Session.ContextTokens != 42000 {
 		t.Fatalf("session = %+v", got.Session)
 	}
-	b.RunningLimits = nil
+	b.RunningLimits, b.RunningContext = nil, nil
 	c.do("GET", "/api/board", nil, 200, &b)
-	if len(b.RunningLimits) != 0 {
+	if len(b.RunningLimits) != 0 || len(b.RunningContext) != 0 {
 		t.Fatalf("running limits after the turn = %+v", b.RunningLimits)
 	}
 	c.do("GET", "/api/limits", nil, 404, nil)

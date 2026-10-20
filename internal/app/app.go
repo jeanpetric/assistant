@@ -325,6 +325,7 @@ func (a *App) launch(sess store.Session, prompt, resumeID string, done func(ctx 
 		req := agent.Request{Prompt: prompt, Workdir: sess.Workdir, Mode: sess.Mode, Model: sess.Model, ResumeID: resumeID}
 		failed := false
 		var wait waitSigns
+		var model string // as the CLI names it
 		err := a.Runner.Run(ctx, req, func(ev agent.Event) {
 			wait.see(ev)
 			if ev.ClaudeSessionID != "" && ev.ClaudeSessionID != sess.ClaudeSessionID {
@@ -341,7 +342,15 @@ func (a *App) launch(sess store.Session, prompt, resumeID string, done func(ctx 
 				a.recordLimits(sess.ID, ev.Limits)
 				return
 			}
+			if ev.Kind == "usage" {
+				a.Store.SetSessionContext(bg, sess.ID, ev.ContextTokens, 0)
+				return
+			}
+			if w := contextWindow(ev.ContextWindows, model); w > 0 {
+				a.Store.SetSessionContext(bg, sess.ID, 0, w)
+			}
 			if ev.Kind == "init" {
+				model = ev.Model
 				return
 			}
 			a.Store.AddMessage(bg, store.Message{SessionID: sess.ID, Role: ev.Role, Kind: ev.Kind, Content: ev.Content})
@@ -378,6 +387,20 @@ func (a *App) launch(sess store.Session, prompt, resumeID string, done func(ctx 
 		}
 	}()
 	return nil
+}
+
+// contextWindow picks the session's model's window from those a turn used,
+// which include its subagents' models. A turn on one model can only be on that.
+func contextWindow(windows map[string]int, model string) int {
+	if w, ok := windows[model]; ok {
+		return w
+	}
+	if len(windows) == 1 {
+		for _, w := range windows {
+			return w
+		}
+	}
+	return 0
 }
 
 // recordLimits keeps the usage windows a session's turn reported. A window

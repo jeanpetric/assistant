@@ -306,6 +306,11 @@ CREATE INDEX task_memories_memory ON task_memories(memory_id);
 ALTER TABLE sessions ADD COLUMN needs_input TEXT NOT NULL DEFAULT '';
 ALTER TABLE notifications ADD COLUMN session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL;
 `,
+	// How full the session's context is: tokens in it, and the model's window (0: unknown).
+	`
+ALTER TABLE sessions ADD COLUMN context_tokens INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE sessions ADD COLUMN context_window INTEGER NOT NULL DEFAULT 0;
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

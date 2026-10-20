@@ -69,14 +69,22 @@ func (s *Server) board(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Per task: how many agents run, and the usage limits last reported by the
-	// most recently active of them.
+	// most recently active of them and how full its context is.
+	type contextOut struct {
+		Tokens int `json:"tokens"`
+		Window int `json:"window"`
+	}
 	runningByTask := map[int64]int{}
 	limitsByTask := map[int64]agent.RateLimits{}
+	contextByTask := map[int64]contextOut{}
 	for _, x := range running {
 		if x.TaskID == 0 {
 			continue
 		}
 		runningByTask[x.TaskID]++
+		if _, ok := contextByTask[x.TaskID]; !ok && x.ContextTokens > 0 {
+			contextByTask[x.TaskID] = contextOut{x.ContextTokens, x.ContextWindow}
+		}
 		if _, ok := limitsByTask[x.TaskID]; ok {
 			continue
 		}
@@ -85,7 +93,7 @@ func (s *Server) board(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, 200, map[string]any{"projects": projects, "project_id": projectID, "lanes": lanes, "tasks": tasks, "fields": fields,
-		"running": runningByTask, "running_limits": limitsByTask, "needs_input": needsInput})
+		"running": runningByTask, "running_limits": limitsByTask, "running_context": contextByTask, "needs_input": needsInput})
 }
 
 func (s *Server) meta(w http.ResponseWriter, r *http.Request) {

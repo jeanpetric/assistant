@@ -19,12 +19,23 @@ import (
 // Event is one transcript item produced by an agent turn.
 type Event struct {
 	Role    string // user | assistant | system
-	Kind    string // text | context | tool_use | tool_result | result | error | rate_limit
+	Kind    string // text | context | tool_use | tool_result | result | error | rate_limit | usage
 	Content string
 
 	// Set on the init and result events.
 	ClaudeSessionID string
 	CostUSD         float64
+
+	// Set on the init event: the model the session runs on.
+	Model string
+
+	// Set on usage events: how many tokens the session's context holds after
+	// the agent's latest message.
+	ContextTokens int
+
+	// Set on the result event: the context window of each model the turn used,
+	// subagents' models included.
+	ContextWindows map[string]int
 
 	// Set on rate_limit events.
 	Limits *RateLimits
@@ -168,9 +179,21 @@ type streamLine struct {
 	Denials   []struct {
 		ToolName string `json:"tool_name"`
 	} `json:"permission_denials"`
-	Message struct {
+	Model string `json:"model"`
+	// Set on the messages of subagents, whose context is not the session's.
+	ParentToolUseID *string `json:"parent_tool_use_id"`
+	Message         struct {
 		Content json.RawMessage `json:"content"`
+		Usage   *struct {
+			InputTokens         int `json:"input_tokens"`
+			CacheCreationTokens int `json:"cache_creation_input_tokens"`
+			CacheReadTokens     int `json:"cache_read_input_tokens"`
+			OutputTokens        int `json:"output_tokens"`
+		} `json:"usage"`
 	} `json:"message"`
+	ModelUsage map[string]struct {
+		ContextWindow int `json:"contextWindow"`
+	} `json:"modelUsage"`
 	RateLimitInfo struct {
 		RateLimitType  string                  `json:"rateLimitType"`
 		Utilization    *float64                `json:"utilization"`
@@ -211,12 +234,29 @@ func ParseLine(line []byte) []Event {
 	switch l.Type {
 	case "system":
 		if l.Subtype == "init" && l.SessionID != "" {
-			return []Event{{Role: "system", Kind: "init", ClaudeSessionID: l.SessionID}}
+			return []Event{{Role: "system", Kind: "init", ClaudeSessionID: l.SessionID, Model: l.Model}}
 		}
 	case "assistant", "user":
-		return contentEvents(l.Type, l.Message.Content)
+		out := contentEvents(l.Type, l.Message.Content)
+		// Everything the model was sent plus what it wrote is in the context
+		// of the next request.
+		if u := l.Message.Usage; u != nil && l.Type == "assistant" && l.ParentToolUseID == nil {
+			n := u.InputTokens + u.CacheCreationTokens + u.CacheReadTokens + u.OutputTokens
+			if n > 0 {
+				out = append(out, Event{Role: "system", Kind: "usage", ContextTokens: n})
+			}
+		}
+		return out
 	case "result":
 		ev := Event{Role: "system", Kind: "result", Content: l.Result, ClaudeSessionID: l.SessionID, CostUSD: l.CostUSD}
+		for model, u := range l.ModelUsage {
+			if u.ContextWindow > 0 {
+				if ev.ContextWindows == nil {
+					ev.ContextWindows = map[string]int{}
+				}
+				ev.ContextWindows[model] = u.ContextWindow
+			}
+		}
 		for _, d := range l.Denials {
 			ev.Denied = append(ev.Denied, d.ToolName)
 		}
