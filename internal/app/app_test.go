@@ -166,7 +166,7 @@ func TestRateLimits(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
 	a.Now = func() time.Time { return now }
-	if got := a.Limits(); got.FiveHour != nil || got.SevenDay != nil {
+	if got, _ := a.Limits(ctx); got.FiveHour != nil || got.SevenDay != nil {
 		t.Fatalf("nothing reported yet: %+v", got)
 	}
 
@@ -185,8 +185,8 @@ func TestRateLimits(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.Wait()
-	got := a.Limits()
-	if got.FiveHour == nil || got.FiveHour.UsedPercent != 30 || got.SevenDay == nil || *got.SevenDay != *week {
+	got, _ := a.Limits(ctx)
+	if got.FiveHour == nil || got.FiveHour.UsedPercent != 30 || got.SevenDay == nil || got.SevenDay.UsedPercent != 17 || !got.SevenDay.ResetsAt.Equal(week.ResetsAt) {
 		t.Fatalf("limits = %+v", got)
 	}
 	msgs, _ := a.Store.Messages(ctx, sess.ID, 0)
@@ -197,8 +197,95 @@ func TestRateLimits(t *testing.T) {
 	}
 
 	now = now.Add(2 * time.Hour) // the 5h window has reset
-	if got := a.Limits(); got.FiveHour != nil || got.SevenDay == nil {
+	if got, _ := a.Limits(ctx); got.FiveHour != nil || got.SevenDay == nil {
 		t.Fatalf("after 5h reset: %+v", got)
+	}
+}
+
+// fakeUsage is a UsageSource returning queued results, then the last one.
+type fakeUsage struct {
+	mu    sync.Mutex
+	calls int
+	res   []agent.RateLimits
+	errs  []error
+}
+
+func (f *fakeUsage) Usage(ctx context.Context) (agent.RateLimits, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	i := min(f.calls, len(f.res)-1)
+	f.calls++
+	return f.res[i], f.errs[i]
+}
+
+func (f *fakeUsage) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
+func TestRefreshLimits(t *testing.T) {
+	a, _ := newApp(t)
+	ctx := context.Background()
+	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	a.Now = func() time.Time { return now }
+	five := &agent.LimitWindow{UsedPercent: 18, ResetsAt: now.Add(time.Hour)}
+	week := &agent.LimitWindow{UsedPercent: 4, ResetsAt: now.Add(72 * time.Hour)}
+	src := &fakeUsage{
+		res:  []agent.RateLimits{{FiveHour: five, SevenDay: week}, {}},
+		errs: []error{nil, errors.New("network down")},
+	}
+	if err := a.RefreshLimits(ctx, src); err != nil {
+		t.Fatal(err)
+	}
+	// A failed refresh keeps the last known values.
+	if err := a.RefreshLimits(ctx, src); err == nil {
+		t.Fatal("expected the source error")
+	}
+	got, err := a.Limits(ctx)
+	if err != nil || got.FiveHour == nil || !got.FiveHour.ResetsAt.Equal(five.ResetsAt) || got.FiveHour.UsedPercent != 18 ||
+		got.SevenDay == nil || got.SevenDay.UsedPercent != 4 {
+		t.Fatalf("limits = %+v, %v", got, err)
+	}
+	// They live in the store, so a new App (a restart) still knows them.
+	b := New(a.Store, &fakeRunner{}, "", "")
+	b.Now = a.Now
+	if got, _ := b.Limits(ctx); got.FiveHour == nil || got.SevenDay == nil {
+		t.Fatalf("after restart: %+v", got)
+	}
+}
+
+func TestLimitsPoller(t *testing.T) {
+	a, _ := newApp(t)
+	src := &fakeUsage{
+		res:  []agent.RateLimits{{FiveHour: &agent.LimitWindow{UsedPercent: 50, ResetsAt: time.Now().Add(time.Hour)}}},
+		errs: []error{nil},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	a.StartLimitsPoller(ctx, src, time.Millisecond)
+	deadline := time.Now().Add(5 * time.Second)
+	for src.count() < 3 {
+		if time.Now().After(deadline) {
+			t.Fatal("poller did not repeat")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	a.Shutdown() // returns once the poller has stopped
+	n := src.count()
+	time.Sleep(20 * time.Millisecond)
+	if src.count() != n {
+		t.Fatal("poller kept running after shutdown")
+	}
+	if got, _ := a.Limits(context.Background()); got.FiveHour == nil || got.FiveHour.UsedPercent != 50 {
+		t.Fatalf("limits = %+v", got)
+	}
+
+	off := &fakeUsage{res: []agent.RateLimits{{}}, errs: []error{nil}}
+	a.StartLimitsPoller(context.Background(), off, 0)
+	a.Shutdown()
+	if off.count() != 0 {
+		t.Fatal("interval 0 should not poll")
 	}
 }
 

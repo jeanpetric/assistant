@@ -150,6 +150,16 @@ CREATE TABLE settings (
 INSERT INTO settings (id, archive_lane_id, archive_after_minutes)
 	VALUES (1, (SELECT id FROM lanes WHERE lower(name) = 'done' ORDER BY position, id LIMIT 1), 10080);
 `,
+	// Last known Claude usage per window (five_hour, seven_day), so the footer
+	// survives a restart.
+	`
+CREATE TABLE rate_limits (
+	name TEXT PRIMARY KEY,
+	used_percent REAL NOT NULL,
+	resets_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL
+);
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

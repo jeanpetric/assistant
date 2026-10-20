@@ -37,7 +37,7 @@ type App struct {
 	running  map[int64]context.CancelFunc
 	stopping bool // set by Shutdown: cancelled turns end as interrupted, not cancelled
 	wg       sync.WaitGroup
-	limits   agent.RateLimits // last reported by any turn; in memory only
+	bg       sync.WaitGroup // background loops (limits poller)
 }
 
 func New(s *store.Store, r agent.Runner, workdir, mode string) *App {
@@ -58,6 +58,7 @@ func (a *App) Shutdown() {
 	}
 	a.mu.Unlock()
 	a.wg.Wait()
+	a.bg.Wait()
 }
 
 type StartOpts struct {
@@ -217,7 +218,7 @@ func (a *App) launch(sess store.Session, prompt, resumeID string) error {
 				failed = true
 			}
 			if ev.Kind == "rate_limit" {
-				a.recordLimits(ev.Limits)
+				a.recordLimits(bg, *ev.Limits)
 				return
 			}
 			if ev.Kind == "init" {
@@ -248,31 +249,76 @@ func (a *App) launch(sess store.Session, prompt, resumeID string) error {
 	return nil
 }
 
-func (a *App) recordLimits(l *agent.RateLimits) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if l.FiveHour != nil {
-		a.limits.FiveHour = l.FiveHour
-	}
-	if l.SevenDay != nil {
-		a.limits.SevenDay = l.SevenDay
-	}
+// UsageSource reports the account's current usage windows.
+type UsageSource interface {
+	Usage(ctx context.Context) (agent.RateLimits, error)
 }
 
-// Limits returns the last reported usage windows. A window whose reset time
-// has passed is dropped: its usage since then is unknown.
-func (a *App) Limits() agent.RateLimits {
-	a.mu.Lock()
-	defer a.mu.Unlock()
+// StartLimitsPoller refreshes the usage windows from src now and then every
+// interval until ctx is done; Shutdown waits for it. A non-positive interval
+// turns polling off. Errors are logged and the last known values kept.
+func (a *App) StartLimitsPoller(ctx context.Context, src UsageSource, interval time.Duration) {
+	if interval <= 0 {
+		return
+	}
+	a.bg.Add(1)
+	go func() {
+		defer a.bg.Done()
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for {
+			if err := a.RefreshLimits(ctx, src); err != nil && ctx.Err() == nil {
+				log.Printf("limits: %v", err)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
+		}
+	}()
+}
+
+// RefreshLimits fetches the usage windows from src once and stores them.
+func (a *App) RefreshLimits(ctx context.Context, src UsageSource) error {
+	l, err := src.Usage(ctx)
+	if err != nil {
+		return err
+	}
+	return a.recordLimits(ctx, l)
+}
+
+// recordLimits stores the reported windows; a window not reported keeps its
+// last known value.
+func (a *App) recordLimits(ctx context.Context, l agent.RateLimits) error {
+	for name, w := range map[string]*agent.LimitWindow{"five_hour": l.FiveHour, "seven_day": l.SevenDay} {
+		if w == nil {
+			continue
+		}
+		if err := a.Store.SaveRateLimit(ctx, name, store.LimitWindow{UsedPercent: w.UsedPercent, ResetsAt: w.ResetsAt}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Limits returns the last known usage windows, from agent turns or the
+// poller. A window whose reset time has passed is dropped: its usage since
+// then is unknown until the next report.
+func (a *App) Limits(ctx context.Context) (agent.RateLimits, error) {
+	stored, err := a.Store.RateLimits(ctx)
+	if err != nil {
+		return agent.RateLimits{}, err
+	}
 	now := a.Now()
-	fresh := func(w *agent.LimitWindow) *agent.LimitWindow {
-		if w == nil || !w.ResetsAt.After(now) {
+	fresh := func(name string) *agent.LimitWindow {
+		w, ok := stored[name]
+		if !ok || !w.ResetsAt.After(now) {
 			return nil
 		}
-		c := *w
-		return &c
+		return &agent.LimitWindow{UsedPercent: w.UsedPercent, ResetsAt: w.ResetsAt}
 	}
-	return agent.RateLimits{FiveHour: fresh(a.limits.FiveHour), SevenDay: fresh(a.limits.SevenDay)}
+	return agent.RateLimits{FiveHour: fresh("five_hour"), SevenDay: fresh("seven_day")}, nil
 }
 
 // moveWhenDone moves the session's task to its done lane after a successful

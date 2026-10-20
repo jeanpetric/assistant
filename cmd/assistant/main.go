@@ -32,6 +32,7 @@ func main() {
 	flag.StringVar(&f.ClaudeArgs, "claude-args", "", "extra arguments for every claude run, space separated, e.g. \"--model opus\" (config: claude_args)")
 	flag.StringVar(&f.Workdir, "workdir", "", "default working directory for agent sessions (config: workdir)")
 	flag.StringVar(&f.Mode, "mode", "", "default permission mode: "+strings.Join(agent.Modes, ", ")+" (config: mode)")
+	flag.IntVar(&f.LimitsRefreshSeconds, "limits-refresh", 0, "seconds between Claude usage fetches for the footer, 0 = off (config: limits_refresh_seconds, default 120)")
 	flag.Parse()
 
 	cfg, err := config.Load(*configPath, home)
@@ -53,6 +54,8 @@ func main() {
 			cfg.Workdir = f.Workdir
 		case "mode":
 			cfg.Mode = f.Mode
+		case "limits-refresh":
+			cfg.LimitsRefreshSeconds = f.LimitsRefreshSeconds
 		}
 	})
 	// Always loopback: agents run with your permissions.
@@ -75,6 +78,7 @@ func main() {
 	runner := agent.ClaudeRunner{Command: cfg.Claude, ExtraArgs: strings.Fields(cfg.ClaudeArgs)}
 	a := app.New(st, runner, cfg.Workdir, cfg.Mode)
 	go a.RunScheduler(ctx, 5*time.Second)
+	a.StartLimitsPoller(ctx, agent.UsageClient{}, time.Duration(cfg.LimitsRefreshSeconds)*time.Second)
 
 	srv := &http.Server{Addr: addr, Handler: server.New(a), ReadHeaderTimeout: 10 * time.Second}
 	go func() {

@@ -17,6 +17,8 @@ type Config struct {
 	ClaudeArgs string `json:"claude_args"`
 	Workdir    string `json:"workdir"`
 	Mode       string `json:"mode"`
+	// How often to fetch Claude usage for the footer; 0 turns it off.
+	LimitsRefreshSeconds int `json:"limits_refresh_seconds"`
 }
 
 func Defaults(home string) Config {
@@ -26,6 +28,8 @@ func Defaults(home string) Config {
 		Claude:  "claude",
 		Workdir: home,
 		Mode:    "bypassPermissions",
+
+		LimitsRefreshSeconds: 120,
 	}
 }
 
@@ -45,6 +49,9 @@ func Load(path, home string) (Config, error) {
 	}
 	if c.Port < 1 || c.Port > 65535 {
 		return c, fmt.Errorf("%s: port %d out of range", path, c.Port)
+	}
+	if c.LimitsRefreshSeconds < 0 {
+		return c, fmt.Errorf("%s: limits_refresh_seconds must not be negative", path)
 	}
 	return c, nil
 }

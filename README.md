@@ -55,13 +55,20 @@ Settings live in `~/.assistant/config.json` (created with defaults on first run)
   "claude": "claude",
   "claude_args": "",
   "workdir": "$HOME",
-  "mode": "bypassPermissions"
+  "mode": "bypassPermissions",
+  "limits_refresh_seconds": 120
 }
 ```
 
 Every key also has a flag that overrides the file for one run: `-port`, `-db`, `-claude`,
-`-claude-args`, `-workdir`, `-mode`, plus `-config` to point at another file. The server always
+`-claude-args`, `-workdir`, `-mode`, `-limits-refresh`, plus `-config` to point at another file. The server always
 binds to 127.0.0.1. Avoid ports 6665–6669: browsers refuse them.
+
+The footer shows how much of the 5-hour and weekly Claude windows is left. Every
+`limits_refresh_seconds` the server asks the endpoint Claude Code's `/usage` uses (no quota spent),
+with Claude Code's own login read from `~/.claude/.credentials.json` or the macOS keychain; it
+never refreshes that login, so after a long idle stretch the fetch fails until `claude` runs again.
+Agent turns update the numbers too. The last values are kept in the database; `0` turns fetching off.
 
 Agents run with your user's permissions. The server only binds to localhost and rejects
 non-JSON writes, foreign `Origin`s and foreign `Host` headers so that web pages can't drive it.
