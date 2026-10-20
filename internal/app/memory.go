@@ -86,7 +86,7 @@ func (a *App) memoryBrief(ctx context.Context, t store.Task) string {
 }
 
 // UpdateMemories updates the memories of the session's task from the session
-// in the background. A notification tells what changed, or why it failed.
+// in the background. A notification tells if it fails.
 func (a *App) UpdateMemories(ctx context.Context, sessionID int64) error {
 	sess, err := a.Store.Session(ctx, sessionID)
 	if err != nil {
@@ -170,7 +170,7 @@ func (a *App) startMemorize(sessionID int64) {
 }
 
 // memorize updates each memory of the session's task in turn and notifies
-// about every change and failure.
+// about failures; changes are visible in the memories' revisions.
 func (a *App) memorize(ctx context.Context, sessionID int64) {
 	sess, err := a.Store.Session(ctx, sessionID)
 	if err != nil {
@@ -181,7 +181,7 @@ func (a *App) memorize(ctx context.Context, sessionID int64) {
 		return
 	}
 	for _, id := range t.Memories {
-		m, changed, err := a.memorizeOne(ctx, sess, id)
+		m, _, err := a.memorizeOne(ctx, sess, id)
 		switch {
 		case ctx.Err() != nil:
 			return
@@ -189,8 +189,6 @@ func (a *App) memorize(ctx context.Context, sessionID int64) {
 		case err != nil:
 			log.Printf("session %d: memory %d: %v", sess.ID, id, err)
 			a.notifySession(ctx, sess, fmt.Sprintf("Could not update memory %q from session %q: %v", m.Name, sess.Title, err))
-		case changed:
-			a.notifySession(ctx, sess, fmt.Sprintf("Memory %q updated from session %q", m.Name, sess.Title))
 		}
 	}
 }

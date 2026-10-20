@@ -90,8 +90,8 @@ func TestMemoryUpdatedAfterTurn(t *testing.T) {
 		t.Fatalf("the update stays out of the transcript: %+v", msgs)
 	}
 	notes, _ := a.Store.Notifications(ctx, false)
-	if len(notes) != 1 || notes[0].Message != `Memory "API" updated from session "dig"` || *notes[0].TaskID != task.ID {
-		t.Fatalf("notifications = %+v", notes)
+	if len(notes) != 0 {
+		t.Fatalf("a successful update notifies nothing: %+v", notes)
 	}
 	if a.Memorizing(sess.ID) {
 		t.Fatal("done")
