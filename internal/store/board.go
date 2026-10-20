@@ -29,10 +29,13 @@ type Task struct {
 	Fields      map[string]string `json:"fields"`
 	// Earlier tasks this one builds on, in order: their agents' results go
 	// into the context of this task's agents.
-	ContextFrom []int64    `json:"context_from"`
-	DueAt       *time.Time `json:"due_at"`      // notify when reached
-	RemindedAt  *time.Time `json:"reminded_at"` // set once the due notification fired
-	ArchivedAt  *time.Time `json:"archived_at"` // archived tasks are off the board
+	ContextFrom []int64 `json:"context_from"`
+	// Memories its agents read and update. Nil on create: the project's
+	// memories and those of the tasks it builds on.
+	Memories   []int64    `json:"memories"`
+	DueAt      *time.Time `json:"due_at"`      // notify when reached
+	RemindedAt *time.Time `json:"reminded_at"` // set once the due notification fired
+	ArchivedAt *time.Time `json:"archived_at"` // archived tasks are off the board
 	// When the task entered its lane; auto-archive counts from here.
 	LaneChangedAt time.Time `json:"lane_changed_at"`
 	CreatedAt     time.Time `json:"created_at"`
@@ -183,6 +186,7 @@ func scanTask(sc interface{ Scan(...any) error }) (Task, error) {
 	t.DueAt, t.RemindedAt, t.ArchivedAt = fromNullMillis(due), fromNullMillis(reminded), fromNullMillis(archived)
 	t.Fields = map[string]string{}
 	t.ContextFrom = []int64{}
+	t.Memories = []int64{}
 	return t, err
 }
 
@@ -280,7 +284,26 @@ func (s *Store) queryTasks(ctx context.Context, q string, args ...any) ([]Task, 
 			out[i].ContextFrom = append(out[i].ContextFrom, src)
 		}
 	}
-	return out, crows.Err()
+	if err := crows.Err(); err != nil {
+		return nil, err
+	}
+	crows.Close()
+
+	mrows, err := s.db.QueryContext(ctx, `SELECT task_id, memory_id FROM task_memories ORDER BY task_id, memory_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer mrows.Close()
+	for mrows.Next() {
+		var id, mem int64
+		if err := mrows.Scan(&id, &mem); err != nil {
+			return nil, err
+		}
+		if i, ok := idx[id]; ok {
+			out[i].Memories = append(out[i].Memories, mem)
+		}
+	}
+	return out, mrows.Err()
 }
 
 func (s *Store) Task(ctx context.Context, id int64) (Task, error) {
@@ -319,11 +342,27 @@ func (s *Store) Task(ctx context.Context, id int64) (Task, error) {
 		}
 		t.ContextFrom = append(t.ContextFrom, src)
 	}
-	return t, crows.Err()
+	if err := crows.Err(); err != nil {
+		return t, err
+	}
+	crows.Close()
+	mrows, err := s.db.QueryContext(ctx, `SELECT memory_id FROM task_memories WHERE task_id = ? ORDER BY memory_id`, id)
+	if err != nil {
+		return t, err
+	}
+	defer mrows.Close()
+	for mrows.Next() {
+		var mem int64
+		if err := mrows.Scan(&mem); err != nil {
+			return t, err
+		}
+		t.Memories = append(t.Memories, mem)
+	}
+	return t, mrows.Err()
 }
 
 // CreateTask appends the task to the end of its lane. LaneID 0 means the first
-// lane, ProjectID 0 the first project.
+// lane, ProjectID 0 the first project; nil Memories inherits them (see Task).
 func (s *Store) CreateTask(ctx context.Context, t Task) (Task, error) {
 	if t.Kind == "" {
 		t.Kind = "task"
@@ -350,6 +389,15 @@ func (s *Store) CreateTask(ctx context.Context, t Task) (Task, error) {
 		}
 		id, _ = res.LastInsertId()
 		if err := setContextFrom(ctx, tx, id, t.ContextFrom); err != nil {
+			return err
+		}
+		mems := t.Memories
+		if mems == nil {
+			if mems, err = inheritedMemories(ctx, tx, t.ProjectID, t.ContextFrom); err != nil {
+				return err
+			}
+		}
+		if err := setTaskMemories(ctx, tx, id, mems); err != nil {
 			return err
 		}
 		return setFields(ctx, tx, id, t.Fields)

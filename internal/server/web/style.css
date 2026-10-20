@@ -296,3 +296,11 @@ textarea.mono { font-family: var(--mono); font-size: 13px; }
 .artifact { border-top: 1px solid var(--border); padding: 8px 0; }
 .artifact:first-of-type { border-top: 0; }
 .artifact > summary { cursor: pointer; margin-bottom: 6px; }
+
+/* memory */
+.mono { font-family: var(--mono); font-size: 12.5px; }
+.memory-preview { min-height: 300px; }
+.revision { padding: 4px 0; border-bottom: 1px solid var(--border); }
+pre.diff { font-family: var(--mono); font-size: 12px; max-height: 60vh; overflow: auto; background: var(--surface-2); padding: 8px; border-radius: 6px; white-space: pre-wrap; word-break: break-word; }
+.diff-add { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }
+.diff-del { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }

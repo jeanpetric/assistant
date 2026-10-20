@@ -144,6 +144,7 @@ function route() {
     sessions: renderSessions,
     session: () => renderSession(Number(parts[1])),
     archive: renderArchive,
+    memory: () => parts[1] ? renderMemory(Number(parts[1])) : renderMemories(),
     settings: renderSettings,
   }[parts[0]] || renderBoard;
   r().catch(err => view.replaceChildren(h('div', { class: 'panel' }, 'Error: ' + err.message)));
@@ -168,7 +169,7 @@ function switchProject(id) {
   state.projectId = id;
   remember('project', id);
   // Pages showing one task stay on it; the others redraw for the project.
-  if (!/^#\/(task|session|sessions|settings)\b/.test(location.hash)) route();
+  if (!/^#\/(task|session|sessions|memory|settings)\b/.test(location.hash)) route();
   else loadBoard();
 }
 
@@ -467,7 +468,7 @@ function closeTaskDialog() {
 // archived or deleted, and `reload` redraws it after a restore.
 async function taskView(id, { every, leave, reload }) {
   await loadBoard();
-  const data = await api('GET', `/api/tasks/${id}`);
+  const [data, allMemories] = await Promise.all([api('GET', `/api/tasks/${id}`), api('GET', '/api/memories')]);
   const t = data.task;
   const save = patch => api('PATCH', `/api/tasks/${id}`, patch).then(nt => Object.assign(t, nt));
 
@@ -476,6 +477,11 @@ async function taskView(id, { every, leave, reload }) {
   const sessionPanel = newSessionPanel(t, s => addSession(s));
   const buildsOn = buildsOnEditor(t, data.builds_on, data.used_by, async ids => {
     const refs = await save({ context_from: ids }).then(() => api('GET', `/api/tasks/${id}`)).then(d => d.builds_on);
+    sessionPanel.drawContextLabel();
+    return refs;
+  });
+  const memories = memoryEditor(data.memories, allMemories, async ids => {
+    const refs = await save({ memories: ids }).then(() => api('GET', `/api/tasks/${id}`)).then(d => d.memories);
     sessionPanel.drawContextLabel();
     return refs;
   });
@@ -521,6 +527,7 @@ async function taskView(id, { every, leave, reload }) {
     h('label', {}, 'Working directory for agents'),
     workdirSelect(t.workdir, `Project default (${taskWorkdir({ ...t, workdir: '' })})`, { onchange: e => save({ workdir: e.target.value }) }),
     fields,
+    memories.el,
     buildsOn.el,
     h('div', { class: 'row', style: 'margin-top:14px' },
       h('span', { class: 'muted small grow' }, 'Created ' + fmtTime(t.created_at)),
@@ -608,6 +615,33 @@ function buildsOnEditor(task, refs, usedBy, setIds) {
   return { el };
 }
 
+// The memories the task is linked to, editable. setIds saves a new list and
+// resolves to the updated refs.
+function memoryEditor(refs, all, setIds) {
+  const el = h('div');
+  const draw = () => {
+    const free = all.filter(m => !refs.some(r => r.id === m.id));
+    el.replaceChildren(...[
+      h('label', {}, 'Memory — agents read it and update it after each turn'),
+      refs.length ? null : h('div', { class: 'muted small' }, 'None: what agents find out stays in their sessions.'),
+      refs.map(r => h('div', { class: 'field-row' },
+        h('span', { class: 'link-ref' }, h('a', { href: `#/memory/${r.id}`, onclick: closeTaskDialog }, r.name)),
+        h('button', {
+          class: 'ghost small', title: 'Unlink this memory',
+          onclick: async () => { refs = await setIds(refs.filter(x => x.id !== r.id).map(x => x.id)); draw(); },
+        }, '✕'))),
+      free.length ? select([['', 'Link a memory…'], ...free.map(m => [m.id, m.name])], '', {
+        onchange: async e => {
+          const id = Number(e.target.value);
+          if (id) { refs = await setIds([...refs.map(r => r.id), id]); draw(); }
+        },
+      }) : h('a', { class: 'small', href: '#/memory', onclick: closeTaskDialog }, all.length ? 'All memories are linked' : 'Create a memory…'),
+    ].flat().filter(c => c != null));
+  };
+  draw();
+  return { el };
+}
+
 // A search box over every task (archived ones included) with a list of matches:
 // ↑/↓ choose, Enter (or a click) picks one, Esc closes the list. Focusing the
 // empty box lists the most recently updated tasks.
@@ -654,8 +688,9 @@ function newSessionPanel(task, onStarted) {
   const ctx = h('input', { type: 'checkbox', checked: true });
   const ctxLabel = h('span');
   const drawContextLabel = () => {
-    const n = task.context_from.length;
-    ctxLabel.textContent = n ? `Include task context and session summaries of ${n} earlier task${n > 1 ? 's' : ''}` : 'Include task context';
+    const n = task.context_from.length, m = task.memories.length;
+    ctxLabel.textContent = 'Include task context' + (m ? `, ${m} memor${m > 1 ? 'ies' : 'y'}` : '') +
+      (n ? ` and session summaries of ${n} earlier task${n > 1 ? 's' : ''}` : '');
   };
   drawContextLabel();
   const workdir = workdirSelect('', `Default (${taskWorkdir(task)})`);
@@ -792,6 +827,16 @@ function sessionComponent(session, messages) {
       }, 'Copy resume cmd') : null,
       running ? h('button', { class: 'danger small', onclick: () => api('POST', `/api/sessions/${s.id}/cancel`) }, 'Stop') : null,
       resumable ? h('button', { class: 'small', title: 'Continue this session where it stopped', onclick: doResume }, 'Resume') : null,
+      s.memorizing ? h('span', { class: 'badge' }, h('span', { class: 'pulse' }), 'updating memory') : null,
+      !running && !s.memorizing && s.task_id && s.claude_session_id ? h('button', {
+        class: 'ghost small', title: 'Update the task\'s memories with what this session found out (it also happens after every turn)',
+        onclick: async () => {
+          await api('POST', `/api/sessions/${s.id}/memory`);
+          c.session.memorizing = true;
+          drawHead();
+          toast('Updating the memories…');
+        },
+      }, 'Update memory') : null,
       !running && s.claude_session_id ? h('button', {
         class: 'ghost small', title: 'Have the agent write a brief and continue in a new session with a fresh context',
         onclick: () => handoffDialog(s, () => { c.session.status = 'running'; drawHead(); }),
@@ -850,9 +895,10 @@ function sessionComponent(session, messages) {
   return c;
 }
 
-// A summary being written or written does not count as activity in the session.
+// A summary or memory update being written or written does not count as activity in the session.
 function summaryChanged(a, b) {
-  return a.summarizing !== b.summarizing || a.summary_at !== b.summary_at || a.summary_stale !== b.summary_stale;
+  return a.summarizing !== b.summarizing || a.summary_at !== b.summary_at || a.summary_stale !== b.summary_stale ||
+    a.memorizing !== b.memorizing;
 }
 
 // Hand a session off to a fresh one: its agent writes a brief, and a new
@@ -995,6 +1041,152 @@ function sessionDialog() {
     h('div', { class: 'dialog-actions' }, cancelButton(dlg), h('button', { onclick: start }, 'Start', hint('⌘↵'))));
   dlg.showModal();
   prompt.focus();
+}
+
+// ---------- memory ----------
+
+const sourceLabel = { user: 'edited by hand', agent: 'updated by an agent', note: 'note added' };
+
+async function renderMemories() {
+  if (!state.board) await loadBoard();
+  const xs = await api('GET', '/api/memories');
+  view.replaceChildren(h('div', { class: 'panel', style: 'max-width:900px' },
+    h('div', { class: 'toolbar' }, h('h2', { class: 'grow', style: 'flex:1' }, 'Memory'),
+      h('button', { onclick: memoryDialog }, '+ New memory')),
+    h('p', { class: 'muted small' }, 'Lasting knowledge kept across tasks. Link a memory to tasks: their agents read it with the task context, ' +
+      'and after each turn a copy of the agent rewrites it with what the session found out. Every change is kept as a revision.'),
+    xs.length ? h('table', {}, h('thead', {}, h('tr', {}, ['Memory', 'Tasks', 'New tasks of', 'Updated'].map(x => h('th', {}, x)))),
+      h('tbody', {}, xs.map(m => h('tr', { class: 'clickable', onclick: () => { location.hash = `#/memory/${m.id}`; } },
+        h('td', {}, m.name, m.description ? h('div', { class: 'muted small' }, m.description) : null),
+        h('td', { class: 'muted small' }, m.tasks),
+        h('td', { class: 'muted small' }, m.project_id ? projectName(m.project_id) : '—'),
+        h('td', { class: 'muted small' }, ago(m.updated_at))))))
+      : h('p', { class: 'muted' }, 'No memories yet.')));
+}
+
+function memoryDialog() {
+  const dlg = document.getElementById('dialog');
+  const name = h('input', { placeholder: 'e.g. Productive API' });
+  const description = h('input', { placeholder: 'What belongs in it — agents go by this' });
+  const project = select([['', 'No project'], ...state.board.projects.map(p => [p.id, p.name])], '');
+  const create = async () => {
+    if (!name.value.trim()) return;
+    const m = await api('POST', '/api/memories', { name: name.value, description: description.value, project_id: Number(project.value) || null });
+    dlg.close();
+    location.hash = `#/memory/${m.id}`;
+  };
+  submitOnCmdEnter([name, description, project], create);
+  dlg.replaceChildren(h('h2', {}, 'New memory'),
+    h('label', {}, 'Name'), name, h('label', {}, 'About'), description,
+    h('label', {}, 'Link it to the new tasks of'), project,
+    h('div', { class: 'dialog-actions' }, cancelButton(dlg), h('button', { onclick: create }, 'Create', hint('⌘↵'))));
+  dlg.showModal();
+  name.focus();
+}
+
+async function renderMemory(id) {
+  if (!state.board) await loadBoard();
+  let data = await api('GET', `/api/memories/${id}`);
+  let m = data.memory;
+  let base = m.revision, loaded = m.body; // the revision and text the editor started from
+  const save = patch => api('PATCH', `/api/memories/${id}`, patch).then(nm => { m = nm; return nm; });
+
+  const name = h('input', { class: 'title-input', value: m.name, onchange: e => save({ name: e.target.value }) });
+  const description = h('input', { value: m.description, placeholder: 'What belongs in it — agents go by this', onchange: e => save({ description: e.target.value }) });
+  const project = select([['', 'No project'], ...state.board.projects.map(p => [p.id, p.name])], m.project_id ?? '', {
+    onchange: e => save({ project_id: Number(e.target.value) || 0 }),
+  });
+  const body = h('textarea', { rows: 26, class: 'mono', placeholder: 'Markdown. Agents fill it in after their turns; you can write in it too.' }, m.body);
+  const preview = h('div', { class: 'md memory-preview hidden' });
+  const note = h('div', { class: 'muted small grow' });
+  const dirty = () => body.value !== loaded;
+  const drawNote = () => {
+    note.textContent = base !== m.revision ? 'The memory changed while you were editing; reload to see it, or your save is refused.'
+      : dirty() ? 'Unsaved changes' : '';
+  };
+  body.addEventListener('input', drawNote);
+  const saveBody = async () => {
+    await save({ body: body.value, base_revision: base });
+    reloadBody();
+    toast('Saved');
+    reload();
+  };
+  const reloadBody = () => { body.value = loaded = m.body; base = m.revision; drawNote(); };
+  submitOnCmdEnter([body], saveBody);
+  const togglePreview = () => {
+    const show = preview.classList.contains('hidden');
+    if (show) preview.replaceChildren(...markdown(body.value));
+    preview.classList.toggle('hidden', !show);
+    body.classList.toggle('hidden', show);
+  };
+
+  const revisions = h('div');
+  const tasks = h('div');
+  const drawSide = () => {
+    revisions.replaceChildren(...(data.revisions.length ? data.revisions.map((r, i) => h('div', { class: 'revision' },
+      h('a', { href: '#', onclick: e => { e.preventDefault(); revisionDialog(r.id, i === 0, reload); } }, fmtTime(r.created_at)),
+      h('div', { class: 'muted small' }, sourceLabel[r.source] || r.source,
+        r.task_id ? [' · ', h('a', { href: r.session_id ? `#/task/${r.task_id}/s/${r.session_id}` : `#/task/${r.task_id}` }, `#${r.task_id}`)] : null)))
+      : [h('p', { class: 'muted small' }, 'No revisions yet.')]));
+    tasks.replaceChildren(...(data.tasks.length ? data.tasks.map(t => h('div', { class: 'link-ref' },
+      h('a', { href: `#/task/${t.id}` }, `#${t.id} ${t.title}`), t.archived ? ' (archived)' : ''))
+      : [h('p', { class: 'muted small' }, 'No task is linked to it yet; link it from a task.')]));
+  };
+  // Fetches the memory again; the editor follows unless it has unsaved changes.
+  const reload = async () => {
+    data = await api('GET', `/api/memories/${id}`);
+    m = data.memory;
+    if (!dirty() && base !== m.revision) reloadBody();
+    drawNote();
+    drawSide();
+  };
+  drawSide();
+  every(5000, reload); // agents update it after their turns
+
+  view.replaceChildren(h('div', { class: 'task-page' },
+    h('div', { class: 'task-side' },
+      h('div', { class: 'panel' },
+        h('a', { href: '#/memory', class: 'btn ghost small' }, '← Memory'),
+        name, h('label', {}, 'About'), description,
+        h('label', {}, 'Link it to the new tasks of'), project,
+        h('div', { class: 'row', style: 'margin-top:14px' },
+          h('span', { class: 'muted small grow' }, 'Created ' + fmtTime(m.created_at)),
+          h('button', {
+            class: 'danger', onclick: async () => {
+              if (!confirm(`Delete memory ${m.name} with all its revisions?`)) return;
+              await api('DELETE', `/api/memories/${id}`);
+              location.hash = '#/memory';
+            },
+          }, 'Delete'))),
+      h('div', { class: 'panel' }, h('h3', {}, 'Tasks'), tasks),
+      h('div', { class: 'panel' }, h('h3', {}, 'Revisions'), revisions)),
+    h('div', { class: 'panel' },
+      body, preview,
+      h('div', { class: 'row', style: 'margin-top:8px' }, note,
+        h('button', { class: 'ghost', onclick: reloadBody, title: 'Drop your changes and show the latest version' }, 'Reload'),
+        h('button', { class: 'ghost', onclick: togglePreview }, 'Preview'),
+        h('button', { onclick: saveBody }, 'Save', hint('⌘↵'))))));
+}
+
+// One revision as a diff to the one before, with a way back to it.
+async function revisionDialog(revisionId, latest, done) {
+  const data = await api('GET', `/api/memory-revisions/${revisionId}`);
+  const r = data.revision;
+  const dlg = document.getElementById('dialog');
+  dlg.replaceChildren(h('h2', {}, 'Revision of ' + fmtTime(r.created_at)),
+    h('p', { class: 'muted small' }, (sourceLabel[r.source] || r.source) + '; the changes to the revision before.'),
+    h('pre', { class: 'diff' }, data.diff.map(l => h('div', { class: { '+': 'diff-add', '-': 'diff-del' }[l.op] || '' }, l.op + ' ' + l.text))),
+    h('div', { class: 'dialog-actions' }, cancelButton(dlg),
+      latest ? null : h('button', {
+        title: 'Make this version the memory again, as a new revision',
+        onclick: async () => {
+          await api('POST', `/api/memory-revisions/${r.id}/restore`);
+          dlg.close();
+          toast('Restored');
+          done();
+        },
+      }, 'Restore this version')));
+  dlg.showModal();
 }
 
 // ---------- settings ----------
@@ -1431,6 +1623,7 @@ const shortcuts = [
   { keys: '⌥B', code: 'KeyB', label: 'Go to Board', run: () => go('#/board') },
   { keys: '⌥L', code: 'KeyL', label: 'Go to List', run: () => go('#/list') },
   { keys: '⌥S', code: 'KeyS', label: 'Go to Sessions', run: () => go('#/sessions') },
+  { keys: '⌥O', code: 'KeyO', label: 'Go to Memory', run: () => go('#/memory') },
   { keys: '⌥A', code: 'KeyA', label: 'Go to Archive', run: () => go('#/archive') },
   { keys: '⌥,', code: 'Comma', label: 'Go to Settings', run: () => go('#/settings') },
   { keys: '/', label: 'Filter the list or archive', run: focusFilter },

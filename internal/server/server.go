@@ -76,6 +76,7 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/sessions/{id}/handoff", s.handoffSession)
 	m.HandleFunc("POST /api/sessions/{id}/skill", s.runSkill)
 	m.HandleFunc("POST /api/sessions/{id}/summary", s.summarizeSession)
+	m.HandleFunc("POST /api/sessions/{id}/memory", s.memorizeSession)
 
 	m.HandleFunc("GET /api/rules", s.listRules)
 	m.HandleFunc("POST /api/rules", s.saveRule)
@@ -87,6 +88,15 @@ func (s *Server) routes() {
 	m.HandleFunc("PATCH /api/skills/{id}", s.updateSkill)
 	m.HandleFunc("DELETE /api/skills/{id}", s.deleteSkill)
 	m.HandleFunc("DELETE /api/artifacts/{id}", s.deleteArtifact)
+
+	m.HandleFunc("GET /api/memories", s.listMemories)
+	m.HandleFunc("POST /api/memories", s.createMemory)
+	m.HandleFunc("GET /api/memories/{id}", s.getMemory)
+	m.HandleFunc("PATCH /api/memories/{id}", s.updateMemory)
+	m.HandleFunc("DELETE /api/memories/{id}", s.deleteMemory)
+	m.HandleFunc("POST /api/memories/{id}/notes", s.addMemoryNote)
+	m.HandleFunc("GET /api/memory-revisions/{id}", s.getMemoryRevision)
+	m.HandleFunc("POST /api/memory-revisions/{id}/restore", s.restoreMemoryRevision)
 
 	m.HandleFunc("PUT /api/schedules/{id}", s.updateSchedule)
 	m.HandleFunc("DELETE /api/schedules/{id}", s.deleteSchedule)
@@ -146,9 +156,11 @@ func writeErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, store.ErrNotFound):
 		status = http.StatusNotFound
 	case errors.Is(err, store.ErrLaneNotEmpty), errors.Is(err, store.ErrProjectNotEmpty), errors.Is(err, store.ErrLastProject),
-		errors.Is(err, app.ErrBusy), errors.Is(err, app.ErrNoResume), errors.Is(err, app.ErrStopping):
+		errors.Is(err, app.ErrBusy), errors.Is(err, app.ErrNoResume), errors.Is(err, app.ErrStopping),
+		errors.Is(err, store.ErrMemoryChanged):
 		status = http.StatusConflict
-	case errors.As(err, new(badRequest)), errors.Is(err, app.ErrBadAction), errors.Is(err, app.ErrBadCron), errors.Is(err, store.ErrBadContext):
+	case errors.As(err, new(badRequest)), errors.Is(err, app.ErrBadAction), errors.Is(err, app.ErrBadCron), errors.Is(err, store.ErrBadContext),
+		errors.Is(err, store.ErrBadMemory), errors.Is(err, store.ErrMemoryExists), errors.Is(err, app.ErrNoMemory):
 		status = http.StatusBadRequest
 	}
 	if status == http.StatusInternalServerError {

@@ -41,17 +41,23 @@ type App struct {
 	limits   map[int64]agent.RateLimits // per session, last reported; in memory only
 	// summarizing holds the sessions whose summary is being written (see Summarize).
 	summarizing map[int64]context.CancelFunc
+	// memorizing holds the sessions whose task's memories are being updated
+	// (see UpdateMemories); memorizeAgain those to update once more after.
+	memorizing    map[int64]context.CancelFunc
+	memorizeAgain map[int64]bool
+	memoryLocks   map[int64]*sync.Mutex // one update of a memory at a time
 }
 
 func New(s *store.Store, r agent.Runner, workdir, mode string) *App {
 	return &App{Store: s, Runner: r, DefaultWorkdir: workdir, DefaultMode: mode, Now: time.Now,
-		running: map[int64]context.CancelFunc{}, limits: map[int64]agent.RateLimits{}, summarizing: map[int64]context.CancelFunc{}}
+		running: map[int64]context.CancelFunc{}, limits: map[int64]agent.RateLimits{}, summarizing: map[int64]context.CancelFunc{},
+		memorizing: map[int64]context.CancelFunc{}, memorizeAgain: map[int64]bool{}, memoryLocks: map[int64]*sync.Mutex{}}
 }
 
 // Wait blocks until all agent turns started so far have finished.
 func (a *App) Wait() { a.wg.Wait() }
 
-// Shutdown cancels running turns and summaries and waits for them. The turns
+// Shutdown cancels running turns, summaries and memory updates and waits for them. The turns
 // are marked interrupted so they can be resumed after the next start.
 func (a *App) Shutdown() {
 	a.mu.Lock()
@@ -60,6 +66,9 @@ func (a *App) Shutdown() {
 		cancel()
 	}
 	for _, cancel := range a.summarizing {
+		cancel()
+	}
+	for _, cancel := range a.memorizing {
 		cancel()
 	}
 	a.mu.Unlock()
@@ -221,13 +230,16 @@ func (a *App) Handoff(ctx context.Context, sessionID int64, note string) error {
 	})
 }
 
-// handoffPrompt is the new session's first prompt: the task as it is now,
-// the brief, then the user's note or a nudge to go on.
+// handoffPrompt is the new session's first prompt: the task as it is now with
+// its memories, the brief, then the user's note or a nudge to go on.
 func (a *App) handoffPrompt(ctx context.Context, sess store.Session, brief, note string) string {
 	parts := []string{HandoffIntro}
 	if sess.TaskID != 0 {
 		if t, err := a.Store.Task(ctx, sess.TaskID); err == nil {
 			parts = append(parts, TaskContext(t))
+			if mem := a.memoryBrief(ctx, t); mem != "" {
+				parts = append(parts, mem)
+			}
 		}
 	}
 	parts = append(parts, strings.TrimSpace(brief))
@@ -385,7 +397,8 @@ func (a *App) Limits(sessionID int64) agent.RateLimits {
 
 // afterTurn follows a successful turn: the skills whose automations match the
 // task run in the session, one turn each, then the task moves to its done lane
-// and, if other tasks build on it, the session's summary is written.
+// and, if other tasks build on it, the session's summary is written; the
+// task's memories are updated from the session.
 // A skill turn that does not finish successfully ends the chain there.
 func (a *App) afterTurn(ctx context.Context, sessionID, startLane int64) {
 	sess, err := a.Store.Session(ctx, sessionID)
@@ -403,6 +416,7 @@ func (a *App) afterTurn(ctx context.Context, sessionID, startLane int64) {
 	a.runSkills(ctx, sess, skills, func(ctx context.Context) {
 		a.moveWhenDone(ctx, sessionID, startLane)
 		a.summarizeForUsers(ctx, sess)
+		a.memorizeAfterTurn(ctx, sess)
 	})
 }
 
@@ -699,13 +713,16 @@ const (
 const SharedIntro = "This task builds on earlier tasks. What their agents did, oldest session first: " +
 	"a summary of each session, or its final reply where the session has no up-to-date summary."
 
-// TaskBrief is TaskContext followed by what the agents of the tasks it builds
-// on (ContextFrom) did: per task, each of its latest sessions' summary, or its
+// TaskBrief is TaskContext followed by the task's memories and what the agents
+// of the tasks it builds on (ContextFrom) did: per task, each of its latest sessions' summary, or its
 // final reply if the summary is missing or stale. Such sessions get a fresh
 // summary in the background, for the next brief. Sessions that were handed
 // off are left out; the session that took over carries on.
 func (a *App) TaskBrief(ctx context.Context, t store.Task) string {
 	brief := TaskContext(t)
+	if mem := a.memoryBrief(ctx, t); mem != "" {
+		brief += "\n\n---\n\n" + mem
+	}
 	if len(t.ContextFrom) == 0 {
 		return brief
 	}

@@ -268,6 +268,38 @@ ALTER TABLE sessions ADD COLUMN summary_at INTEGER;
 	`
 ALTER TABLE skills ADD COLUMN model TEXT NOT NULL DEFAULT '';
 `,
+	// Memories: knowledge kept across tasks, a Markdown document each. Tasks
+	// link to them; their agents read them and update them after each turn.
+	// Every change is a revision; memories.revision is the latest one's id.
+	// A memory with a project_id is linked to that project's new tasks.
+	`
+CREATE TABLE memories (
+	id INTEGER PRIMARY KEY,
+	name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+	description TEXT NOT NULL DEFAULT '',
+	body TEXT NOT NULL DEFAULT '',
+	revision INTEGER NOT NULL DEFAULT 0,
+	project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL
+);
+CREATE TABLE memory_revisions (
+	id INTEGER PRIMARY KEY,
+	memory_id INTEGER NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+	body TEXT NOT NULL,
+	source TEXT NOT NULL,
+	session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
+	task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+	created_at INTEGER NOT NULL
+);
+CREATE INDEX memory_revisions_memory ON memory_revisions(memory_id, id);
+CREATE TABLE task_memories (
+	task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+	memory_id INTEGER NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+	PRIMARY KEY (task_id, memory_id)
+);
+CREATE INDEX task_memories_memory ON task_memories(memory_id);
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

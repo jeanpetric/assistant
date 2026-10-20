@@ -122,8 +122,13 @@ var (
 		})}
 	pSkillBody = prop("string", "Instructions for the agent (Markdown), e.g. how a summary should look and where to write it. "+
 		"A prompt template: {{.Task.Title}}, {{.Task.ID}}, {{.Fields.pull_request}}, {{.Context}}")
-	pSkillModel  = prop("string", "Model the skill's turn runs with, e.g. fable; empty keeps the session's model")
-	pContextFrom = map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "Ids of earlier tasks this task builds on, e.g. the research it follows from. Summaries of their agent sessions (or the final replies, where a session has no up-to-date summary) go into the context of this task's agents (include_context, rules and schedules using {{.Context}}). Empty: the task starts from scratch."}
+	pSkillModel = prop("string", "Model the skill's turn runs with, e.g. fable; empty keeps the session's model")
+	pMemories   = map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "Ids of memories (see list_memories) linked to the task: " +
+		"its agents read them with the task context and update them after each turn. On create, left out links the project's memories and those of the tasks it builds on; [] links none."}
+	pMemoryID          = prop("integer", "Memory id (see list_memories)")
+	pMemoryDescription = prop("string", "What the memory is about; it tells agents what belongs in it")
+	pMemoryProjectID   = prop("integer", "Project whose new tasks get the memory linked; 0 for none")
+	pContextFrom       = map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "Ids of earlier tasks this task builds on, e.g. the research it follows from. Summaries of their agent sessions (or the final replies, where a session has no up-to-date summary) go into the context of this task's agents (include_context, rules and schedules using {{.Context}}). Empty: the task starts from scratch."}
 )
 
 func (s *Server) mcpTools() []mcpTool {
@@ -165,7 +170,7 @@ func (s *Server) mcpTools() []mcpTool {
 		},
 		{
 			Name:        "get_task",
-			Description: "One task with its schedules and agent sessions (without transcripts; use get_session for those), the tasks it builds on (builds_on) and the tasks that build on it (used_by).",
+			Description: "One task with its schedules and agent sessions (without transcripts; use get_session for those), the tasks it builds on (builds_on), the tasks that build on it (used_by) and its memories.",
 			InputSchema: schema([]string{"task_id"}, map[string]any{"task_id": pTaskID}),
 			call:        byID("GET", "/api/tasks/%d", "task_id", false),
 			post:        taskWithoutTranscripts,
@@ -176,16 +181,17 @@ func (s *Server) mcpTools() []mcpTool {
 			InputSchema: schema([]string{"title"}, map[string]any{
 				"title": prop("string", "Short title"), "description": prop("string", "Markdown description"), "project_id": pProjectID,
 				"kind": pKind, "lane_id": pLaneID, "workdir": pWorkdir, "due_at": pDueAt, "fields": pFields, "context_from": pContextFrom,
+				"memories": pMemories,
 			}),
 			call: fixed("POST", "/api/tasks", true),
 		},
 		{
 			Name:        "update_task",
-			Description: "Change a task's title, description, kind, workdir, due time, custom fields, the tasks it builds on (context_from replaces the list) or project (it goes to the end of its lane there). Only the given keys change; due_at null clears it. Use move_task to change its lane.",
+			Description: "Change a task's title, description, kind, workdir, due time, custom fields, the tasks it builds on (context_from replaces the list), its memories (memories replaces the list) or project (it goes to the end of its lane there). Only the given keys change; due_at null clears it. Use move_task to change its lane.",
 			InputSchema: schema([]string{"task_id"}, map[string]any{
 				"task_id": pTaskID, "project_id": pProjectID, "title": prop("string", "New title"), "description": prop("string", "New description (replaces the old one)"),
 				"kind": pKind, "workdir": pWorkdir, "due_at": map[string]any{"type": []string{"string", "null"}, "description": pDueAt["description"]}, "fields": pFields,
-				"context_from": pContextFrom,
+				"context_from": pContextFrom, "memories": pMemories,
 			}),
 			call: byID("PATCH", "/api/tasks/%d", "task_id", true),
 		},
@@ -270,7 +276,7 @@ func (s *Server) mcpTools() []mcpTool {
 			Description: "Start a Claude Code agent session on a task, running prompt in the task's working directory.",
 			InputSchema: schema([]string{"task_id", "prompt"}, map[string]any{
 				"task_id": pTaskID, "prompt": prop("string", "What the agent should do"), "title": prop("string", "Session title"),
-				"include_context": prop("boolean", "Prepend the task's title, description and fields, and the results of the tasks it builds on, to the prompt"),
+				"include_context": prop("boolean", "Prepend the task's title, description and fields, its memories, and the results of the tasks it builds on, to the prompt"),
 				"mode":            prop("string", "Permission mode, e.g. bypassPermissions or plan (default: the app's)"),
 				"model":           prop("string", "Model, e.g. opus (default: the CLI's)"),
 				"workdir":         pWorkdir,
@@ -343,6 +349,57 @@ func (s *Server) mcpTools() []mcpTool {
 			call:        byID("POST", "/api/sessions/%d/summary", "session_id", false),
 		},
 		{
+			Name: "list_memories",
+			Description: "The user's memories: Markdown documents of lasting knowledge kept across tasks. Agents of the tasks linked to a memory read it, " +
+				"and after each of their turns a fork of the agent rewrites it with what the session found out. Bodies are left out; get_memory has them.",
+			InputSchema: schema(nil, map[string]any{}),
+			call:        fixed("GET", "/api/memories", false),
+		},
+		{
+			Name:        "get_memory",
+			Description: "One memory with its body, its revisions (newest first, without bodies) and the tasks linked to it.",
+			InputSchema: schema([]string{"memory_id"}, map[string]any{"memory_id": pMemoryID}),
+			call:        byID("GET", "/api/memories/%d", "memory_id", false),
+		},
+		{
+			Name:        "create_memory",
+			Description: "Add a memory. Link it to tasks with create_task or update_task (memories).",
+			InputSchema: schema([]string{"name"}, map[string]any{
+				"name": prop("string", "Unique name, e.g. the subject"), "description": pMemoryDescription,
+				"body": prop("string", "Initial Markdown body"), "project_id": pMemoryProjectID,
+			}),
+			call: fixed("POST", "/api/memories", true),
+		},
+		{
+			Name: "update_memory",
+			Description: "Change a memory; only the given keys change. body replaces the whole document as a new revision: read it with get_memory first " +
+				"and pass its revision as base_revision, so a change made meanwhile is not overwritten. To add a single fact, use remember.",
+			InputSchema: schema([]string{"memory_id"}, map[string]any{
+				"memory_id": pMemoryID, "name": prop("string", "Unique name"), "description": pMemoryDescription, "project_id": pMemoryProjectID,
+				"body": prop("string", "The whole new Markdown body"), "base_revision": prop("integer", "The revision body is based on (see get_memory)"),
+			}),
+			call: byID("PATCH", "/api/memories/%d", "memory_id", true),
+		},
+		{
+			Name:        "remember",
+			Description: "Add a note to the end of a memory, e.g. a fact or decision the user wants kept. The next update from an agent session works it into the document.",
+			InputSchema: schema([]string{"memory_id", "text"}, map[string]any{"memory_id": pMemoryID, "text": prop("string", "What to remember, self-contained")}),
+			call:        byID("POST", "/api/memories/%d/notes", "memory_id", true),
+		},
+		{
+			Name:        "delete_memory",
+			Description: "Delete a memory with its revisions; tasks linked to it lose it.",
+			InputSchema: schema([]string{"memory_id"}, map[string]any{"memory_id": pMemoryID}),
+			call:        byID("DELETE", "/api/memories/%d", "memory_id", false),
+		},
+		{
+			Name: "update_memories_from_session",
+			Description: "Update the memories of a session's task with what the session found out, now. It also happens by itself after each successful turn. " +
+				"Runs in the background in a fork of the session's agent; get_memory shows the result.",
+			InputSchema: schema([]string{"session_id"}, map[string]any{"session_id": prop("integer", "Session id")}),
+			call:        byID("POST", "/api/sessions/%d/memory", "session_id", false),
+		},
+		{
 			Name:        "send_message",
 			Description: "Continue an idle agent session with a new message.",
 			InputSchema: schema([]string{"session_id", "text"}, map[string]any{"session_id": prop("integer", "Session id"), "text": prop("string", "Message")}),
@@ -386,6 +443,7 @@ func (s *Server) mcp(w http.ResponseWriter, r *http.Request) {
 			"serverInfo":      map[string]any{"name": "assistant", "version": "1"},
 			"instructions": "The user's personal kanban board. Each project has its own board of tasks on the shared lanes; " +
 				"call get_board first for project, lane and task ids. " +
+				"Memories keep lasting knowledge across tasks; use remember to add to one. " +
 				"Agent sessions run Claude Code on a task. Archive rather than delete unless told otherwise.",
 		}
 	case "ping":
@@ -510,6 +568,7 @@ func taskWithoutTranscripts(raw []byte) ([]byte, error) {
 		BuildsOn  json.RawMessage              `json:"builds_on"`
 		UsedBy    json.RawMessage              `json:"used_by"`
 		Artifacts json.RawMessage              `json:"artifacts"`
+		Memories  json.RawMessage              `json:"memories"`
 	}
 	if err := json.Unmarshal(raw, &t); err != nil {
 		return nil, err

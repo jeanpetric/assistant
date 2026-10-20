@@ -147,6 +147,12 @@ func (s *Store) SetSessionSummary(ctx context.Context, id int64, summary string,
 		summary, upto, s.ts(), costUSD, id))
 }
 
+// AddBackgroundCost adds what work for the session outside its turns cost,
+// e.g. updating a memory. Like a summary, it is not activity in the session.
+func (s *Store) AddBackgroundCost(ctx context.Context, id int64, usd float64) error {
+	return affected(s.db.ExecContext(ctx, `UPDATE sessions SET cost_usd = cost_usd + ? WHERE id = ?`, usd, id))
+}
+
 // LastMessageID is the id of the session's latest message, 0 if it has none.
 func (s *Store) LastMessageID(ctx context.Context, sessionID int64) (int64, error) {
 	var id int64

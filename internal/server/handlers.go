@@ -454,8 +454,13 @@ func (s *Server) getTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	memories, err := s.memoryRefs(ctx, t.Memories)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
 	writeJSON(w, 200, map[string]any{"task": t, "sessions": out, "schedules": schedules, "builds_on": builds, "used_by": usedBy,
-		"artifacts": artifacts})
+		"artifacts": artifacts, "memories": memories})
 }
 
 // taskRef names a related task for the task page.
@@ -499,6 +504,7 @@ func (s *Server) updateTask(w http.ResponseWriter, r *http.Request) {
 		DueAt       json.RawMessage   `json:"due_at"`     // absent: keep, null: clear
 		Fields      map[string]string `json:"fields"`
 		ContextFrom *[]int64          `json:"context_from"` // replaces the list
+		Memories    *[]int64          `json:"memories"`     // replaces the list
 	}
 	if err := decode(r, &in); err != nil {
 		writeErr(w, err)
@@ -536,6 +542,12 @@ func (s *Server) updateTask(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.ContextFrom != nil {
 		if err := s.app.Store.SetContextFrom(r.Context(), id, *in.ContextFrom); err != nil {
+			writeErr(w, err)
+			return
+		}
+	}
+	if in.Memories != nil {
+		if err := s.app.Store.SetTaskMemories(r.Context(), id, *in.Memories); err != nil {
 			writeErr(w, err)
 			return
 		}
@@ -804,15 +816,16 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 // sessionOut is a session with its live state, which is never stored: usage
-// limits and whether its summary is being written.
+// limits and whether its summary or memories are being written.
 type sessionOut struct {
 	store.Session
 	Limits      agent.RateLimits `json:"limits"`
 	Summarizing bool             `json:"summarizing"`
+	Memorizing  bool             `json:"memorizing"` // its task's memories are being updated
 }
 
 func (s *Server) withLimits(x store.Session) sessionOut {
-	return sessionOut{x, s.app.Limits(x.ID), s.app.Summarizing(x.ID)}
+	return sessionOut{x, s.app.Limits(x.ID), s.app.Summarizing(x.ID), s.app.Memorizing(x.ID)}
 }
 
 func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
@@ -963,6 +976,20 @@ func (s *Server) summarizeSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.app.Summarize(r.Context(), id); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(202)
+}
+
+// memorizeSession updates the memories of the session's task from it in the background.
+func (s *Server) memorizeSession(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.app.UpdateMemories(r.Context(), id); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -1311,4 +1338,243 @@ func (s *Server) readNotification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(204)
+}
+
+// ---- memories ----
+
+// memoryRef names a memory for the task page.
+type memoryRef struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+}
+
+func (s *Server) memoryRefs(ctx context.Context, ids []int64) ([]memoryRef, error) {
+	out := []memoryRef{}
+	for _, id := range ids {
+		m, err := s.app.Store.Memory(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, memoryRef{m.ID, m.Name})
+	}
+	return out, nil
+}
+
+// listMemories lists the memories without their bodies; getMemory has them.
+func (s *Server) listMemories(w http.ResponseWriter, r *http.Request) {
+	xs, err := s.app.Store.Memories(r.Context())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	for i := range xs {
+		xs[i].Body = ""
+	}
+	writeJSON(w, 200, xs)
+}
+
+func (s *Server) createMemory(w http.ResponseWriter, r *http.Request) {
+	var x store.Memory
+	if err := decode(r, &x); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.checkMemory(r.Context(), &x); err != nil {
+		writeErr(w, err)
+		return
+	}
+	x, err := s.app.Store.CreateMemory(r.Context(), x)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 201, x)
+}
+
+// checkMemory trims and checks a memory's attributes; project 0 means none.
+func (s *Server) checkMemory(ctx context.Context, x *store.Memory) error {
+	if x.Name = strings.TrimSpace(x.Name); x.Name == "" {
+		return badRequest{"name is required"}
+	}
+	x.Description = strings.TrimSpace(x.Description)
+	if x.ProjectID != nil && *x.ProjectID == 0 {
+		x.ProjectID = nil
+	}
+	if x.ProjectID != nil {
+		return s.checkProject(ctx, *x.ProjectID)
+	}
+	return nil
+}
+
+// getMemory returns a memory with its revisions (without bodies) and the tasks linked to it.
+func (s *Server) getMemory(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	id, err := pathID(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	m, err := s.app.Store.Memory(ctx, id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	revs, err := s.app.Store.MemoryRevisions(ctx, id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	ids, err := s.app.Store.MemoryTasks(ctx, id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	tasks, err := s.taskRefs(ctx, ids)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"memory": m, "revisions": revs, "tasks": tasks})
+}
+
+// updateMemory changes the given keys only. A new body is a revision; with
+// base_revision it is refused if the memory changed since that revision.
+func (s *Server) updateMemory(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	id, err := pathID(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	cur, err := s.app.Store.Memory(ctx, id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	var in struct {
+		Name         *string `json:"name"`
+		Description  *string `json:"description"`
+		ProjectID    *int64  `json:"project_id"` // 0: no project
+		Body         *string `json:"body"`
+		BaseRevision *int64  `json:"base_revision"`
+	}
+	if err := decode(r, &in); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if in.Name != nil || in.Description != nil || in.ProjectID != nil {
+		if in.Name != nil {
+			cur.Name = *in.Name
+		}
+		if in.Description != nil {
+			cur.Description = *in.Description
+		}
+		if in.ProjectID != nil {
+			cur.ProjectID = in.ProjectID
+		}
+		if err := s.checkMemory(ctx, &cur); err != nil {
+			writeErr(w, err)
+			return
+		}
+		if err := s.app.Store.UpdateMemory(ctx, cur); err != nil {
+			writeErr(w, err)
+			return
+		}
+	}
+	if in.Body != nil {
+		if _, _, err := s.app.Store.SetMemoryBody(ctx, store.MemoryRevision{MemoryID: id, Body: *in.Body, Source: store.SourceUser},
+			in.BaseRevision); err != nil {
+			writeErr(w, err)
+			return
+		}
+	}
+	m, err := s.app.Store.Memory(ctx, id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, m)
+}
+
+func (s *Server) deleteMemory(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.app.Store.DeleteMemory(r.Context(), id); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(204)
+}
+
+// addMemoryNote appends a note to the memory; the next update from a
+// session works it in.
+func (s *Server) addMemoryNote(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	var in struct {
+		Text string `json:"text"`
+	}
+	if err := decode(r, &in); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if strings.TrimSpace(in.Text) == "" {
+		writeErr(w, badRequest{"text is required"})
+		return
+	}
+	if _, err := s.app.Store.AppendMemoryNote(r.Context(), store.MemoryRevision{MemoryID: id, Body: in.Text, Source: store.SourceNote}); err != nil {
+		writeErr(w, err)
+		return
+	}
+	m, err := s.app.Store.Memory(r.Context(), id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, m)
+}
+
+// getMemoryRevision returns a revision with its body and its diff to the one before.
+func (s *Server) getMemoryRevision(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	rev, prev, err := s.app.Store.MemoryRevision(r.Context(), id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"revision": rev, "diff": app.LineDiff(prev, rev.Body)})
+}
+
+// restoreMemoryRevision makes an earlier revision's body the memory's body again.
+func (s *Server) restoreMemoryRevision(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	rev, _, err := s.app.Store.MemoryRevision(r.Context(), id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if _, _, err := s.app.Store.SetMemoryBody(r.Context(), store.MemoryRevision{MemoryID: rev.MemoryID, Body: rev.Body, Source: store.SourceUser}, nil); err != nil {
+		writeErr(w, err)
+		return
+	}
+	m, err := s.app.Store.Memory(r.Context(), rev.MemoryID)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, m)
 }

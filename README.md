@@ -22,6 +22,14 @@ One Go binary, one SQLite file, no JavaScript build step.
   (`bypassPermissions`) or a stricter mode. Reply to continue a session (uses `claude --resume`),
   stop it, or copy the resume command to continue in a terminal.
 - **Sessions overview**: every session across all tasks with status and latest message.
+- **Memory**: lasting knowledge kept across tasks, one Markdown document per subject, under
+  *Memory* in the top menu (`⌥O`). Link memories to a task (a new task gets its project's
+  memories and those of the tasks it builds on): its agents read them with the task context, and
+  after every successful turn a fork of the agent rewrites each one with what the session found
+  out — answers you gave included — or leaves it as it is. Every change is a revision with a diff
+  you can restore; a notification tells which memory changed. Edit a memory by hand, update it
+  from a session with *Update memory*, or, from any Claude Code session, add to it with the MCP
+  `remember` tool.
 - **Working directories**: list the directories agents may run in under *Settings → Working
   directories*; the task, new session, standalone session and rule forms pick from that list
   (empty means the task's directory, else its project's, else the app default `workdir`). Upgrading seeds the list
@@ -45,7 +53,7 @@ One Go binary, one SQLite file, no JavaScript build step.
   notifications while the board is open in a browser tab (allow them when asked).
 - **Keyboard shortcuts** with ⌥ (Option/Alt), working in text fields too: `⌥T` new task, `⌥R`
   reminder, `⌥P` session, `⌥M` notifications, `⌥[` / `⌥]` previous / next project, and `⌥B`
-  `⌥L` `⌥S` `⌥A` `⌥,` to jump to Board, List, Sessions, Archive or Settings. They go by the
+  `⌥L` `⌥S` `⌥O` `⌥A` `⌥,` to jump to Board, List, Sessions, Memory, Archive or Settings. They go by the
   physical key, so ⌥ never types a special character for them; other ⌥ characters type as usual.
   Outside text fields `/` focuses the filter and `?` lists the shortcuts; `Esc` closes a dialog or
   the notifications. Each shortcut shows as a greyed key next to its button or link; press `?`

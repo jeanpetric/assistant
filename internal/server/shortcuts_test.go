@@ -38,6 +38,7 @@ const cases = [
   [key('KeyL', '¬', { altKey: true }), true, '⌥L'],
   [key('KeyS', 'ß', { altKey: true }), true, '⌥S'],
   [key('KeyA', 'å', { altKey: true }), true, '⌥A'],
+  [key('KeyO', 'ø', { altKey: true }), true, '⌥O'],
   [key('Comma', '≤', { altKey: true }), true, '⌥,'],
   [key('KeyT', '†', { altKey: true }), true, '⌥T'],
   [key('KeyK', '˚', { altKey: true }), false, '⌥K'],
