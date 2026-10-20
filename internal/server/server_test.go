@@ -340,8 +340,11 @@ func TestStaticUI(t *testing.T) {
 		// Shortcut hints are drawn greyed next to the controls they trigger.
 		"function hint(keys)", "drawHeaderHints();", "'Cancel', hint('Esc')", "'Create', hint('⌘↵')", "submitOnCmdEnter([title, desc, kind, project, lane, due], create)", "filter, hint('/')",
 		"addEventListener('click', shortcutsDialog)",
-		// Esc is left to the dialogs (the task dialog included) and closes the notifications.
-		"if (e.key === 'Escape' && !inField) { closeNotifications(); return; }",
+		// Esc is left to the dialogs (the task dialog included) and closes the notifications,
+		// from a text field too (List, Archive and Memory focus their filter).
+		"if (e.key === 'Escape' && closeNotifications()) { e.preventDefault(); return; }",
+		// The notifications panel archives them all at once.
+		"api('POST', '/api/notifications/archive')",
 		// A project's directory is picked in Settings and shown as the default for its tasks.
 		"function taskWorkdir(t)", "workdir.addEventListener('change', saveProject)", "`Default (${taskWorkdir(task)})`",
 		// The new task dialog drops its missing "Builds on" line instead of drawing "null".
@@ -877,6 +880,11 @@ func TestNeedsInputOnBoardAndNotification(t *testing.T) {
 	c.do("GET", "/api/notifications?unread=1", nil, 200, &notes)
 	if len(notes) != 1 || notes[0].SessionID == nil || *notes[0].SessionID != sess.ID {
 		t.Fatalf("notifications = %+v", notes)
+	}
+	c.do("POST", "/api/notifications/archive", nil, 204, nil)
+	c.do("GET", "/api/notifications", nil, 200, &notes)
+	if len(notes) != 0 {
+		t.Fatalf("after archiving all: %+v", notes)
 	}
 
 	c.do("DELETE", "/api/sessions/"+itoa(sess.ID)+"/needs-input", nil, 204, nil)

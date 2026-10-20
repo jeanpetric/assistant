@@ -1882,7 +1882,17 @@ async function toggleNotifications() {
   const panel = document.getElementById('notif-panel');
   if (!panel.classList.contains('hidden')) { panel.classList.add('hidden'); return; }
   const notes = await api('GET', '/api/notifications');
-  panel.replaceChildren(...(notes.length ? notes.map(n => h('div', {
+  const head = h('div', { class: 'notif-head' }, h('strong', {}, 'Notifications'),
+    notes.length ? h('button', {
+      class: 'small ghost', title: 'Take them all off this list',
+      onclick: async () => {
+        await api('POST', '/api/notifications/archive');
+        closeNotifications();
+        refreshGlobal();
+        toast('Notifications archived');
+      },
+    }, 'Archive all') : null);
+  panel.replaceChildren(head, ...(notes.length ? notes.map(n => h('div', {
     class: 'notif' + (n.read_at ? '' : ' unread'), style: 'cursor:pointer',
     onclick: async () => {
       if (!n.read_at) await api('POST', `/api/notifications/${n.id}/read`);
@@ -1962,7 +1972,7 @@ function submitOnCmdEnter(fields, submit) {
 function onShortcut(e) {
   if (document.getElementById('dialog').open) return;
   const inField = !!e.target.closest('input, textarea, select, [contenteditable]');
-  if (e.key === 'Escape' && !inField) { closeNotifications(); return; }
+  if (e.key === 'Escape' && closeNotifications()) { e.preventDefault(); return; }
   const sc = shortcutFor(e, inField);
   if (sc) { e.preventDefault(); sc.run(); }
 }
@@ -1979,8 +1989,12 @@ function focusFilter() {
   else location.hash = '#/list'; // the list focuses its filter on open
 }
 
+// Hides the notifications panel; true if it was open.
 function closeNotifications() {
-  document.getElementById('notif-panel').classList.add('hidden');
+  const panel = document.getElementById('notif-panel');
+  if (panel.classList.contains('hidden')) return false;
+  panel.classList.add('hidden');
+  return true;
 }
 
 function stepProject(by) {

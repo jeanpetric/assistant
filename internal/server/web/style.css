@@ -245,6 +245,10 @@ details.tool pre { white-space: pre-wrap; word-break: break-word; background: va
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
   box-shadow: 0 6px 24px rgba(0, 0, 0, .15);
 }
+.notif-head {
+  position: sticky; top: 0; display: flex; justify-content: space-between; align-items: center;
+  padding: 8px 12px; background: var(--surface); border-bottom: 1px solid var(--border);
+}
 .notif { padding: 10px 12px; border-bottom: 1px solid var(--border); }
 .notif.unread { border-left: 3px solid var(--accent); }
 

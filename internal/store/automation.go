@@ -217,7 +217,7 @@ func (s *Store) NotifySession(ctx context.Context, taskID, sessionID *int64, msg
 func (s *Store) Notifications(ctx context.Context, unreadOnly bool) ([]Notification, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT n.id, n.task_id, COALESCE(t.title, ''), n.session_id, n.message, n.created_at, n.read_at
 		FROM notifications n LEFT JOIN tasks t ON t.id = n.task_id
-		WHERE (? = 0 OR n.read_at IS NULL) ORDER BY n.id DESC LIMIT 200`, boolInt(unreadOnly))
+		WHERE n.archived_at IS NULL AND (? = 0 OR n.read_at IS NULL) ORDER BY n.id DESC LIMIT 200`, boolInt(unreadOnly))
 	if err != nil {
 		return nil, err
 	}
@@ -238,6 +238,13 @@ func (s *Store) Notifications(ctx context.Context, unreadOnly bool) ([]Notificat
 		out = append(out, n)
 	}
 	return out, rows.Err()
+}
+
+// ArchiveNotifications takes every notification off the panel, marking the unread ones read.
+func (s *Store) ArchiveNotifications(ctx context.Context) error {
+	now := s.ts()
+	_, err := s.db.ExecContext(ctx, `UPDATE notifications SET archived_at = ?, read_at = COALESCE(read_at, ?) WHERE archived_at IS NULL`, now, now)
+	return err
 }
 
 func (s *Store) MarkNotificationRead(ctx context.Context, id int64) error {

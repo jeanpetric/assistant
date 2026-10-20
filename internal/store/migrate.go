@@ -376,6 +376,10 @@ ALTER TABLE trello_cards ADD COLUMN board_id INTEGER REFERENCES trello_boards(id
 UPDATE trello_cards SET board_id = (SELECT id FROM trello_boards WHERE id = 1);
 CREATE INDEX trello_cards_board ON trello_cards(board_id);
 `,
+	// Archived notifications leave the panel; their rows stay.
+	`
+ALTER TABLE notifications ADD COLUMN archived_at INTEGER;
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

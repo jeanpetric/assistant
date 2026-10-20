@@ -1026,3 +1026,86 @@ func TestStandaloneSessionKeepsProject(t *testing.T) {
 		t.Fatalf("session of a deleted project = %+v, %v", x, err)
 	}
 }
+
+func TestArchiveNotifications(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	s.Notify(ctx, nil, "read one")
+	s.Notify(ctx, nil, "unread one")
+	ns, _ := s.Notifications(ctx, false)
+	s.MarkNotificationRead(ctx, ns[1].ID)
+	readAt := mustNotification(t, s, ns[1].ID).ReadAt
+
+	if err := s.ArchiveNotifications(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if ns, err := s.Notifications(ctx, false); err != nil || len(ns) != 0 {
+		t.Fatalf("after archiving: %+v, %v", ns, err)
+	}
+	// The rows stay: archiving marks the unread read and keeps an earlier read time.
+	var unread int
+	s.db.QueryRow(`SELECT COUNT(*) FROM notifications WHERE read_at IS NULL OR archived_at IS NULL`).Scan(&unread)
+	if unread != 0 {
+		t.Fatalf("%d notifications left unread or unarchived", unread)
+	}
+	var kept int64
+	s.db.QueryRow(`SELECT read_at FROM notifications WHERE id = ?`, ns[1].ID).Scan(&kept)
+	if kept != readAt.UnixMilli() {
+		t.Fatalf("read_at moved: %d -> %d", readAt.UnixMilli(), kept)
+	}
+	// New ones show again.
+	s.Notify(ctx, nil, "fresh")
+	if ns, _ := s.Notifications(ctx, true); len(ns) != 1 || ns[0].Message != "fresh" {
+		t.Fatalf("after a new one: %+v", ns)
+	}
+}
+
+func mustNotification(t *testing.T, s *Store, id int64) Notification {
+	t.Helper()
+	ns, _ := s.Notifications(context.Background(), false)
+	for _, n := range ns {
+		if n.ID == id {
+			return n
+		}
+	}
+	t.Fatalf("no notification %d", id)
+	return Notification{}
+}
+
+func TestNotificationArchiveMigrationKeepsData(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const n = 22 // migrations before archived notifications
+	for _, m := range migrations[:n] {
+		if _, err := db.Exec(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, q := range []string{
+		fmt.Sprintf(`PRAGMA user_version = %d`, n),
+		`INSERT INTO tasks (id, title, lane_id, position, created_at, updated_at) VALUES (1, 't', 1, 0, 0, 0)`,
+		`INSERT INTO sessions (id, task_id, title, status, mode, created_at, updated_at) VALUES (7, 1, 'work', 'idle', 'plan', 0, 0)`,
+		`INSERT INTO notifications (id, task_id, session_id, message, created_at, read_at) VALUES (3, 1, 7, 'old read', 0, 5)`,
+		`INSERT INTO notifications (id, task_id, message, created_at) VALUES (4, 1, 'old unread', 1)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(q, err)
+		}
+	}
+	db.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	ns, err := s.Notifications(ctx, false)
+	if err != nil || len(ns) != 2 || ns[0].Message != "old unread" || ns[0].ReadAt != nil ||
+		ns[1].Message != "old read" || ns[1].ReadAt == nil || ns[1].SessionID == nil || *ns[1].SessionID != 7 || ns[1].TaskTitle != "t" {
+		t.Fatalf("notifications = %+v, %v", ns, err)
+	}
+}

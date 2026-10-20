@@ -1520,6 +1520,14 @@ func (s *Server) readNotification(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(204)
 }
 
+func (s *Server) archiveNotifications(w http.ResponseWriter, r *http.Request) {
+	if err := s.app.Store.ArchiveNotifications(r.Context()); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(204)
+}
+
 // ---- memories ----
 
 // memoryRef names a memory for the task page.
