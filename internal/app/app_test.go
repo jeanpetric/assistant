@@ -266,7 +266,7 @@ func TestStandaloneSession(t *testing.T) {
 		t.Fatalf("defaults: %+v", got)
 	}
 	p, _ := a.Store.CreateProject(ctx, store.Project{Name: "Web", Workdir: "/project/dir"})
-	if got, _ := a.StartSession(ctx, StartOpts{Prompt: "x", ProjectID: p.ID}); got.Workdir != "/project/dir" || got.TaskID != 0 {
+	if got, _ := a.StartSession(ctx, StartOpts{Prompt: "x", ProjectID: p.ID}); got.Workdir != "/project/dir" || got.TaskID != 0 || got.ProjectID != p.ID {
 		t.Fatalf("a standalone session runs in its project's directory: %+v", got)
 	}
 	a.Wait()

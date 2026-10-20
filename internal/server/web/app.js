@@ -1073,6 +1073,7 @@ function schedulesPanel(taskId, schedules) {
 // ---------- sessions overview ----------
 
 async function renderSessions() {
+  if (!state.board) await loadBoard();
   const statusSel = select([['', 'All statuses'], ['running', 'Running'], ['idle', 'Idle'], ['error', 'Error'],
     ['cancelled', 'Cancelled'], ['interrupted', 'Interrupted']], '', { onchange: draw });
   const tbody = h('tbody');
@@ -1081,6 +1082,7 @@ async function renderSessions() {
     tbody.replaceChildren(...xs.map(s => h('tr', { class: 'clickable', onclick: () => openFromSessions(s) },
       h('td', {}, h('span', { class: 'badge status-' + s.status }, s.status === 'running' ? h('span', { class: 'pulse' }) : null, s.status),
         needsInputBadge(s.needs_input ? 1 : 0, 'The agent ' + s.needs_input)),
+      h('td', { class: 'small', title: s.workdir }, s.project_id ? projectName(s.project_id) : h('span', { class: 'muted' }, '—')),
       h('td', {}, s.task_id ? h('div', {}, s.task_title) : h('div', { class: 'muted' }, 'No task'), h('div', { class: 'muted small' }, s.title)),
       h('td', { class: 'small' }, trunc(s.last_message, 220)),
       h('td', { class: 'muted small' }, s.trigger, h('br'), s.mode),
@@ -1089,7 +1091,7 @@ async function renderSessions() {
   view.replaceChildren(h('div', { class: 'panel' },
     h('div', { class: 'toolbar' }, h('h2', { class: 'grow', style: 'flex:1' }, 'Agent sessions'), statusSel,
       h('button', { onclick: sessionDialog }, '▶ New session')),
-    h('table', {}, h('thead', {}, h('tr', {}, ['Status', 'Task / session', 'Latest', 'Trigger', 'Updated'].map(x => h('th', {}, x)))), tbody)));
+    h('table', {}, h('thead', {}, h('tr', {}, ['Status', 'Project', 'Task / session', 'Latest', 'Trigger', 'Updated'].map(x => h('th', {}, x)))), tbody)));
   await draw();
   every(3000, draw);
 }
@@ -1097,7 +1099,7 @@ async function renderSessions() {
 // A task's session opens with the task's project in focus.
 function openFromSessions(s) {
   location.hash = sessionHref(s);
-  if (s.task_project_id && s.task_project_id !== state.projectId) switchProject(s.task_project_id);
+  if (s.task_id && s.project_id && s.project_id !== state.projectId) switchProject(s.project_id);
 }
 
 function sessionHref(s) {

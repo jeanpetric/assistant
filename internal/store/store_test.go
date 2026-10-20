@@ -190,7 +190,7 @@ func TestSessionsListing(t *testing.T) {
 		t.Fatalf("all = %d", len(all))
 	}
 	mine, _ := s.Sessions(ctx, t1.ID, "")
-	if len(mine) != 1 || mine[0].TaskTitle != "one" || mine[0].TaskProjectID != t1.ProjectID || mine[0].TaskProjectID == 0 || mine[0].LastMessage != "hello" {
+	if len(mine) != 1 || mine[0].TaskTitle != "one" || mine[0].ProjectID != t1.ProjectID || mine[0].ProjectID == 0 || mine[0].LastMessage != "hello" {
 		t.Fatalf("mine = %+v", mine)
 	}
 	running, _ := s.Sessions(ctx, 0, StatusRunning)
@@ -875,7 +875,7 @@ func TestSeenMigrationKeepsData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	n := len(migrations) - 1 // migrations before seen
+	const n = 17 // migrations before seen
 	for _, m := range migrations[:n] {
 		if _, err := db.Exec(m); err != nil {
 			t.Fatal(err)
@@ -916,5 +916,79 @@ func TestSeenMigrationKeepsData(t *testing.T) {
 	}
 	if st, err := s.AgentStatuses(ctx); err != nil || st[1].Status != AgentRunning {
 		t.Fatalf("statuses = %+v, %v", st, err)
+	}
+}
+
+func TestSessionProjectMigrationKeepsSessions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const n = 18 // migrations before the session's project
+	for _, m := range migrations[:n] {
+		if _, err := db.Exec(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, q := range []string{
+		fmt.Sprintf(`PRAGMA user_version = %d`, n),
+		`UPDATE projects SET workdir = '/assistant' WHERE id = 1`,
+		`INSERT INTO projects (id, name, workdir, position) VALUES (2, 'Web', '/web', 1)`,
+		`INSERT INTO tasks (id, title, kind, project_id, lane_id, position, created_at, updated_at) VALUES (1, 'old', 'task', 2, 1, 0, 0, 0)`,
+		`INSERT INTO sessions (id, task_id, title, status, mode, workdir, seen, created_at, updated_at) VALUES (7, 1, 'task', 'idle', 'default', '/assistant', 1, 0, 0)`,
+		`INSERT INTO sessions (id, title, status, mode, workdir, created_at, updated_at) VALUES (8, 'in web', 'idle', 'default', '/web', 0, 1)`,
+		`INSERT INTO sessions (id, title, status, mode, workdir, created_at, updated_at) VALUES (9, 'elsewhere', 'error', 'default', '/tmp', 0, 2)`,
+		`INSERT INTO messages (session_id, role, kind, content, created_at) VALUES (8, 'assistant', 'text', 'hello', 0)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(q, err)
+		}
+	}
+	db.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	// A task's session shows its task's project; standalone ones the project whose directory they ran in.
+	want := map[int64]int64{7: 2, 8: 2, 9: 0}
+	for id, project := range want {
+		if x, err := s.Session(ctx, id); err != nil || x.ProjectID != project {
+			t.Fatalf("session %d = %+v, %v", id, x, err)
+		}
+	}
+	if x, _ := s.Session(ctx, 8); x.Title != "in web" || x.TaskID != 0 || x.LastMessage != "hello" || x.Workdir != "/web" {
+		t.Fatalf("session 8 = %+v", x)
+	}
+	if x, _ := s.Session(ctx, 7); !x.Seen || x.TaskTitle != "old" {
+		t.Fatalf("session 7 = %+v", x)
+	}
+}
+
+func TestStandaloneSessionKeepsProject(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	p, _ := s.CreateProject(ctx, Project{Name: "Web"})
+	task, _ := s.CreateTask(ctx, Task{Title: "t"})
+	a, _ := s.CreateSession(ctx, Session{ProjectID: p.ID, Mode: "plan"})
+	b, _ := s.CreateSession(ctx, Session{Mode: "plan"})
+	// A task's session follows its task, whatever project it was given.
+	c, _ := s.CreateSession(ctx, Session{TaskID: task.ID, ProjectID: p.ID, Mode: "plan"})
+	if a.ProjectID != p.ID || b.ProjectID != 0 || c.ProjectID != task.ProjectID {
+		t.Fatalf("projects = %d %d %d", a.ProjectID, b.ProjectID, c.ProjectID)
+	}
+	other, _ := s.CreateProject(ctx, Project{Name: "Other"})
+	s.MoveTaskToProject(ctx, task.ID, other.ID)
+	if x, _ := s.Session(ctx, c.ID); x.ProjectID != other.ID {
+		t.Fatalf("moved task's session = %+v", x)
+	}
+	if err := s.DeleteProject(ctx, p.ID); err != nil {
+		t.Fatal(err)
+	}
+	if x, err := s.Session(ctx, a.ID); err != nil || x.ProjectID != 0 {
+		t.Fatalf("session of a deleted project = %+v, %v", x, err)
 	}
 }

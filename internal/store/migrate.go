@@ -330,6 +330,13 @@ ALTER TABLE memories_new RENAME TO memories;
 ALTER TABLE sessions ADD COLUMN seen INTEGER NOT NULL DEFAULT 0;
 UPDATE sessions SET seen = 1 WHERE status != 'running' AND needs_input = '';
 `,
+	// The project a standalone session was started in (a task's session follows
+	// its task's project). Older ones get the project whose directory they ran in.
+	`
+ALTER TABLE sessions ADD COLUMN project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL;
+UPDATE sessions SET project_id = (SELECT p.id FROM projects p WHERE p.workdir != '' AND p.workdir = sessions.workdir ORDER BY p.position, p.id LIMIT 1)
+	WHERE task_id IS NULL;
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

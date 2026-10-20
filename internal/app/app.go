@@ -140,7 +140,7 @@ func (a *App) StartSession(ctx context.Context, o StartOpts) (store.Session, err
 		o.DoneLaneID = nil
 	}
 	sess, err := a.Store.CreateSession(ctx, store.Session{
-		TaskID: o.TaskID, Title: o.Title, Mode: o.Mode, Model: o.Model, Workdir: o.Workdir, Trigger: o.Trigger,
+		TaskID: o.TaskID, ProjectID: o.ProjectID, Title: o.Title, Mode: o.Mode, Model: o.Model, Workdir: o.Workdir, Trigger: o.Trigger,
 		DoneLaneID: o.DoneLaneID, ParentID: o.ParentID,
 	})
 	if err != nil {
@@ -234,7 +234,7 @@ func (a *App) Handoff(ctx context.Context, sessionID int64, note string) error {
 		}
 		if err == nil {
 			_, err = a.StartSession(bg, StartOpts{
-				TaskID: sess.TaskID, Prompt: a.handoffPrompt(bg, sess, brief, note), Title: sess.Title,
+				TaskID: sess.TaskID, ProjectID: sess.ProjectID, Prompt: a.handoffPrompt(bg, sess, brief, note), Title: sess.Title,
 				Mode: sess.Mode, Model: sess.Model, Workdir: sess.Workdir, Trigger: "handoff",
 				DoneLaneID: sess.DoneLaneID, ParentID: &sess.ID,
 			})

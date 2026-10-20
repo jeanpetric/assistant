@@ -48,3 +48,16 @@ for (const [hash, want] of [['', null], ['#/board', null], ['#/list', null], ['#
 		t.Fatalf("afterSessionStart: %v\n%s", err, strings.TrimSpace(string(out)))
 	}
 }
+
+// The Sessions page shows which project each session comes from.
+func TestSessionsListShowsProject(t *testing.T) {
+	js, err := webFS.ReadFile("web/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"['Status', 'Project', 'Task / session',", "s.project_id ? projectName(s.project_id)"} {
+		if !bytes.Contains(js, []byte(want)) {
+			t.Fatalf("app.js lacks %q", want)
+		}
+	}
+}
