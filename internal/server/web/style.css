@@ -192,6 +192,7 @@ details.tools > .tools-body { margin-left: 6px; padding-left: 10px; border-left:
 details.tool { margin: 4px 0; font-size: 12px; color: var(--muted); }
 details.tool summary { cursor: pointer; font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 details.tool pre { white-space: pre-wrap; word-break: break-word; background: var(--surface-2); padding: 8px; border-radius: 6px; max-height: 400px; overflow: auto; color: var(--text); }
+.link-ref { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 2px 0; }
 .field-row { display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: center; }
 .sched { display: flex; gap: 8px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
 .sched code { font-family: var(--mono); }

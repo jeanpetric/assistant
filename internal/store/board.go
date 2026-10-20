@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -25,9 +26,12 @@ type Task struct {
 	Position    int               `json:"position"`
 	Workdir     string            `json:"workdir"`
 	Fields      map[string]string `json:"fields"`
-	DueAt       *time.Time        `json:"due_at"`      // notify when reached
-	RemindedAt  *time.Time        `json:"reminded_at"` // set once the due notification fired
-	ArchivedAt  *time.Time        `json:"archived_at"` // archived tasks are off the board
+	// Earlier tasks this one builds on, in order: their agents' results go
+	// into the context of this task's agents.
+	ContextFrom []int64    `json:"context_from"`
+	DueAt       *time.Time `json:"due_at"`      // notify when reached
+	RemindedAt  *time.Time `json:"reminded_at"` // set once the due notification fired
+	ArchivedAt  *time.Time `json:"archived_at"` // archived tasks are off the board
 	// When the task entered its lane; auto-archive counts from here.
 	LaneChangedAt time.Time `json:"lane_changed_at"`
 	CreatedAt     time.Time `json:"created_at"`
@@ -41,7 +45,10 @@ type FieldDef struct {
 	Position int    `json:"position"`
 }
 
-var ErrLaneNotEmpty = errors.New("lane still has tasks")
+var (
+	ErrLaneNotEmpty = errors.New("lane still has tasks")
+	ErrBadContext   = errors.New("a task can only build on other existing tasks")
+)
 
 // ---- lanes ----
 
@@ -174,6 +181,7 @@ func scanTask(sc interface{ Scan(...any) error }) (Task, error) {
 	t.CreatedAt, t.UpdatedAt, t.LaneChangedAt = fromMillis(created), fromMillis(updated), fromMillis(laneChanged)
 	t.DueAt, t.RemindedAt, t.ArchivedAt = fromNullMillis(due), fromNullMillis(reminded), fromNullMillis(archived)
 	t.Fields = map[string]string{}
+	t.ContextFrom = []int64{}
 	return t, err
 }
 
@@ -228,7 +236,26 @@ func (s *Store) queryTasks(ctx context.Context, q string, args ...any) ([]Task, 
 			out[i].Fields[k] = v
 		}
 	}
-	return out, frows.Err()
+	if err := frows.Err(); err != nil {
+		return nil, err
+	}
+	frows.Close()
+
+	crows, err := s.db.QueryContext(ctx, `SELECT task_id, source_id FROM task_context ORDER BY task_id, position`)
+	if err != nil {
+		return nil, err
+	}
+	defer crows.Close()
+	for crows.Next() {
+		var id, src int64
+		if err := crows.Scan(&id, &src); err != nil {
+			return nil, err
+		}
+		if i, ok := idx[id]; ok {
+			out[i].ContextFrom = append(out[i].ContextFrom, src)
+		}
+	}
+	return out, crows.Err()
 }
 
 func (s *Store) Task(ctx context.Context, id int64) (Task, error) {
@@ -243,15 +270,31 @@ func (s *Store) Task(ctx context.Context, id int64) (Task, error) {
 	if err != nil {
 		return t, err
 	}
-	defer rows.Close()
 	for rows.Next() {
 		var k, v string
 		if err := rows.Scan(&k, &v); err != nil {
+			rows.Close()
 			return t, err
 		}
 		t.Fields[k] = v
 	}
-	return t, rows.Err()
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return t, err
+	}
+	crows, err := s.db.QueryContext(ctx, `SELECT source_id FROM task_context WHERE task_id = ? ORDER BY position`, id)
+	if err != nil {
+		return t, err
+	}
+	defer crows.Close()
+	for crows.Next() {
+		var src int64
+		if err := crows.Scan(&src); err != nil {
+			return t, err
+		}
+		t.ContextFrom = append(t.ContextFrom, src)
+	}
+	return t, crows.Err()
 }
 
 // CreateTask appends the task to the end of its lane. LaneID 0 means the first
@@ -281,6 +324,9 @@ func (s *Store) CreateTask(ctx context.Context, t Task) (Task, error) {
 			return err
 		}
 		id, _ = res.LastInsertId()
+		if err := setContextFrom(ctx, tx, id, t.ContextFrom); err != nil {
+			return err
+		}
 		return setFields(ctx, tx, id, t.Fields)
 	})
 	if err != nil {
@@ -303,6 +349,58 @@ func (s *Store) UpdateTask(ctx context.Context, t Task) error {
 		}
 		return setFields(ctx, tx, t.ID, t.Fields)
 	})
+}
+
+// SetContextFrom replaces the tasks the task builds on.
+func (s *Store) SetContextFrom(ctx context.Context, taskID int64, sources []int64) error {
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM task_context WHERE task_id = ?`, taskID); err != nil {
+			return err
+		}
+		return setContextFrom(ctx, tx, taskID, sources)
+	})
+}
+
+// ContextUsers returns the tasks that build on the task, oldest first.
+func (s *Store) ContextUsers(ctx context.Context, sourceID int64) ([]int64, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT task_id FROM task_context WHERE source_id = ? ORDER BY task_id`, sourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []int64{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// setContextFrom links the task to its sources in order, skipping repeats.
+// Unknown tasks or the task itself are ErrBadContext.
+func setContextFrom(ctx context.Context, tx *sql.Tx, taskID int64, sources []int64) error {
+	seen := map[int64]bool{}
+	for _, src := range sources {
+		if seen[src] {
+			continue
+		}
+		seen[src] = true
+		var n int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM tasks WHERE id = ?`, src).Scan(&n); err != nil {
+			return err
+		}
+		if n == 0 || src == taskID {
+			return fmt.Errorf("%w: %d", ErrBadContext, src)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO task_context (task_id, source_id, position) VALUES (?, ?, ?)`,
+			taskID, src, len(seen)-1); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func setFields(ctx context.Context, tx *sql.Tx, taskID int64, fields map[string]string) error {

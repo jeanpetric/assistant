@@ -112,6 +112,7 @@ var (
 	pKind           = map[string]any{"type": "string", "enum": []string{"task", "coding", "research", "discussion", "reminder"}}
 	pWorkdir        = prop("string", "Absolute working directory for agent sessions")
 	pProjectWorkdir = prop("string", "Default working directory for agent sessions on the project's tasks; empty means the app default")
+	pContextFrom    = map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "Ids of earlier tasks this task builds on, e.g. the research it follows from. Their agents' final replies go into the context of this task's agents (include_context, rules and schedules using {{.Context}}). Empty: the task starts from scratch."}
 )
 
 func (s *Server) mcpTools() []mcpTool {
@@ -153,7 +154,7 @@ func (s *Server) mcpTools() []mcpTool {
 		},
 		{
 			Name:        "get_task",
-			Description: "One task with its schedules and agent sessions (without transcripts; use get_session for those).",
+			Description: "One task with its schedules and agent sessions (without transcripts; use get_session for those), the tasks it builds on (builds_on) and the tasks that build on it (used_by).",
 			InputSchema: schema([]string{"task_id"}, map[string]any{"task_id": pTaskID}),
 			call:        byID("GET", "/api/tasks/%d", "task_id", false),
 			post:        taskWithoutTranscripts,
@@ -163,16 +164,17 @@ func (s *Server) mcpTools() []mcpTool {
 			Description: "Add a task to a project's board (the first project if project_id is left out), at the end of a lane (the first lane if lane_id is left out).",
 			InputSchema: schema([]string{"title"}, map[string]any{
 				"title": prop("string", "Short title"), "description": prop("string", "Markdown description"), "project_id": pProjectID,
-				"kind": pKind, "lane_id": pLaneID, "workdir": pWorkdir, "due_at": pDueAt, "fields": pFields,
+				"kind": pKind, "lane_id": pLaneID, "workdir": pWorkdir, "due_at": pDueAt, "fields": pFields, "context_from": pContextFrom,
 			}),
 			call: fixed("POST", "/api/tasks", true),
 		},
 		{
 			Name:        "update_task",
-			Description: "Change a task's title, description, kind, workdir, due time, custom fields or project (it goes to the end of its lane there). Only the given keys change; due_at null clears it. Use move_task to change its lane.",
+			Description: "Change a task's title, description, kind, workdir, due time, custom fields, the tasks it builds on (context_from replaces the list) or project (it goes to the end of its lane there). Only the given keys change; due_at null clears it. Use move_task to change its lane.",
 			InputSchema: schema([]string{"task_id"}, map[string]any{
 				"task_id": pTaskID, "project_id": pProjectID, "title": prop("string", "New title"), "description": prop("string", "New description (replaces the old one)"),
 				"kind": pKind, "workdir": pWorkdir, "due_at": map[string]any{"type": []string{"string", "null"}, "description": pDueAt["description"]}, "fields": pFields,
+				"context_from": pContextFrom,
 			}),
 			call: byID("PATCH", "/api/tasks/%d", "task_id", true),
 		},
@@ -251,7 +253,7 @@ func (s *Server) mcpTools() []mcpTool {
 			Description: "Start a Claude Code agent session on a task, running prompt in the task's working directory.",
 			InputSchema: schema([]string{"task_id", "prompt"}, map[string]any{
 				"task_id": pTaskID, "prompt": prop("string", "What the agent should do"), "title": prop("string", "Session title"),
-				"include_context": prop("boolean", "Prepend the task's title, description and fields to the prompt"),
+				"include_context": prop("boolean", "Prepend the task's title, description and fields, and the results of the tasks it builds on, to the prompt"),
 				"mode":            prop("string", "Permission mode, e.g. bypassPermissions or plan (default: the app's)"),
 				"model":           prop("string", "Model, e.g. opus (default: the CLI's)"),
 				"workdir":         pWorkdir,
@@ -427,6 +429,8 @@ func taskWithoutTranscripts(raw []byte) ([]byte, error) {
 		Task      json.RawMessage              `json:"task"`
 		Sessions  []map[string]json.RawMessage `json:"sessions"`
 		Schedules json.RawMessage              `json:"schedules"`
+		BuildsOn  json.RawMessage              `json:"builds_on"`
+		UsedBy    json.RawMessage              `json:"used_by"`
 	}
 	if err := json.Unmarshal(raw, &t); err != nil {
 		return nil, err

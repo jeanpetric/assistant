@@ -194,6 +194,18 @@ CREATE INDEX sessions_parent ON sessions(parent_id);
 	`
 ALTER TABLE projects ADD COLUMN workdir TEXT NOT NULL DEFAULT '';
 `,
+	// A task can build on earlier tasks: their agents' results go into the
+	// context of its agents.
+	`
+CREATE TABLE task_context (
+	task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+	source_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+	position INTEGER NOT NULL,
+	PRIMARY KEY (task_id, source_id),
+	CHECK (task_id != source_id)
+);
+CREATE INDEX task_context_source ON task_context(source_id);
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

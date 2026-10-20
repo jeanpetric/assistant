@@ -216,6 +216,12 @@ function dueBadge(t) {
   return h('span', { class: 'badge due' + (overdue ? ' overdue' : ''), title: 'Due ' + fmtTime(t.due_at) }, '⏰ ' + ago(t.due_at));
 }
 
+function buildsOnBadge(t) {
+  if (!t.context_from.length) return null;
+  const ids = t.context_from.map(i => '#' + i).join(' ');
+  return h('span', { class: 'badge', title: `Builds on ${ids}: their agents' results go into this task's agent context` }, '↳ ' + ids);
+}
+
 function runningBadge(n) {
   return n ? h('span', { class: 'badge running' }, h('span', { class: 'pulse' }), n > 1 ? `${n} agents` : 'agent') : null;
 }
@@ -294,7 +300,7 @@ function card(t) {
     onclick: e => { if (e.metaKey || e.ctrlKey) location.hash = `#/task/${t.id}`; else openTaskDialog(t.id); },
   },
     h('div', { class: 'card-title' }, t.title),
-    h('div', { class: 'card-meta' }, kindBadge(t.kind), dueBadge(t), runningBadge(state.board.running[t.id]), fieldLinks(t)),
+    h('div', { class: 'card-meta' }, kindBadge(t.kind), dueBadge(t), buildsOnBadge(t), runningBadge(state.board.running[t.id]), fieldLinks(t)),
     state.board.running_limits[t.id] ? h('div', { class: 'card-meta' }, limitsEl(state.board.running_limits[t.id])) : null);
   el.dataset.id = t.id;
   el.addEventListener('dragstart', e => {
@@ -477,6 +483,12 @@ async function taskView(id, { every, leave, reload }) {
 
   // --- side panel ---
   const side = h('div', { class: 'task-side' });
+  const sessionPanel = newSessionPanel(t, s => addSession(s));
+  const buildsOn = buildsOnEditor(t, data.builds_on, data.used_by, async ids => {
+    const refs = await save({ context_from: ids }).then(() => api('GET', `/api/tasks/${id}`)).then(d => d.builds_on);
+    sessionPanel.drawContextLabel();
+    return refs;
+  });
   const fields = state.board.fields.map(f => {
     const input = h('input', { value: t.fields[f.key] || '', placeholder: f.type === 'url' ? 'https://…' : '' });
     const open = h('a', { class: 'btn ghost small', target: '_blank', rel: 'noopener', href: t.fields[f.key] || '#' }, '↗');
@@ -519,6 +531,7 @@ async function taskView(id, { every, leave, reload }) {
     h('label', {}, 'Working directory for agents'),
     workdirSelect(t.workdir, `Project default (${taskWorkdir({ ...t, workdir: '' })})`, { onchange: e => save({ workdir: e.target.value }) }),
     fields,
+    buildsOn.el,
     h('div', { class: 'row', style: 'margin-top:14px' },
       h('span', { class: 'muted small grow' }, 'Created ' + fmtTime(t.created_at)),
       t.archived_at ? null : h('button', {
@@ -545,7 +558,7 @@ async function taskView(id, { every, leave, reload }) {
   };
   data.sessions.forEach(addSession);
 
-  const main = h('div', {}, newSessionPanel(t, addSession), sessionsEl,
+  const main = h('div', {}, sessionPanel.el, sessionsEl,
     data.sessions.length ? null : h('p', { class: 'muted' }, 'No agent sessions yet.'));
   every(2000, async () => {
     components.forEach(c => c.drawLimits());
@@ -568,11 +581,49 @@ async function taskView(id, { every, leave, reload }) {
   };
 }
 
+// The tasks this one builds on, editable, and the tasks that build on it.
+// setIds saves a new list and resolves to the updated refs.
+function buildsOnEditor(task, refs, usedBy, setIds) {
+  const el = h('div');
+  const taskLink = r => h('a', { href: `#/task/${r.id}`, onclick: closeTaskDialog }, `#${r.id} ${r.title}`, r.archived ? ' (archived)' : '');
+  const draw = () => {
+    const linked = new Set(refs.map(r => r.id));
+    const options = state.board.tasks.filter(x => x.id !== task.id && !linked.has(x.id) && x.project_id === task.project_id);
+    const add = select([['', 'Add an earlier task…'], ...options.map(x => [x.id, `#${x.id} ${x.title}`])], '', {
+      onchange: async e => { if (e.target.value) { refs = await setIds([...refs.map(r => r.id), Number(e.target.value)]); draw(); } },
+    });
+    el.replaceChildren(...[
+      h('label', {}, 'Builds on — their agents\' results go into this task\'s agent context'),
+      refs.length ? null : h('div', { class: 'muted small' }, 'Nothing: agents start from scratch.'),
+      refs.map(r => h('div', { class: 'field-row' }, h('span', { class: 'link-ref' }, taskLink(r)),
+        h('button', {
+          class: 'ghost small', title: 'Stop building on this task',
+          onclick: async () => { refs = await setIds(refs.filter(x => x.id !== r.id).map(x => x.id)); draw(); },
+        }, '✕'))),
+      options.length ? add : null,
+      h('label', {}, 'Used by'),
+      usedBy.map(r => h('div', { class: 'link-ref' }, taskLink(r))),
+      h('button', {
+        class: 'ghost small', title: 'A new task whose agents get this task\'s results',
+        onclick: () => newTaskDialog({ buildsOn: task }),
+      }, '+ Follow-up task'),
+    ].flat().filter(c => c != null));
+  };
+  draw();
+  return { el };
+}
+
 function newSessionPanel(task, onStarted) {
   const prompt = h('textarea', { rows: 4, placeholder: 'What should the agent do? Skills work too, e.g. /p-dev:review 123' });
   const mode = select(modeOptions(false), state.meta.default_mode);
   const [model, modelList] = modelInput('');
   const ctx = h('input', { type: 'checkbox', checked: true });
+  const ctxLabel = h('span');
+  const drawContextLabel = () => {
+    const n = task.context_from.length;
+    ctxLabel.textContent = n ? `Include task context and results of ${n} earlier task${n > 1 ? 's' : ''}` : 'Include task context';
+  };
+  drawContextLabel();
   const workdir = workdirSelect('', `Default (${taskWorkdir(task)})`);
   const doneLane = doneLaneSelect(state.board.lanes, '');
   const start = async () => {
@@ -586,7 +637,7 @@ function newSessionPanel(task, onStarted) {
     onStarted(Object.assign(full.session, { messages: full.messages }));
   };
   prompt.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) start(); });
-  return h('div', { class: 'panel' },
+  const el = h('div', { class: 'panel' },
     h('h3', {}, 'New agent session'),
     prompt,
     h('div', { class: 'row', style: 'margin-top:8px; flex-wrap:wrap' },
@@ -594,8 +645,9 @@ function newSessionPanel(task, onStarted) {
       h('div', { class: 'grow', style: 'min-width:140px' }, model, modelList),
       h('div', { class: 'grow', style: 'min-width:200px' }, workdir),
       h('div', { class: 'grow', style: 'min-width:200px' }, doneLane),
-      h('label', { class: 'row', style: 'margin:0' }, ctx, 'Include task context'),
+      h('label', { class: 'row', style: 'margin:0' }, ctx, ctxLabel),
       h('button', { onclick: start }, 'Start', hint('⌘↵'))));
+  return { el, drawContextLabel };
 }
 
 function messageEl(m) {
@@ -1028,7 +1080,7 @@ function ruleDialog(rule, lanes, done) {
   dlg.replaceChildren(h('h2', {}, rule.id ? 'Edit rule' : 'New rule'),
     h('label', {}, 'Name'), name,
     h('div', { class: 'row' }, h('div', { class: 'grow' }, h('label', {}, 'From'), from), h('div', { class: 'grow' }, h('label', {}, 'To'), to)),
-    h('label', {}, 'Prompt template — use a skill like /p-dev:code, and {{.Context}}, {{.Task.Title}}, {{.Task.Description}}, {{.Fields.pull_request}}'),
+    h('label', {}, 'Prompt template — use a skill like /p-dev:code, and {{.Context}} (the task plus results of tasks it builds on), {{.Task.Title}}, {{.Task.Description}}, {{.Fields.pull_request}}'),
     prompt,
     h('label', {}, 'Agent mode'), mode,
     h('label', {}, 'Working directory'), workdir,
@@ -1091,13 +1143,15 @@ async function reminderDialog() {
 
 // ---------- new task dialog ----------
 
-async function newTaskDialog() {
+// opts.buildsOn: the task the new one follows up on; it goes in the same project.
+async function newTaskDialog(opts = {}) {
   if (!state.board) await loadBoard();
+  const from = opts.buildsOn;
   const dlg = document.getElementById('dialog');
   const title = h('input', { placeholder: 'Title' });
   const desc = h('textarea', { rows: 4, placeholder: 'Description' });
   const kind = select(state.meta.kinds.map(k => [k, k]), 'task');
-  const project = select(state.board.projects.map(p => [p.id, p.name]), state.projectId);
+  const project = select(state.board.projects.map(p => [p.id, p.name]), from ? from.project_id : state.projectId);
   const lane = select(state.board.lanes.map(l => [l.id, l.name]), state.board.lanes[0]?.id);
   const due = h('input', { type: 'datetime-local' });
   const create = async () => {
@@ -1105,13 +1159,16 @@ async function newTaskDialog() {
     if (due.value) askNotificationPermission();
     const t = await api('POST', '/api/tasks', {
       title: title.value, description: desc.value, kind: kind.value, lane_id: Number(lane.value), due_at: fromLocalInput(due.value),
-      project_id: Number(project.value),
+      project_id: Number(project.value), context_from: from ? [from.id] : [],
     });
     dlg.close();
+    closeTaskDialog();
     location.hash = `#/task/${t.id}`;
   };
   title.addEventListener('keydown', e => { if (e.key === 'Enter') create(); });
-  dlg.replaceChildren(h('h2', {}, 'New task'), h('label', {}, 'Title'), title, h('label', {}, 'Description'), desc,
+  dlg.replaceChildren(h('h2', {}, from ? 'New follow-up task' : 'New task'),
+    from ? h('p', { class: 'muted small' }, `Builds on #${from.id} ${from.title}: its agents' results go into this task's agent context.`) : null,
+    h('label', {}, 'Title'), title, h('label', {}, 'Description'), desc,
     h('label', {}, 'Project'), project,
     h('div', { class: 'row' }, h('div', { class: 'grow' }, h('label', {}, 'Kind'), kind), h('div', { class: 'grow' }, h('label', {}, 'Lane'), lane)),
     h('label', {}, 'Due (optional) — you get a notification at this time'), due,

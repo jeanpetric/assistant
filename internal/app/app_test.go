@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -683,3 +684,56 @@ func TestHandoffWithoutNoteAndFailures(t *testing.T) {
 		t.Fatalf("without a note the new session goes on: %q", last)
 	}
 }
+
+func TestTaskBriefSharesEarlierResults(t *testing.T) {
+	a, r := newApp(t)
+	ctx := context.Background()
+	lanes := lanesByName(t, a)
+	research, _ := a.Store.CreateTask(ctx, store.Task{Title: "Research caching", Description: "Compare options"})
+	// A finished session, one handed off to a newer one, and one still running.
+	addSession := func(title, status, reply string, parent *int64) store.Session {
+		x, _ := a.Store.CreateSession(ctx, store.Session{TaskID: research.ID, Title: title, Mode: "plan", ParentID: parent})
+		a.Store.AddMessage(ctx, store.Message{SessionID: x.ID, Role: "user", Kind: "text", Content: "go"})
+		a.Store.AddMessage(ctx, store.Message{SessionID: x.ID, Role: "system", Kind: "result", Content: reply})
+		a.Store.SetSessionStatus(ctx, x.ID, status, "")
+		return x
+	}
+	addSession("First pass", store.StatusIdle, "Redis wins.", nil)
+	old := addSession("Deep dive", store.StatusIdle, "BRIEF FOR THE NEXT AGENT", nil)
+	addSession("Deep dive", store.StatusIdle, "Use Redis with a 5 minute TTL. "+strings.Repeat("x", sharedRunes), &old.ID)
+	addSession("Still going", store.StatusRunning, "half done", nil)
+	empty, _ := a.Store.CreateTask(ctx, store.Task{Title: "Nothing yet"})
+
+	follow, _ := a.Store.CreateTask(ctx, store.Task{Title: "Make tasks", LaneID: lanes["Todo"], ContextFrom: []int64{research.ID, empty.ID}})
+	brief := a.TaskBrief(ctx, follow)
+	for _, want := range []string{"Task #" + itoa(follow.ID) + ": Make tasks", SharedIntro, "## Task #" + itoa(research.ID) + ": Research caching",
+		"Compare options", "First pass", "Redis wins.", "Use Redis with a 5 minute TTL.", "(cut;", "Nothing yet", "(No agent results yet.)"} {
+		if !strings.Contains(brief, want) {
+			t.Fatalf("brief lacks %q:\n%s", want, brief)
+		}
+	}
+	for _, unwanted := range []string{"BRIEF FOR THE NEXT AGENT", "half done"} {
+		if strings.Contains(brief, unwanted) {
+			t.Fatalf("brief has %q:\n%s", unwanted, brief)
+		}
+	}
+	if strings.Index(brief, "Redis wins.") > strings.Index(brief, "5 minute TTL") {
+		t.Fatal("sessions should read oldest first")
+	}
+	if solo, _ := a.Store.Task(ctx, empty.ID); a.TaskBrief(ctx, solo) != TaskContext(solo) {
+		t.Fatal("a task that builds on nothing gets only its own context")
+	}
+
+	// Rules get the shared results through {{.Context}}.
+	wip := lanes["In progress"]
+	a.Store.SaveRule(ctx, store.Rule{Name: "Plan", ToLaneID: wip, Enabled: true, Prompt: "{{.Context}}\n\nPlan it."})
+	if _, err := a.MoveTask(ctx, follow.ID, wip, 0); err != nil {
+		t.Fatal(err)
+	}
+	a.Wait()
+	if p := r.requests()[0].Prompt; !strings.Contains(p, "Redis wins.") || !strings.HasSuffix(p, "Plan it.") {
+		t.Fatalf("rule prompt = %q", p)
+	}
+}
+
+func itoa(n int64) string { return strconv.FormatInt(n, 10) }

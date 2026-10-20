@@ -431,7 +431,42 @@ func (s *Server) getTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"task": t, "sessions": out, "schedules": schedules})
+	builds, err := s.taskRefs(ctx, t.ContextFrom)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	usedByIDs, err := s.app.Store.ContextUsers(ctx, id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	usedBy, err := s.taskRefs(ctx, usedByIDs)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"task": t, "sessions": out, "schedules": schedules, "builds_on": builds, "used_by": usedBy})
+}
+
+// taskRef names a related task for the task page.
+type taskRef struct {
+	ID        int64  `json:"id"`
+	Title     string `json:"title"`
+	ProjectID int64  `json:"project_id"`
+	Archived  bool   `json:"archived"`
+}
+
+func (s *Server) taskRefs(ctx context.Context, ids []int64) ([]taskRef, error) {
+	out := []taskRef{}
+	for _, id := range ids {
+		t, err := s.app.Store.Task(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, taskRef{t.ID, t.Title, t.ProjectID, t.ArchivedAt != nil})
+	}
+	return out, nil
 }
 
 func (s *Server) updateTask(w http.ResponseWriter, r *http.Request) {
@@ -454,6 +489,7 @@ func (s *Server) updateTask(w http.ResponseWriter, r *http.Request) {
 		ProjectID   *int64            `json:"project_id"` // moves the task to the end of its lane there
 		DueAt       json.RawMessage   `json:"due_at"`     // absent: keep, null: clear
 		Fields      map[string]string `json:"fields"`
+		ContextFrom *[]int64          `json:"context_from"` // replaces the list
 	}
 	if err := decode(r, &in); err != nil {
 		writeErr(w, err)
@@ -485,6 +521,12 @@ func (s *Server) updateTask(w http.ResponseWriter, r *http.Request) {
 	cur.Fields = in.Fields
 	if in.ProjectID != nil {
 		if err := s.checkProject(r.Context(), *in.ProjectID); err != nil {
+			writeErr(w, err)
+			return
+		}
+	}
+	if in.ContextFrom != nil {
+		if err := s.app.Store.SetContextFrom(r.Context(), id, *in.ContextFrom); err != nil {
 			writeErr(w, err)
 			return
 		}
@@ -698,7 +740,7 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, err)
 			return
 		}
-		prompt = app.TaskContext(t) + "\n\n---\n\n" + prompt
+		prompt = s.app.TaskBrief(r.Context(), t) + "\n\n---\n\n" + prompt
 	}
 	if err := s.checkLane(r.Context(), in.DoneLaneID, "done_lane_id"); err != nil {
 		writeErr(w, err)

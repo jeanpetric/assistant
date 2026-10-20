@@ -411,7 +411,7 @@ func (a *App) MoveTask(ctx context.Context, taskID, laneID int64, index int) ([]
 	}
 	var started []store.Session
 	for _, r := range rules {
-		prompt, err := RenderPrompt(r.Prompt, task)
+		prompt, err := renderPrompt(r.Prompt, task, a.TaskBrief(ctx, task))
 		if err != nil {
 			a.Store.Notify(ctx, &taskID, fmt.Sprintf("Rule %q: %v", r.Name, err))
 			continue
@@ -475,7 +475,7 @@ func (a *App) RunDueSchedules(ctx context.Context) error {
 			}
 			a.Store.Notify(ctx, &taskID, msg)
 		case store.ActionAgent:
-			prompt, err := RenderPrompt(x.Prompt, task)
+			prompt, err := renderPrompt(x.Prompt, task, a.TaskBrief(ctx, task))
 			if err == nil {
 				_, err = a.StartSession(ctx, StartOpts{TaskID: taskID, Prompt: prompt, Mode: x.Mode,
 					Trigger: fmt.Sprintf("schedule:%d", x.ID), DoneLaneID: x.DoneLaneID})
@@ -543,20 +543,98 @@ func (a *App) RunScheduler(ctx context.Context, interval time.Duration) {
 
 // PromptData is what prompt templates can reference, e.g.
 // "{{.Task.Title}}", "{{.Fields.pull_request}}" or "{{.Context}}".
+// Context is the task brief, with the results of the tasks it builds on.
 type PromptData struct {
 	Task    store.Task
 	Fields  map[string]string
 	Context string
 }
 
+// RenderPrompt renders a prompt template for the task. Its {{.Context}} is the
+// task alone; agents get TaskBrief instead (see renderPrompt).
 func RenderPrompt(tmpl string, task store.Task) (string, error) {
+	return renderPrompt(tmpl, task, TaskContext(task))
+}
+
+func renderPrompt(tmpl string, task store.Task, context string) (string, error) {
 	t, err := template.New("prompt").Option("missingkey=zero").Parse(tmpl)
 	if err != nil {
 		return "", err
 	}
 	var buf bytes.Buffer
-	err = t.Execute(&buf, PromptData{Task: task, Fields: task.Fields, Context: TaskContext(task)})
+	err = t.Execute(&buf, PromptData{Task: task, Fields: task.Fields, Context: context})
 	return strings.TrimSpace(buf.String()), err
+}
+
+// Limits on what TaskBrief takes from each task the brief's task builds on.
+const (
+	sharedSessions = 5    // the latest sessions with a result
+	sharedRunes    = 8000 // per result; longer ones are cut
+)
+
+// SharedIntro opens the part of a task brief that carries earlier tasks' results.
+const SharedIntro = "This task builds on earlier tasks. What their agents reported, oldest session first:"
+
+// TaskBrief is TaskContext followed by what the agents of the tasks it builds
+// on (ContextFrom) reported: per task, the final reply of each of its latest
+// sessions. Sessions that were handed off are left out; the session that took
+// over carries on.
+func (a *App) TaskBrief(ctx context.Context, t store.Task) string {
+	brief := TaskContext(t)
+	if len(t.ContextFrom) == 0 {
+		return brief
+	}
+	var sources []string
+	for _, id := range t.ContextFrom {
+		src, err := a.Store.Task(ctx, id)
+		if err != nil {
+			continue
+		}
+		sources = append(sources, a.taskResults(ctx, src))
+	}
+	return brief + "\n\n---\n\n" + SharedIntro + "\n\n" + strings.Join(sources, "\n\n---\n\n")
+}
+
+// taskResults renders one source task for TaskBrief.
+func (a *App) taskResults(ctx context.Context, t store.Task) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "## Task #%d: %s\n", t.ID, t.Title)
+	if d := strings.TrimSpace(t.Description); d != "" {
+		fmt.Fprintf(&b, "\n%s\n", truncate(d, sharedRunes))
+	}
+	sessions, err := a.Store.Sessions(ctx, t.ID, "") // newest first
+	if err != nil {
+		return b.String()
+	}
+	var results []string
+	for _, x := range sessions {
+		if len(results) == sharedSessions {
+			break
+		}
+		if x.ChildID != nil || x.Status == store.StatusRunning {
+			continue
+		}
+		reply, err := a.lastReply(ctx, x.ID)
+		if err != nil {
+			continue
+		}
+		results = append(results, fmt.Sprintf("### Session %d: %s (%s)\n\n%s",
+			x.ID, x.Title, x.UpdatedAt.Format("2006-01-02"), truncate(strings.TrimSpace(reply), sharedRunes)))
+	}
+	if len(results) == 0 {
+		b.WriteString("\n(No agent results yet.)\n")
+	}
+	for i := len(results) - 1; i >= 0; i-- {
+		fmt.Fprintf(&b, "\n%s\n", results[i])
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func truncate(s string, max int) string {
+	if r := []rune(s); len(r) > max {
+		return string(r[:max]) + "\n… (cut; the full transcript is in the session)"
+	}
+	return s
 }
 
 // TaskContext renders the task as a plain-text brief for an agent.

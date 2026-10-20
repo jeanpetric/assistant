@@ -138,7 +138,7 @@ func writeErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, store.ErrLaneNotEmpty), errors.Is(err, store.ErrProjectNotEmpty), errors.Is(err, store.ErrLastProject),
 		errors.Is(err, app.ErrBusy), errors.Is(err, app.ErrNoResume):
 		status = http.StatusConflict
-	case errors.As(err, new(badRequest)), errors.Is(err, app.ErrBadAction), errors.Is(err, app.ErrBadCron):
+	case errors.As(err, new(badRequest)), errors.Is(err, app.ErrBadAction), errors.Is(err, app.ErrBadCron), errors.Is(err, store.ErrBadContext):
 		status = http.StatusBadRequest
 	}
 	if status == http.StatusInternalServerError {

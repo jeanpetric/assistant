@@ -630,3 +630,75 @@ func TestProjects(t *testing.T) {
 	c.do("DELETE", "/api/tasks/"+itoa(x.ID), nil, 204, nil)
 	c.do("DELETE", "/api/projects/"+itoa(private.ID), nil, 409, nil) // the last one stays
 }
+
+func TestTaskContextSharing(t *testing.T) {
+	c := newClient(t)
+	var research, follow store.Task
+	c.do("POST", "/api/tasks", map[string]any{"title": "Research"}, 201, &research)
+	c.do("POST", "/api/tasks/"+itoa(research.ID)+"/sessions", map[string]any{"prompt": "find things"}, 201, nil)
+	c.app.Wait()
+
+	c.do("POST", "/api/tasks", map[string]any{"title": "Follow-up", "context_from": []int64{research.ID}}, 201, &follow)
+	if len(follow.ContextFrom) != 1 || follow.ContextFrom[0] != research.ID {
+		t.Fatalf("follow = %+v", follow)
+	}
+	c.do("POST", "/api/tasks", map[string]any{"title": "x", "context_from": []int64{999}}, 400, nil)
+
+	var page struct {
+		BuildsOn []taskRef `json:"builds_on"`
+		UsedBy   []taskRef `json:"used_by"`
+	}
+	c.do("GET", "/api/tasks/"+itoa(follow.ID), nil, 200, &page)
+	if len(page.BuildsOn) != 1 || page.BuildsOn[0].Title != "Research" || len(page.UsedBy) != 0 {
+		t.Fatalf("follow page = %+v", page)
+	}
+	c.do("GET", "/api/tasks/"+itoa(research.ID), nil, 200, &page)
+	if len(page.UsedBy) != 1 || page.UsedBy[0].ID != follow.ID {
+		t.Fatalf("research page = %+v", page)
+	}
+
+	// The research agent's result reaches the follow-up's agent with the task context.
+	var sess store.Session
+	c.do("POST", "/api/tasks/"+itoa(follow.ID)+"/sessions", map[string]any{"prompt": "make tasks", "include_context": true}, 201, &sess)
+	c.app.Wait()
+	var got struct {
+		Messages []store.Message `json:"messages"`
+	}
+	c.do("GET", "/api/sessions/"+itoa(sess.ID), nil, 200, &got)
+	if p := got.Messages[0].Content; !strings.Contains(p, app.SharedIntro) || !strings.Contains(p, "## Task #"+itoa(research.ID)+": Research") ||
+		!strings.Contains(p, "\n\nok\n") || !strings.HasSuffix(p, "make tasks") {
+		t.Fatalf("prompt = %q", p)
+	}
+	// Without include_context the agent starts from scratch.
+	c.do("POST", "/api/tasks/"+itoa(follow.ID)+"/sessions", map[string]any{"prompt": "plain"}, 201, &sess)
+	c.app.Wait()
+	c.do("GET", "/api/sessions/"+itoa(sess.ID), nil, 200, &got)
+	if p := got.Messages[0].Content; p != "plain" {
+		t.Fatalf("prompt = %q", p)
+	}
+
+	// PATCH replaces the list; a bad list changes nothing, not even the other keys.
+	c.do("PATCH", "/api/tasks/"+itoa(follow.ID), map[string]any{"title": "renamed", "context_from": []int64{follow.ID}}, 400, nil)
+	c.do("GET", "/api/tasks/"+itoa(follow.ID), nil, 200, &page)
+	if len(page.BuildsOn) != 1 {
+		t.Fatalf("builds_on = %+v", page.BuildsOn)
+	}
+	c.do("PATCH", "/api/tasks/"+itoa(follow.ID), map[string]any{"title": "renamed"}, 200, &follow)
+	if follow.Title != "renamed" || len(follow.ContextFrom) != 1 {
+		t.Fatalf("leaving context_from out keeps it: %+v", follow)
+	}
+	c.do("PATCH", "/api/tasks/"+itoa(follow.ID), map[string]any{"context_from": []int64{}}, 200, &follow)
+	if len(follow.ContextFrom) != 0 {
+		t.Fatalf("follow = %+v", follow)
+	}
+
+	// MCP: an agent can create a follow-up of its own task, and get_task shows the links.
+	text, isErr := c.tool("create_task", map[string]any{"title": "From MCP", "context_from": []int64{research.ID}})
+	if isErr || !strings.Contains(text, `"context_from":[`+itoa(research.ID)+`]`) {
+		t.Fatalf("create_task = %s", text)
+	}
+	text, isErr = c.tool("get_task", map[string]any{"task_id": research.ID})
+	if isErr || !strings.Contains(text, `"used_by":[{`) || !strings.Contains(text, "From MCP") {
+		t.Fatalf("get_task = %s", text)
+	}
+}

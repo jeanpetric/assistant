@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -484,5 +485,94 @@ func TestHandoffMigrationKeepsSessions(t *testing.T) {
 	}
 	if x, _ = s.Session(ctx, 7); x.ChildID == nil || *x.ChildID != child.ID {
 		t.Fatalf("parent should point at its child: %+v", x)
+	}
+}
+
+func TestContextFrom(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	research, _ := s.CreateTask(ctx, Task{Title: "Research"})
+	spec, _ := s.CreateTask(ctx, Task{Title: "Spec"})
+	build, err := s.CreateTask(ctx, Task{Title: "Build", ContextFrom: []int64{spec.ID, research.ID, spec.ID}})
+	if err != nil || fmt.Sprint(build.ContextFrom) != fmt.Sprint([]int64{spec.ID, research.ID}) {
+		t.Fatalf("build = %+v, %v", build, err)
+	}
+	if research.ContextFrom == nil || len(research.ContextFrom) != 0 {
+		t.Fatalf("no links should be an empty list: %#v", research.ContextFrom)
+	}
+	tasks, _ := s.Tasks(ctx, 0)
+	if got := tasks[2]; got.ID != build.ID || len(got.ContextFrom) != 2 || got.ContextFrom[0] != spec.ID {
+		t.Fatalf("board task = %+v", got)
+	}
+	if users, err := s.ContextUsers(ctx, research.ID); err != nil || len(users) != 1 || users[0] != build.ID {
+		t.Fatalf("users = %v, %v", users, err)
+	}
+
+	for _, bad := range [][]int64{{build.ID}, {999}} {
+		if err := s.SetContextFrom(ctx, build.ID, bad); !errors.Is(err, ErrBadContext) {
+			t.Fatalf("SetContextFrom(%v) = %v", bad, err)
+		}
+	}
+	if got, _ := s.Task(ctx, build.ID); len(got.ContextFrom) != 2 {
+		t.Fatalf("a rejected list must leave the old one: %+v", got.ContextFrom)
+	}
+	if err := s.SetContextFrom(ctx, build.ID, []int64{research.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteTask(ctx, research.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Task(ctx, build.ID); len(got.ContextFrom) != 0 {
+		t.Fatalf("deleting a source should unlink it: %+v", got.ContextFrom)
+	}
+}
+
+func TestContextMigrationKeepsData(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const n = 10 // migrations before task_context
+	for _, m := range migrations[:n] {
+		if _, err := db.Exec(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, q := range []string{
+		`PRAGMA user_version = 10`,
+		`UPDATE projects SET workdir = '/w' WHERE id = 1`,
+		`INSERT INTO tasks (id, title, lane_id, position, created_at, updated_at) VALUES (1, 'old', 1, 0, 0, 0), (2, 'next', 1, 1, 0, 0)`,
+		`INSERT INTO task_fields (task_id, key, value) VALUES (1, 'slack', 'https://s')`,
+		`INSERT INTO sessions (id, task_id, title, status, mode, created_at, updated_at) VALUES (7, 1, 'work', 'idle', 'plan', 0, 0)`,
+		`INSERT INTO messages (session_id, role, kind, content, created_at) VALUES (7, 'user', 'text', 'hi', 0)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(q, err)
+		}
+	}
+	db.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	old, err := s.Task(ctx, 1)
+	if err != nil || old.Title != "old" || old.Fields["slack"] != "https://s" || len(old.ContextFrom) != 0 {
+		t.Fatalf("task = %+v, %v", old, err)
+	}
+	if x, err := s.Session(ctx, 7); err != nil || x.LastMessage != "hi" {
+		t.Fatalf("session = %+v, %v", x, err)
+	}
+	if p, _ := s.Project(ctx, 1); p.Workdir != "/w" {
+		t.Fatalf("project = %+v", p)
+	}
+	if err := s.SetContextFrom(ctx, 2, []int64{1}); err != nil {
+		t.Fatal(err)
+	}
+	if next, _ := s.Task(ctx, 2); len(next.ContextFrom) != 1 || next.ContextFrom[0] != 1 {
+		t.Fatalf("next = %+v", next)
 	}
 }
