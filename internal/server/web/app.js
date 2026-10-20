@@ -474,6 +474,33 @@ async function renderTask(id, focusSession) {
   page.focus(focusSession);
 }
 
+// The task description, read as rendered markdown; Edit (or a double click) swaps in the textarea, which
+// saves on change and goes back to the rendered view on Done. Expand reads it in a wide dialog. An empty
+// description starts in the textarea.
+function descriptionField(text, save) {
+  const area = h('textarea', { rows: 10, class: 'mono', placeholder: 'Markdown', onchange: () => save(area.value) }, text);
+  const view = h('div', { class: 'md desc-view', title: 'Double-click to edit', ondblclick: () => show(true, true) });
+  const toggle = h('button', { class: 'ghost small', onclick: () => show(area.classList.contains('hidden'), true) });
+  const expand = h('button', { class: 'ghost small', title: 'Read it in a wide dialog', onclick: () => {
+    const dlg = document.getElementById('dialog');
+    dlg.replaceChildren(h('div', { class: 'md desc-dialog' }, markdown(area.value)),
+      h('div', { class: 'dialog-actions' }, h('button', { class: 'ghost', onclick: () => dlg.close() }, 'Close', hint('Esc'))));
+    dlg.classList.add('wide');
+    dlg.addEventListener('close', () => dlg.classList.remove('wide'), { once: true });
+    dlg.showModal();
+  } }, 'Expand');
+  const show = (editing, focus) => {
+    if (!editing) view.replaceChildren(...markdown(area.value));
+    area.classList.toggle('hidden', !editing);
+    view.classList.toggle('hidden', editing);
+    expand.classList.toggle('hidden', !area.value.trim());
+    toggle.textContent = editing ? 'Done' : 'Edit';
+    if (editing && focus) area.focus();
+  };
+  show(!String(text || '').trim(), false);
+  return [h('div', { class: 'row desc-bar' }, h('label', { class: 'grow' }, 'Description'), toggle, expand), view, area];
+}
+
 // ---------- task dialog: the board opens a task here first ----------
 
 const taskDialog = { el: null, timers: [], id: 0 };
@@ -586,8 +613,7 @@ async function taskView(id, { every, leave, reload }) {
     select(state.meta.kinds.map(k => [k, k]), t.kind, { onchange: e => save({ kind: e.target.value }) }),
     h('label', {}, 'Due — you get a notification at this time'),
     h('div', { class: 'field-row' }, due, clearDue),
-    h('label', {}, 'Description'),
-    h('textarea', { rows: 6, onchange: e => save({ description: e.target.value }) }, t.description),
+    descriptionField(t.description, text => save({ description: text })),
     h('label', {}, 'Working directory for agents'),
     workdirSelect(t.workdir, `Project default (${taskWorkdir({ ...t, workdir: '' })})`, { onchange: e => save({ workdir: e.target.value }) }),
     fields,
