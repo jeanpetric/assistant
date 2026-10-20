@@ -139,6 +139,7 @@ main { padding: 20px; }
 .badge.due { color: var(--text); }
 .badge.due.overdue { color: var(--danger); border-color: var(--danger); }
 .badge.running { color: var(--ok); border-color: var(--ok); }
+.badge.needs-input { color: var(--warn); border-color: var(--warn); font-weight: 600; }
 .badge.status-running { color: var(--ok); border-color: var(--ok); }
 .badge.status-error { color: var(--danger); border-color: var(--danger); }
 .badge.status-cancelled, .badge.status-interrupted { color: var(--warn); border-color: var(--warn); }

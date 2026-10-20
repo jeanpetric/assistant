@@ -152,6 +152,7 @@ func (a *App) SendMessage(ctx context.Context, sessionID int64, text string) err
 	if sess.ClaudeSessionID == "" {
 		return ErrNoResume
 	}
+	a.answered(ctx, sess)
 	return a.launch(sess, text, sess.ClaudeSessionID, nil)
 }
 
@@ -166,6 +167,7 @@ func (a *App) Resume(ctx context.Context, sessionID int64) error {
 	if err != nil {
 		return err
 	}
+	a.answered(ctx, sess)
 	if sess.ClaudeSessionID != "" {
 		return a.launch(sess, ResumePrompt, sess.ClaudeSessionID, nil)
 	}
@@ -207,6 +209,7 @@ func (a *App) Handoff(ctx context.Context, sessionID int64, note string) error {
 	if sess.ClaudeSessionID == "" {
 		return ErrNoResume
 	}
+	a.answered(ctx, sess)
 	return a.launch(sess, HandoffPrompt, sess.ClaudeSessionID, func(bg context.Context, status string) {
 		var taskID *int64
 		if sess.TaskID != 0 {
@@ -321,7 +324,9 @@ func (a *App) launch(sess store.Session, prompt, resumeID string, done func(ctx 
 		bg := context.Background()
 		req := agent.Request{Prompt: prompt, Workdir: sess.Workdir, Mode: sess.Mode, Model: sess.Model, ResumeID: resumeID}
 		failed := false
+		var wait waitSigns
 		err := a.Runner.Run(ctx, req, func(ev agent.Event) {
+			wait.see(ev)
 			if ev.ClaudeSessionID != "" && ev.ClaudeSessionID != sess.ClaudeSessionID {
 				sess.ClaudeSessionID = ev.ClaudeSessionID
 				a.Store.SetClaudeSessionID(bg, sess.ID, ev.ClaudeSessionID)
@@ -357,6 +362,9 @@ func (a *App) launch(sess store.Session, prompt, resumeID string, done func(ctx 
 			status = store.StatusError
 		}
 		a.Store.SetSessionStatus(bg, sess.ID, status, msg)
+		if reason := wait.reason(); status == store.StatusIdle && reason != "" {
+			a.needsInput(bg, sess, reason)
+		}
 		// Free the session first: what follows may start its next turn.
 		a.mu.Lock()
 		delete(a.running, sess.ID)
@@ -455,6 +463,7 @@ func (a *App) RunSkill(ctx context.Context, sessionID, skillID int64) error {
 	if err != nil {
 		return err
 	}
+	a.answered(ctx, sess)
 	return a.runSkill(ctx, sess, sk, nil)
 }
 
@@ -501,13 +510,83 @@ func (a *App) runSkill(ctx context.Context, sess store.Session, sk store.Skill, 
 	})
 }
 
+// waitSigns collects what a turn shows of its agent waiting for the user.
+// Print mode cannot stop to ask, so the turn ends instead.
+type waitSigns struct {
+	denied []string // tools refused for want of the user's permission
+	asked  bool     // the agent used its tool for asking the user
+	plan   bool     // the agent proposed a plan to approve
+	reply  string   // the final reply
+}
+
+func (w *waitSigns) see(ev agent.Event) {
+	switch ev.Kind {
+	case "tool_use":
+		name, _, _ := strings.Cut(ev.Content, " ")
+		w.asked = w.asked || name == "AskUserQuestion"
+		w.plan = w.plan || name == "ExitPlanMode"
+	case "result":
+		w.denied, w.reply = ev.Denied, ev.Content
+	}
+}
+
+// reason says why the agent waits for the user, empty if it does not seem to.
+func (w *waitSigns) reason() string {
+	switch {
+	case len(w.denied) > 0:
+		seen := map[string]bool{}
+		var tools []string
+		for _, t := range w.denied {
+			if !seen[t] {
+				seen[t] = true
+				tools = append(tools, t)
+			}
+		}
+		return "needs permission for " + strings.Join(tools, ", ")
+	case w.plan:
+		return "waits for its plan to be approved"
+	case w.asked || endsWithQuestion(w.reply):
+		return "asked a question"
+	}
+	return ""
+}
+
+// endsWithQuestion reports whether the reply's last line is a question,
+// markdown emphasis and closing brackets aside.
+func endsWithQuestion(reply string) bool {
+	lines := strings.Split(strings.TrimSpace(reply), "\n")
+	last := strings.TrimRight(lines[len(lines)-1], " \t*_`)]\"'")
+	return strings.HasSuffix(last, "?")
+}
+
+// needsInput flags the session as waiting for the user and notifies them.
+func (a *App) needsInput(ctx context.Context, sess store.Session, reason string) {
+	if err := a.Store.SetSessionNeedsInput(ctx, sess.ID, reason); err != nil {
+		log.Printf("session %d: %v", sess.ID, err)
+		return
+	}
+	a.notifySession(ctx, sess, fmt.Sprintf("Agent needs your input in %q: it %s", sess.Title, reason))
+}
+
+// answered clears the session's wait for the user, who is continuing it.
+func (a *App) answered(ctx context.Context, sess store.Session) {
+	if sess.NeedsInput != "" {
+		a.Store.SetSessionNeedsInput(ctx, sess.ID, "")
+	}
+}
+
+// DismissNeedsInput clears the session's wait for the user without continuing it.
+func (a *App) DismissNeedsInput(ctx context.Context, sessionID int64) error {
+	return a.Store.SetSessionNeedsInput(ctx, sessionID, "")
+}
+
 // notifySession notifies about a session, on its task if it has one.
 func (a *App) notifySession(ctx context.Context, sess store.Session, msg string) {
 	var taskID *int64
 	if sess.TaskID != 0 {
 		taskID = &sess.TaskID
 	}
-	a.Store.Notify(ctx, taskID, msg)
+	a.Store.NotifySession(ctx, taskID, &sess.ID, msg)
 }
 
 // moveWhenDone moves the session's task to its done lane after a successful

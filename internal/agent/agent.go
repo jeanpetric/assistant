@@ -28,6 +28,10 @@ type Event struct {
 
 	// Set on rate_limit events.
 	Limits *RateLimits
+
+	// Set on the result event: tools the CLI refused to run without the
+	// user's permission, which print mode cannot ask for.
+	Denied []string
 }
 
 // RateLimits is the account's usage of its subscription windows as reported
@@ -161,7 +165,10 @@ type streamLine struct {
 	Result    string  `json:"result"`
 	IsError   bool    `json:"is_error"`
 	CostUSD   float64 `json:"total_cost_usd"`
-	Message   struct {
+	Denials   []struct {
+		ToolName string `json:"tool_name"`
+	} `json:"permission_denials"`
+	Message struct {
 		Content json.RawMessage `json:"content"`
 	} `json:"message"`
 	RateLimitInfo struct {
@@ -210,6 +217,9 @@ func ParseLine(line []byte) []Event {
 		return contentEvents(l.Type, l.Message.Content)
 	case "result":
 		ev := Event{Role: "system", Kind: "result", Content: l.Result, ClaudeSessionID: l.SessionID, CostUSD: l.CostUSD}
+		for _, d := range l.Denials {
+			ev.Denied = append(ev.Denied, d.ToolName)
+		}
 		if l.IsError {
 			ev.Kind = "error"
 			if ev.Content == "" {

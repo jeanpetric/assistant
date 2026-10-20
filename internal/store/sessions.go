@@ -33,6 +33,9 @@ type Session struct {
 	CostUSD         float64 `json:"cost_usd"`
 	Error           string  `json:"error"`
 	LastMessage     string  `json:"last_message,omitempty"`
+	// NeedsInput says why the agent is waiting for the user, e.g. it asked a
+	// question; empty when it is not. Cleared when the user continues the session.
+	NeedsInput string `json:"needs_input"`
 	// Summary of the session for agents that build on its task; empty until one
 	// is written. It covers messages up to SummaryUpto; later ones make it stale.
 	Summary      string     `json:"summary"`
@@ -55,7 +58,7 @@ type Message struct {
 const sessionCols = `s.id, COALESCE(s.task_id, 0), COALESCE(t.title, ''), COALESCE(t.project_id, 0), s.title, s.status, s.mode, s.model, s.workdir, s.trigger, s.done_lane_id, s.parent_id,
 	(SELECT MAX(c.id) FROM sessions c WHERE c.parent_id = s.id), s.claude_session_id, s.cost_usd, s.error, s.created_at, s.updated_at,
 	COALESCE((SELECT content FROM messages m WHERE m.session_id = s.id AND m.kind IN ('text', 'result', 'error') ORDER BY m.id DESC LIMIT 1), ''),
-	s.summary, s.summary_upto, s.summary_at, COALESCE((SELECT MAX(m.id) FROM messages m WHERE m.session_id = s.id), 0)`
+	s.summary, s.summary_upto, s.summary_at, COALESCE((SELECT MAX(m.id) FROM messages m WHERE m.session_id = s.id), 0), s.needs_input`
 
 func scanSession(sc interface{ Scan(...any) error }) (Session, error) {
 	var x Session
@@ -64,7 +67,7 @@ func scanSession(sc interface{ Scan(...any) error }) (Session, error) {
 	var lastID int64
 	err := sc.Scan(&x.ID, &x.TaskID, &x.TaskTitle, &x.TaskProjectID, &x.Title, &x.Status, &x.Mode, &x.Model, &x.Workdir, &x.Trigger,
 		&doneLane, &parent, &child, &x.ClaudeSessionID, &x.CostUSD, &x.Error, &created, &updated, &x.LastMessage,
-		&x.Summary, &x.SummaryUpto, &summaryAt, &lastID)
+		&x.Summary, &x.SummaryUpto, &summaryAt, &lastID, &x.NeedsInput)
 	x.DoneLaneID, x.ParentID, x.ChildID = fromNullID(doneLane), fromNullID(parent), fromNullID(child)
 	x.SummaryAt = fromNullMillis(summaryAt)
 	x.SummaryStale = x.Summary != "" && lastID > x.SummaryUpto
@@ -119,6 +122,33 @@ func (s *Store) Sessions(ctx context.Context, taskID int64, status string) ([]Se
 func (s *Store) SetSessionStatus(ctx context.Context, id int64, status, errMsg string) error {
 	return affected(s.db.ExecContext(ctx,
 		`UPDATE sessions SET status = ?, error = ?, updated_at = ? WHERE id = ?`, status, errMsg, s.ts(), id))
+}
+
+// SetSessionNeedsInput records why the session's agent waits for the user;
+// an empty reason clears it.
+func (s *Store) SetSessionNeedsInput(ctx context.Context, id int64, reason string) error {
+	return affected(s.db.ExecContext(ctx,
+		`UPDATE sessions SET needs_input = ?, updated_at = ? WHERE id = ?`, reason, s.ts(), id))
+}
+
+// NeedsInputByTask counts, per task, the sessions whose agent waits for the user.
+func (s *Store) NeedsInputByTask(ctx context.Context) (map[int64]int, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT task_id, COUNT(*) FROM sessions
+		WHERE needs_input != '' AND task_id IS NOT NULL GROUP BY task_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64]int{}
+	for rows.Next() {
+		var task int64
+		var n int
+		if err := rows.Scan(&task, &n); err != nil {
+			return nil, err
+		}
+		out[task] = n
+	}
+	return out, rows.Err()
 }
 
 // SetSessionDoneLane changes where the session's task moves when a turn

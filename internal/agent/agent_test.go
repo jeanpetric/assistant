@@ -45,6 +45,14 @@ func TestParseTranscript(t *testing.T) {
 	}
 }
 
+func TestParsePermissionDenials(t *testing.T) {
+	got := ParseLine([]byte(`{"type":"result","subtype":"success","result":"Blocked.","session_id":"x",` +
+		`"permission_denials":[{"tool_name":"Bash","tool_use_id":"t1","tool_input":{"command":"rm x"}},{"tool_name":"Write","tool_use_id":"t2"}]}`))
+	if len(got) != 1 || got[0].Kind != "result" || !reflect.DeepEqual(got[0].Denied, []string{"Bash", "Write"}) {
+		t.Fatalf("got %+v", got)
+	}
+}
+
 func TestParseErrorResult(t *testing.T) {
 	got := ParseLine([]byte(`{"type":"result","subtype":"error_max_turns","is_error":true,"session_id":"x"}`))
 	if len(got) != 1 || got[0].Kind != "error" || got[0].Content != "error_max_turns" {

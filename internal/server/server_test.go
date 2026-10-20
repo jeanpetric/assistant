@@ -33,6 +33,9 @@ func (echoRunner) Run(ctx context.Context, req agent.Request, emit func(agent.Ev
 	if req.Fork { // a session summary
 		result = "SUMMARY of " + req.ResumeID
 	}
+	if req.Prompt == "ask" {
+		result = "Which branch?"
+	}
 	emit(agent.Event{Role: "system", Kind: "result", Content: result})
 	return nil
 }
@@ -831,4 +834,47 @@ func TestSkills(t *testing.T) {
 	c.do("DELETE", "/api/artifacts/"+itoa(arts[0].ID), nil, 404, nil)
 	c.do("DELETE", "/api/skills/"+itoa(sk.ID), nil, 204, nil)
 	c.do("PATCH", "/api/skills/"+itoa(sk.ID), map[string]any{"name": "x"}, 404, nil)
+}
+
+func TestNeedsInputOnBoardAndNotification(t *testing.T) {
+	c := newClient(t)
+	var task store.Task
+	c.do("POST", "/api/tasks", map[string]any{"title": "t"}, 201, &task)
+	var sess store.Session
+	c.do("POST", "/api/tasks/"+itoa(task.ID)+"/sessions", map[string]any{"prompt": "ask"}, 201, &sess)
+	c.app.Wait()
+
+	var b struct {
+		NeedsInput map[string]int `json:"needs_input"`
+	}
+	c.do("GET", "/api/board", nil, 200, &b)
+	if b.NeedsInput[itoa(task.ID)] != 1 {
+		t.Fatalf("board needs_input = %v", b.NeedsInput)
+	}
+	var notes []store.Notification
+	c.do("GET", "/api/notifications?unread=1", nil, 200, &notes)
+	if len(notes) != 1 || notes[0].SessionID == nil || *notes[0].SessionID != sess.ID {
+		t.Fatalf("notifications = %+v", notes)
+	}
+
+	c.do("DELETE", "/api/sessions/"+itoa(sess.ID)+"/needs-input", nil, 204, nil)
+	b.NeedsInput = nil
+	c.do("GET", "/api/board", nil, 200, &b)
+	if len(b.NeedsInput) != 0 {
+		t.Fatalf("after dismissing: %v", b.NeedsInput)
+	}
+	c.do("DELETE", "/api/sessions/999/needs-input", nil, 404, nil)
+
+	// The same through MCP.
+	c.do("POST", "/api/sessions/"+itoa(sess.ID)+"/messages", map[string]any{"text": "ask"}, 202, nil)
+	c.app.Wait()
+	if text, _ := c.tool("list_sessions", map[string]any{"task_id": task.ID}); !strings.Contains(text, `"needs_input":"asked a question"`) {
+		t.Fatalf("list_sessions = %s", text)
+	}
+	if text, isErr := c.tool("dismiss_needs_input", map[string]any{"session_id": sess.ID}); isErr {
+		t.Fatalf("dismiss_needs_input: %s", text)
+	}
+	if got, _ := c.app.Store.Session(context.Background(), sess.ID); got.NeedsInput != "" {
+		t.Fatalf("session = %+v", got)
+	}
 }

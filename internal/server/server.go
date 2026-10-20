@@ -72,6 +72,7 @@ func (s *Server) routes() {
 	m.HandleFunc("PATCH /api/sessions/{id}", s.updateSession)
 	m.HandleFunc("POST /api/sessions/{id}/messages", s.sendMessage)
 	m.HandleFunc("POST /api/sessions/{id}/cancel", s.cancelSession)
+	m.HandleFunc("DELETE /api/sessions/{id}/needs-input", s.dismissNeedsInput)
 	m.HandleFunc("POST /api/sessions/{id}/resume", s.resumeSession)
 	m.HandleFunc("POST /api/sessions/{id}/handoff", s.handoffSession)
 	m.HandleFunc("POST /api/sessions/{id}/skill", s.runSkill)

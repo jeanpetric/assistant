@@ -213,6 +213,11 @@ function buildsOnBadge(t) {
   return h('span', { class: 'badge', title: `Builds on ${ids}: their agents' results go into this task's agent context` }, '↳ ' + ids);
 }
 
+// Sessions whose agent waits for an answer, a permission or a plan approval.
+function needsInputBadge(n, reason) {
+  return n ? h('span', { class: 'badge needs-input', title: reason || 'An agent waits for your input' }, n > 1 ? `✋ ${n} need you` : '✋ needs you') : null;
+}
+
 function runningBadge(n) {
   return n ? h('span', { class: 'badge running' }, h('span', { class: 'pulse' }), n > 1 ? `${n} agents` : 'agent') : null;
 }
@@ -291,7 +296,7 @@ function card(t) {
     onclick: e => { if (e.metaKey || e.ctrlKey) location.hash = `#/task/${t.id}`; else openTaskDialog(t.id); },
   },
     h('div', { class: 'card-title' }, t.title),
-    h('div', { class: 'card-meta' }, kindBadge(t.kind), dueBadge(t), buildsOnBadge(t), runningBadge(state.board.running[t.id]), fieldLinks(t)),
+    h('div', { class: 'card-meta' }, kindBadge(t.kind), dueBadge(t), buildsOnBadge(t), needsInputBadge(state.board.needs_input[t.id]), runningBadge(state.board.running[t.id]), fieldLinks(t)),
     state.board.running_limits[t.id] ? h('div', { class: 'card-meta' }, limitsEl(state.board.running_limits[t.id])) : null);
   el.dataset.id = t.id;
   el.addEventListener('dragstart', e => {
@@ -367,7 +372,7 @@ async function renderList() {
       h('td', {}, laneName(t.lane_id)),
       h('td', {}, kindBadge(t.kind) || 'task'),
       h('td', { class: 'small', title: fmtTime(t.due_at) }, dueBadge(t)),
-      h('td', {}, runningBadge(b.running[t.id]), fieldLinks(t)),
+      h('td', {}, needsInputBadge(b.needs_input[t.id]), runningBadge(b.running[t.id]), fieldLinks(t)),
       h('td', { class: 'muted small' }, ago(t.updated_at)))));
   }
   draw();
@@ -814,6 +819,11 @@ function sessionComponent(session, messages) {
     head.replaceChildren(...[
       h('span', { class: 'title' }, s.title || `Session ${s.id}`),
       h('span', { class: 'badge status-' + s.status }, running ? h('span', { class: 'pulse' }) : null, s.status),
+      needsInputBadge(s.needs_input ? 1 : 0, 'The agent ' + s.needs_input),
+      s.needs_input ? h('button', {
+        class: 'ghost small', title: 'No answer needed: clear the tag',
+        onclick: async () => { await api('DELETE', `/api/sessions/${s.id}/needs-input`); c.session.needs_input = ''; drawHead(); },
+      }, 'Dismiss') : null,
       h('span', { class: 'badge' }, s.mode),
       s.model ? h('span', { class: 'badge' }, s.model) : null,
       s.trigger !== 'manual' ? h('span', { class: 'badge' }, s.trigger) : null,
@@ -969,7 +979,8 @@ async function renderSessions() {
   async function draw() {
     const xs = await api('GET', '/api/sessions' + (statusSel.value ? `?status=${statusSel.value}` : ''));
     tbody.replaceChildren(...xs.map(s => h('tr', { class: 'clickable', onclick: () => openFromSessions(s) },
-      h('td', {}, h('span', { class: 'badge status-' + s.status }, s.status === 'running' ? h('span', { class: 'pulse' }) : null, s.status)),
+      h('td', {}, h('span', { class: 'badge status-' + s.status }, s.status === 'running' ? h('span', { class: 'pulse' }) : null, s.status),
+        needsInputBadge(s.needs_input ? 1 : 0, 'The agent ' + s.needs_input)),
       h('td', {}, s.task_id ? h('div', {}, s.task_title) : h('div', { class: 'muted' }, 'No task'), h('div', { class: 'muted small' }, s.title)),
       h('td', { class: 'small' }, trunc(s.last_message, 220)),
       h('td', { class: 'muted small' }, s.trigger, h('br'), s.mode),
@@ -1569,8 +1580,14 @@ function announce(n) {
   const desktop = new Notification(n.message, { body: n.task_title || '', tag: 'assistant-' + n.id });
   desktop.onclick = () => {
     window.focus();
-    if (n.task_id) location.hash = `#/task/${n.task_id}`;
+    openNotification(n);
   };
+}
+
+// Opens what the notification is about: its session if it has one, else its task.
+function openNotification(n) {
+  if (n.session_id) location.hash = sessionHref({ task_id: n.task_id, id: n.session_id });
+  else if (n.task_id) location.hash = `#/task/${n.task_id}`;
 }
 
 async function refreshGlobal() {
@@ -1599,7 +1616,7 @@ async function toggleNotifications() {
       if (!n.read_at) await api('POST', `/api/notifications/${n.id}/read`);
       panel.classList.add('hidden');
       refreshGlobal();
-      if (n.task_id) location.hash = `#/task/${n.task_id}`;
+      openNotification(n);
     },
   }, h('div', {}, n.message), h('div', { class: 'muted small' }, (n.task_title ? n.task_title + ' · ' : '') + ago(n.created_at))))
     : [h('div', { class: 'notif muted' }, 'Nothing here.')]));

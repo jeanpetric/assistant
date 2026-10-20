@@ -662,3 +662,84 @@ func TestSummaryMigrationKeepsSessions(t *testing.T) {
 		t.Fatalf("summarised = %+v", x)
 	}
 }
+
+func TestNeedsInputAndSessionNotifications(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	task, _ := s.CreateTask(ctx, Task{Title: "t"})
+	a, _ := s.CreateSession(ctx, Session{TaskID: task.ID, Mode: "default"})
+	b, _ := s.CreateSession(ctx, Session{TaskID: task.ID, Mode: "default"})
+	s.CreateSession(ctx, Session{Mode: "default"}) // standalone: no task to count it on
+
+	if err := s.SetSessionNeedsInput(ctx, a.ID, "asked a question"); err != nil {
+		t.Fatal(err)
+	}
+	s.SetSessionNeedsInput(ctx, b.ID, "permission denied: Bash")
+	if got, _ := s.Session(ctx, a.ID); got.NeedsInput != "asked a question" {
+		t.Fatalf("session = %+v", got)
+	}
+	if got, err := s.NeedsInputByTask(ctx); err != nil || len(got) != 1 || got[task.ID] != 2 {
+		t.Fatalf("by task = %v, %v", got, err)
+	}
+	s.SetSessionNeedsInput(ctx, a.ID, "")
+	if got, _ := s.NeedsInputByTask(ctx); got[task.ID] != 1 {
+		t.Fatalf("after clearing: %v", got)
+	}
+
+	s.NotifySession(ctx, &task.ID, &a.ID, "needs you")
+	s.Notify(ctx, nil, "plain")
+	ns, err := s.Notifications(ctx, false)
+	if err != nil || len(ns) != 2 || ns[0].SessionID != nil || ns[1].SessionID == nil || *ns[1].SessionID != a.ID || ns[1].TaskTitle != "t" {
+		t.Fatalf("notifications = %+v, %v", ns, err)
+	}
+}
+
+func TestNeedsInputMigrationKeepsData(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const n = 15 // migrations before needs_input
+	for _, m := range migrations[:n] {
+		if _, err := db.Exec(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, q := range []string{
+		fmt.Sprintf(`PRAGMA user_version = %d`, n),
+		`INSERT INTO tasks (id, title, kind, lane_id, position, created_at, updated_at) VALUES (1, 'old', 'task', 1, 0, 0, 0)`,
+		`INSERT INTO sessions (id, task_id, title, status, mode, created_at, updated_at) VALUES (7, 1, 'kept', 'idle', 'default', 0, 0)`,
+		`INSERT INTO messages (session_id, role, kind, content, created_at) VALUES (7, 'assistant', 'text', 'hello', 0)`,
+		`INSERT INTO notifications (id, task_id, message, created_at) VALUES (3, 1, 'old note', 0)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(q, err)
+		}
+	}
+	db.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	sess, err := s.Session(ctx, 7)
+	if err != nil || sess.Title != "kept" || sess.Status != StatusIdle || sess.NeedsInput != "" || sess.LastMessage != "hello" {
+		t.Fatalf("session = %+v, %v", sess, err)
+	}
+	ns, err := s.Notifications(ctx, false)
+	if err != nil || len(ns) != 1 || ns[0].Message != "old note" || ns[0].TaskID == nil || ns[0].SessionID != nil {
+		t.Fatalf("notifications = %+v, %v", ns, err)
+	}
+	// Deleting the session keeps the notification about it.
+	task := sess.TaskID
+	s.NotifySession(ctx, &task, &sess.ID, "new")
+	if _, err := s.db.Exec(`DELETE FROM sessions WHERE id = 7`); err != nil {
+		t.Fatal(err)
+	}
+	if ns, _ = s.Notifications(ctx, false); len(ns) != 2 || ns[0].SessionID != nil {
+		t.Fatalf("after deleting the session: %+v", ns)
+	}
+}

@@ -326,7 +326,7 @@ func (s *Server) mcpTools() []mcpTool {
 		},
 		{
 			Name:        "list_sessions",
-			Description: "Agent sessions, newest first, with status and latest message. Summaries are left out (get_session has them); summary_at says a session has one and summary_stale that newer messages came after it.",
+			Description: "Agent sessions, newest first, with status and latest message; needs_input, if set, says why the agent waits for the user. Summaries are left out (get_session has them); summary_at says a session has one and summary_stale that newer messages came after it.",
 			InputSchema: schema(nil, map[string]any{
 				"task_id": prop("integer", "Only this task's sessions"),
 				"status":  map[string]any{"type": "string", "enum": []string{"running", "idle", "error", "cancelled", "interrupted"}},
@@ -398,6 +398,12 @@ func (s *Server) mcpTools() []mcpTool {
 				"Runs in the background in a fork of the session's agent; get_memory shows the result.",
 			InputSchema: schema([]string{"session_id"}, map[string]any{"session_id": prop("integer", "Session id")}),
 			call:        byID("POST", "/api/sessions/%d/memory", "session_id", false),
+		},
+		{
+			Name:        "dismiss_needs_input",
+			Description: "Clear a session's needs_input without continuing it (sending a message clears it too).",
+			InputSchema: schema([]string{"session_id"}, map[string]any{"session_id": prop("integer", "Session id")}),
+			call:        byID("DELETE", "/api/sessions/%d/needs-input", "session_id", false),
 		},
 		{
 			Name:        "send_message",

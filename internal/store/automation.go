@@ -43,6 +43,7 @@ type Notification struct {
 	ID        int64      `json:"id"`
 	TaskID    *int64     `json:"task_id"`
 	TaskTitle string     `json:"task_title"`
+	SessionID *int64     `json:"session_id"` // the session it is about, if any
 	Message   string     `json:"message"`
 	CreatedAt time.Time  `json:"created_at"`
 	ReadAt    *time.Time `json:"read_at"`
@@ -203,13 +204,18 @@ func (s *Store) DeleteSchedule(ctx context.Context, id int64) error {
 // ---- notifications ----
 
 func (s *Store) Notify(ctx context.Context, taskID *int64, msg string) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO notifications (task_id, message, created_at) VALUES (?, ?, ?)`,
-		taskID, msg, s.ts())
+	return s.NotifySession(ctx, taskID, nil, msg)
+}
+
+// NotifySession is Notify about one of the task's sessions.
+func (s *Store) NotifySession(ctx context.Context, taskID, sessionID *int64, msg string) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO notifications (task_id, session_id, message, created_at) VALUES (?, ?, ?, ?)`,
+		taskID, sessionID, msg, s.ts())
 	return err
 }
 
 func (s *Store) Notifications(ctx context.Context, unreadOnly bool) ([]Notification, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT n.id, n.task_id, COALESCE(t.title, ''), n.message, n.created_at, n.read_at
+	rows, err := s.db.QueryContext(ctx, `SELECT n.id, n.task_id, COALESCE(t.title, ''), n.session_id, n.message, n.created_at, n.read_at
 		FROM notifications n LEFT JOIN tasks t ON t.id = n.task_id
 		WHERE (? = 0 OR n.read_at IS NULL) ORDER BY n.id DESC LIMIT 200`, boolInt(unreadOnly))
 	if err != nil {
@@ -219,14 +225,15 @@ func (s *Store) Notifications(ctx context.Context, unreadOnly bool) ([]Notificat
 	out := []Notification{}
 	for rows.Next() {
 		var n Notification
-		var task, read sql.NullInt64
+		var task, sess, read sql.NullInt64
 		var created int64
-		if err := rows.Scan(&n.ID, &task, &n.TaskTitle, &n.Message, &created, &read); err != nil {
+		if err := rows.Scan(&n.ID, &task, &n.TaskTitle, &sess, &n.Message, &created, &read); err != nil {
 			return nil, err
 		}
 		if task.Valid {
 			n.TaskID = &task.Int64
 		}
+		n.SessionID = fromNullID(sess)
 		n.CreatedAt, n.ReadAt = fromMillis(created), fromNullMillis(read)
 		out = append(out, n)
 	}

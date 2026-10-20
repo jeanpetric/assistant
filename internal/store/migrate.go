@@ -300,6 +300,12 @@ CREATE TABLE task_memories (
 );
 CREATE INDEX task_memories_memory ON task_memories(memory_id);
 `,
+	// Why a session's agent is waiting for the user; empty when it is not.
+	// A notification can point at the session it is about.
+	`
+ALTER TABLE sessions ADD COLUMN needs_input TEXT NOT NULL DEFAULT '';
+ALTER TABLE notifications ADD COLUMN session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL;
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

@@ -63,6 +63,11 @@ func (s *Server) board(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	needsInput, err := s.app.Store.NeedsInputByTask(ctx)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
 	// Per task: how many agents run, and the usage limits last reported by the
 	// most recently active of them.
 	runningByTask := map[int64]int{}
@@ -80,7 +85,7 @@ func (s *Server) board(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, 200, map[string]any{"projects": projects, "project_id": projectID, "lanes": lanes, "tasks": tasks, "fields": fields,
-		"running": runningByTask, "running_limits": limitsByTask})
+		"running": runningByTask, "running_limits": limitsByTask, "needs_input": needsInput})
 }
 
 func (s *Server) meta(w http.ResponseWriter, r *http.Request) {
@@ -931,6 +936,19 @@ func (s *Server) cancelSession(w http.ResponseWriter, r *http.Request) {
 	}
 	s.app.Cancel(id)
 	w.WriteHeader(202)
+}
+
+func (s *Server) dismissNeedsInput(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.app.DismissNeedsInput(r.Context(), id); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(204)
 }
 
 func (s *Server) resumeSession(w http.ResponseWriter, r *http.Request) {

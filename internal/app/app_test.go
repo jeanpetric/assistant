@@ -25,6 +25,8 @@ type fakeRunner struct {
 	// If set, the final reply and the error of a request; otherwise "ok" and err.
 	result func(agent.Request) string
 	fail   func(agent.Request) error
+	tools  []string // if set, emitted as tool_use events
+	denied []string // if set, the result's permission denials
 }
 
 func (f *fakeRunner) Run(ctx context.Context, req agent.Request, emit func(agent.Event)) error {
@@ -46,7 +48,7 @@ func (f *fakeRunner) Run(ctx context.Context, req agent.Request, emit func(agent
 		}
 	}
 	f.mu.Lock()
-	result, fail, failOn, err := f.result, f.fail, f.failOn, f.err
+	result, fail, failOn, err, tools, denied := f.result, f.fail, f.failOn, f.err, f.tools, f.denied
 	f.mu.Unlock()
 	if fail != nil {
 		if err := fail(req); err != nil {
@@ -58,7 +60,10 @@ func (f *fakeRunner) Run(ctx context.Context, req agent.Request, emit func(agent
 		reply = result(req)
 	}
 	emit(agent.Event{Role: "assistant", Kind: "text", Content: "echo: " + req.Prompt})
-	emit(agent.Event{Role: "system", Kind: "result", Content: reply, CostUSD: 0.5})
+	for _, t := range tools {
+		emit(agent.Event{Role: "assistant", Kind: "tool_use", Content: t})
+	}
+	emit(agent.Event{Role: "system", Kind: "result", Content: reply, CostUSD: 0.5, Denied: denied})
 	if failOn != "" && strings.HasPrefix(req.Prompt, failOn) {
 		return errors.New("failed: " + failOn)
 	}
@@ -1109,5 +1114,104 @@ func TestSummaryWaitsForSkills(t *testing.T) {
 	}
 	if got, _ := a.Store.Session(ctx, sess.ID); got.Summary == "" || got.SummaryStale {
 		t.Fatalf("the summary should cover the skill turn too: %+v", got)
+	}
+}
+
+func TestNeedsInput(t *testing.T) {
+	a, r := newApp(t)
+	ctx := context.Background()
+	task, _ := a.Store.CreateTask(ctx, store.Task{Title: "Ask me"})
+	set := func(reply string, tools, denied []string) {
+		r.mu.Lock()
+		r.result = func(agent.Request) string { return reply }
+		r.tools, r.denied = tools, denied
+		r.mu.Unlock()
+	}
+	needs := func(id int64) string {
+		t.Helper()
+		got, err := a.Store.Session(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got.NeedsInput
+	}
+
+	set("Done. Which **branch** should I push to?", nil, nil)
+	sess, err := a.StartSession(ctx, StartOpts{TaskID: task.ID, Prompt: "work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Wait()
+	if got := needs(sess.ID); got != "asked a question" {
+		t.Fatalf("needs input = %q", got)
+	}
+	notes, _ := a.Store.Notifications(ctx, true)
+	if len(notes) != 1 || notes[0].SessionID == nil || *notes[0].SessionID != sess.ID || notes[0].TaskID == nil ||
+		notes[0].Message != `Agent needs your input in "work": it asked a question` {
+		t.Fatalf("notifications = %+v", notes)
+	}
+
+	// Replying clears it; a finished turn without a question leaves it clear.
+	set("All done.", nil, nil)
+	a.SendMessage(ctx, sess.ID, "main")
+	a.Wait()
+	if got := needs(sess.ID); got != "" {
+		t.Fatalf("after reply: %q", got)
+	}
+
+	set("I could not run it.", []string{`Bash {"command":"rm x"}`}, []string{"Bash", "Write", "Bash"})
+	a.SendMessage(ctx, sess.ID, "again")
+	a.Wait()
+	if got := needs(sess.ID); got != "needs permission for Bash, Write" {
+		t.Fatalf("denied: %q", got)
+	}
+	if err := a.DismissNeedsInput(ctx, sess.ID); err != nil || needs(sess.ID) != "" {
+		t.Fatalf("dismiss: %v", err)
+	}
+
+	set("Here is the plan.", []string{`ExitPlanMode {"plan":"x"}`}, nil)
+	a.SendMessage(ctx, sess.ID, "plan it")
+	a.Wait()
+	if got := needs(sess.ID); got != "waits for its plan to be approved" {
+		t.Fatalf("plan: %q", got)
+	}
+	set("ok", []string{`AskUserQuestion {"questions":[]}`}, nil)
+	a.SendMessage(ctx, sess.ID, "ask")
+	a.Wait()
+	if got := needs(sess.ID); got != "asked a question" {
+		t.Fatalf("ask tool: %q", got)
+	}
+
+	// A failed turn is an error, not a wait; a standalone session notifies without a task.
+	r.mu.Lock()
+	r.failOn = "boom"
+	r.mu.Unlock()
+	set("Shall I retry?", nil, nil)
+	a.SendMessage(ctx, sess.ID, "boom")
+	a.Wait()
+	if got, _ := a.Store.Session(ctx, sess.ID); got.Status != store.StatusError || got.NeedsInput != "" {
+		t.Fatalf("failed turn: %+v", got)
+	}
+	solo, _ := a.StartSession(ctx, StartOpts{Prompt: "hi"})
+	a.Wait()
+	notes, _ = a.Store.Notifications(ctx, true)
+	if needs(solo.ID) != "asked a question" || notes[0].TaskID != nil || *notes[0].SessionID != solo.ID {
+		t.Fatalf("standalone: %+v", notes[0])
+	}
+}
+
+func TestEndsWithQuestion(t *testing.T) {
+	for reply, want := range map[string]bool{
+		"Should I continue?":                   true,
+		"Done.\n\n**Want me to open a PR?**\n": true,
+		"Is it `main`?`":                       true,
+		"(or should I wait?)":                  true,
+		"Why? Because it was broken. Fixed.":   false,
+		"":                                     false,
+		"All done.":                            false,
+	} {
+		if got := endsWithQuestion(reply); got != want {
+			t.Errorf("endsWithQuestion(%q) = %v", reply, got)
+		}
 	}
 }
