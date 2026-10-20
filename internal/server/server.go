@@ -83,6 +83,10 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/notifications", s.listNotifications)
 	m.HandleFunc("POST /api/notifications/{id}/read", s.readNotification)
 
+	m.HandleFunc("POST /mcp", s.mcp)
+	m.HandleFunc("GET /mcp", mcpNoStream)
+	m.HandleFunc("DELETE /mcp", mcpNoStream)
+
 	static, _ := fs.Sub(webFS, "web")
 	m.Handle("GET /", http.FileServerFS(static))
 }

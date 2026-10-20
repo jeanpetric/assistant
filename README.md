@@ -73,6 +73,22 @@ binds to 127.0.0.1. Avoid ports 6665–6669: browsers refuse them.
 Agents run with your user's permissions. The server only binds to localhost and rejects
 non-JSON writes, foreign `Origin`s and foreign `Host` headers so that web pages can't drive it.
 
+## MCP server
+
+The app is also an MCP server, so any Claude Code session (including the agents it starts)
+can read and change the board: `http://127.0.0.1:6767/mcp` (Streamable HTTP). Register it once
+for all your sessions:
+
+```sh
+claude mcp add --scope user --transport http assistant http://127.0.0.1:6767/mcp
+```
+
+Tools: `get_board`, `get_task`, `create_task`, `update_task`, `move_task`, `archive_task`,
+`unarchive_task`, `delete_task`, `list_archived_tasks`, `create_lane`, `update_lane`,
+`delete_lane`, `start_session`, `list_sessions`, `get_session`, `send_message`. Each one goes
+through the JSON API, so validation and transition rules work as in the UI. The app must be
+running (`make start`).
+
 ## Prompt templates
 
 Rules and schedules use Go `text/template`:

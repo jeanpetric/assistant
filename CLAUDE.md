@@ -25,5 +25,6 @@ Personal workflow app: Go backend + vanilla JS UI embedded in one binary, SQLite
 - `internal/app` — behaviour: sessions (start / resume / cancel), transition rules on lane
   moves, schedules, prompt templates.
 - `internal/cron` — 5-field cron parser.
-- `internal/server` — JSON API (`handlers.go`), request guard (`server.go`), embedded UI in
+- `internal/server` — JSON API (`handlers.go`), MCP endpoint (`mcp.go`: each tool maps to an
+  API call — new API features usually want a tool too), request guard (`server.go`), embedded UI in
   `web/` (`app.js` is plain DOM code with a tiny `h()` helper — never use `innerHTML` with data).
