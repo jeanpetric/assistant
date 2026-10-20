@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -811,6 +812,9 @@ const SharedIntro = "This task builds on earlier tasks. What their agents did, o
 // off are left out; the session that took over carries on.
 func (a *App) TaskBrief(ctx context.Context, t store.Task) string {
 	brief := TaskContext(t)
+	if links := LinksBrief(t); links != "" {
+		brief += "\n\n---\n\n" + links
+	}
 	if mem := a.memoryBrief(ctx, t); mem != "" {
 		brief += "\n\n---\n\n" + mem
 	}
@@ -874,6 +878,45 @@ func truncate(s string, max int) string {
 		return string(r[:max]) + "\n… (cut; the full transcript is in the session)"
 	}
 	return s
+}
+
+// LinksIntro opens the part of a task brief that lists the task's links.
+const LinksIntro = "The task links to the pages below. Before you start, read each one with your tools " +
+	"(the Productive or Slack MCP tools for those apps, a web fetch for other pages) and take what they say " +
+	"as part of the task. If a page can't be read, say so and go on without it."
+
+var urlRe = regexp.MustCompile(`https?://[^\s<>"'()\[\]{}]+`)
+
+// TaskURLs are the URLs in the task's description and links, in order, once each.
+func TaskURLs(t store.Task) []string {
+	text := t.Description
+	keys := make([]string, 0, len(t.Fields))
+	for k := range t.Fields {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		text += "\n" + t.Fields[k]
+	}
+	var urls []string
+	seen := map[string]bool{}
+	for _, u := range urlRe.FindAllString(text, -1) {
+		u = strings.TrimRight(u, ".,;:!?*_`")
+		if !seen[u] {
+			seen[u] = true
+			urls = append(urls, u)
+		}
+	}
+	return urls
+}
+
+// LinksBrief asks the agent to read the task's linked pages; "" without links.
+func LinksBrief(t store.Task) string {
+	urls := TaskURLs(t)
+	if len(urls) == 0 {
+		return ""
+	}
+	return LinksIntro + "\n\n- " + strings.Join(urls, "\n- ")
 }
 
 // TaskContext renders the task as a plain-text brief for an agent.

@@ -521,6 +521,28 @@ func TestTaskContext(t *testing.T) {
 	}
 }
 
+func TestLinksBrief(t *testing.T) {
+	task := store.Task{
+		Description: "See https://app.productive.io/1-org/tasks/42. Also (https://x.slack.com/archives/C1/p2) and https://app.productive.io/1-org/tasks/42 again.",
+		Fields:      map[string]string{"pull_request": "https://github.com/o/r/pull/3", "note": "no url"},
+	}
+	want := []string{"https://app.productive.io/1-org/tasks/42", "https://x.slack.com/archives/C1/p2", "https://github.com/o/r/pull/3"}
+	if got := TaskURLs(task); strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("urls = %q", got)
+	}
+	if got := LinksBrief(task); got != LinksIntro+"\n\n- "+strings.Join(want, "\n- ") {
+		t.Fatalf("brief = %q", got)
+	}
+	if got := LinksBrief(store.Task{Description: "nothing linked"}); got != "" {
+		t.Fatalf("no links should give no brief: %q", got)
+	}
+
+	a, _ := newApp(t)
+	if brief := a.TaskBrief(context.Background(), task); !strings.Contains(brief, LinksIntro) || !strings.Contains(brief, "- https://github.com/o/r/pull/3") {
+		t.Fatalf("task brief lacks the links:\n%s", brief)
+	}
+}
+
 func TestShutdownInterruptsAndResume(t *testing.T) {
 	a, r := newApp(t)
 	ctx := context.Background()
