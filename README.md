@@ -85,7 +85,7 @@ claude mcp add --scope user --transport http assistant http://127.0.0.1:6767/mcp
 
 Tools: `get_board`, `get_task`, `create_task`, `update_task`, `move_task`, `archive_task`,
 `unarchive_task`, `delete_task`, `list_archived_tasks`, `create_lane`, `update_lane`,
-`delete_lane`, `start_session`, `list_sessions`, `get_session`, `send_message`. Each one goes
+`delete_lane`, `create_project`, `update_project`, `delete_project`, `start_session`, `list_sessions`, `get_session`, `send_message`. Each one goes
 through the JSON API, so validation and transition rules work as in the UI. The app must be
 running (`make start`).
 

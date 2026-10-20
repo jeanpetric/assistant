@@ -162,6 +162,30 @@ func TestMCPTaskTools(t *testing.T) {
 	}
 }
 
+func TestMCPProjects(t *testing.T) {
+	c := newClient(t)
+	text, isErr := c.tool("create_project", map[string]any{"name": "Side"})
+	var p store.Project
+	if isErr || json.Unmarshal([]byte(text), &p) != nil || p.ID == 0 {
+		t.Fatalf("create_project: %s", text)
+	}
+	if text, isErr = c.tool("create_task", map[string]any{"title": "Side task", "project_id": p.ID}); isErr {
+		t.Fatalf("create_task: %s", text)
+	}
+	if text, _ = c.tool("get_board", nil); strings.Contains(text, "Side task") {
+		t.Fatalf("first project's board shows another project's task: %s", text)
+	}
+	if text, _ = c.tool("get_board", map[string]any{"project_id": p.ID}); !strings.Contains(text, "Side task") {
+		t.Fatalf("get_board by project: %s", text)
+	}
+	if text, isErr = c.tool("create_task", map[string]any{"title": "x", "project_id": 999}); !isErr || !strings.Contains(text, "unknown project_id") {
+		t.Fatalf("unknown project: %s", text)
+	}
+	if text, isErr = c.tool("delete_project", map[string]any{"project_id": p.ID}); !isErr {
+		t.Fatalf("deleting a project with tasks should fail: %s", text)
+	}
+}
+
 func TestMCPLaneTools(t *testing.T) {
 	c := newClient(t)
 	text, isErr := c.tool("create_lane", map[string]any{"name": "Blocked", "color": "#f00"})

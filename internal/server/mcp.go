@@ -5,7 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
+	"net/url"
+	"strconv"
 )
 
 // MCP (Model Context Protocol) over the Streamable HTTP transport: clients POST
@@ -68,6 +69,30 @@ func (a mcpArgs) without(keys ...string) map[string]json.RawMessage {
 	return out
 }
 
+// query builds a query string from the given integer/string arguments that are present.
+func (a mcpArgs) query(keys ...string) (string, error) {
+	q := url.Values{}
+	for _, k := range keys {
+		if a[k] == nil {
+			continue
+		}
+		var v any
+		if err := json.Unmarshal(a[k], &v); err != nil {
+			return "", fmt.Errorf("invalid %s", k)
+		}
+		switch v := v.(type) {
+		case float64:
+			q.Set(k, strconv.FormatInt(int64(v), 10))
+		case string:
+			q.Set(k, v)
+		}
+	}
+	if len(q) == 0 {
+		return "", nil
+	}
+	return "?" + q.Encode(), nil
+}
+
 func schema(required []string, props map[string]any) map[string]any {
 	s := map[string]any{"type": "object", "properties": props}
 	if len(required) > 0 {
@@ -79,12 +104,13 @@ func schema(required []string, props map[string]any) map[string]any {
 func prop(typ, desc string) map[string]any { return map[string]any{"type": typ, "description": desc} }
 
 var (
-	pTaskID  = prop("integer", "Task id")
-	pLaneID  = prop("integer", "Lane id (see get_board)")
-	pFields  = map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}, "description": "Custom fields by key, e.g. {\"pull_request\": \"https://…\"}; see get_board for the keys. An empty value removes a field."}
-	pDueAt   = prop("string", "Due time, RFC 3339 (e.g. 2026-10-21T09:00:00+02:00); a notification fires when it's reached")
-	pKind    = map[string]any{"type": "string", "enum": []string{"task", "coding", "research", "discussion", "reminder"}}
-	pWorkdir = prop("string", "Absolute working directory for agent sessions")
+	pTaskID    = prop("integer", "Task id")
+	pLaneID    = prop("integer", "Lane id (see get_board)")
+	pProjectID = prop("integer", "Project id (see get_board); every project has its own board on the shared lanes")
+	pFields    = map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}, "description": "Custom fields by key, e.g. {\"pull_request\": \"https://…\"}; see get_board for the keys. An empty value removes a field."}
+	pDueAt     = prop("string", "Due time, RFC 3339 (e.g. 2026-10-21T09:00:00+02:00); a notification fires when it's reached")
+	pKind      = map[string]any{"type": "string", "enum": []string{"task", "coding", "research", "discussion", "reminder"}}
+	pWorkdir   = prop("string", "Absolute working directory for agent sessions")
 )
 
 func (s *Server) mcpTools() []mcpTool {
@@ -109,12 +135,19 @@ func (s *Server) mcpTools() []mcpTool {
 			return method, path, nil, nil
 		}
 	}
+	// list is a GET whose arguments are query parameters.
+	list := func(path string, keys ...string) func(mcpArgs) (string, string, any, error) {
+		return func(a mcpArgs) (string, string, any, error) {
+			q, err := a.query(keys...)
+			return "GET", path + q, nil, err
+		}
+	}
 	return []mcpTool{
 		{
 			Name:        "get_board",
-			Description: "The kanban board: lanes (in order), every task on the board, custom field definitions and how many agent sessions run per task. Start here to find lane and task ids.",
-			InputSchema: schema(nil, map[string]any{}),
-			call:        fixed("GET", "/api/board", false),
+			Description: "The kanban board of one project (the first if project_id is left out): every project, the lanes (in order), the project's tasks on the board, custom field definitions and how many agent sessions run per task. Start here to find project, lane and task ids.",
+			InputSchema: schema(nil, map[string]any{"project_id": pProjectID}),
+			call:        list("/api/board", "project_id"),
 			post:        boardSummary,
 		},
 		{
@@ -126,18 +159,18 @@ func (s *Server) mcpTools() []mcpTool {
 		},
 		{
 			Name:        "create_task",
-			Description: "Add a task to the board, at the end of a lane (the first lane if lane_id is left out).",
+			Description: "Add a task to a project's board (the first project if project_id is left out), at the end of a lane (the first lane if lane_id is left out).",
 			InputSchema: schema([]string{"title"}, map[string]any{
-				"title": prop("string", "Short title"), "description": prop("string", "Markdown description"),
+				"title": prop("string", "Short title"), "description": prop("string", "Markdown description"), "project_id": pProjectID,
 				"kind": pKind, "lane_id": pLaneID, "workdir": pWorkdir, "due_at": pDueAt, "fields": pFields,
 			}),
 			call: fixed("POST", "/api/tasks", true),
 		},
 		{
 			Name:        "update_task",
-			Description: "Change a task's title, description, kind, workdir, due time or custom fields. Only the given keys change; due_at null clears it. Use move_task to change its lane.",
+			Description: "Change a task's title, description, kind, workdir, due time, custom fields or project (it goes to the end of its lane there). Only the given keys change; due_at null clears it. Use move_task to change its lane.",
 			InputSchema: schema([]string{"task_id"}, map[string]any{
-				"task_id": pTaskID, "title": prop("string", "New title"), "description": prop("string", "New description (replaces the old one)"),
+				"task_id": pTaskID, "project_id": pProjectID, "title": prop("string", "New title"), "description": prop("string", "New description (replaces the old one)"),
 				"kind": pKind, "workdir": pWorkdir, "due_at": map[string]any{"type": []string{"string", "null"}, "description": pDueAt["description"]}, "fields": pFields,
 			}),
 			call: byID("PATCH", "/api/tasks/%d", "task_id", true),
@@ -170,13 +203,31 @@ func (s *Server) mcpTools() []mcpTool {
 		},
 		{
 			Name:        "list_archived_tasks",
-			Description: "Every archived task.",
-			InputSchema: schema(nil, map[string]any{}),
-			call:        fixed("GET", "/api/archive", false),
+			Description: "Archived tasks of one project, or of all projects if project_id is left out.",
+			InputSchema: schema(nil, map[string]any{"project_id": pProjectID}),
+			call:        list("/api/archive", "project_id"),
+		},
+		{
+			Name:        "create_project",
+			Description: "Add a project: a separate board on the shared lanes.",
+			InputSchema: schema([]string{"name"}, map[string]any{"name": prop("string", "Project name"), "color": prop("string", "CSS colour, e.g. #3b82f6")}),
+			call:        fixed("POST", "/api/projects", true),
+		},
+		{
+			Name:        "update_project",
+			Description: "Rename or recolour a project.",
+			InputSchema: schema([]string{"project_id", "name"}, map[string]any{"project_id": pProjectID, "name": prop("string", "Project name"), "color": prop("string", "CSS colour")}),
+			call:        byID("PATCH", "/api/projects/%d", "project_id", true),
+		},
+		{
+			Name:        "delete_project",
+			Description: "Delete a project; it must have no tasks.",
+			InputSchema: schema([]string{"project_id"}, map[string]any{"project_id": pProjectID}),
+			call:        byID("DELETE", "/api/projects/%d", "project_id", false),
 		},
 		{
 			Name:        "create_lane",
-			Description: "Add a lane at the right end of the board.",
+			Description: "Add a lane at the right end of the board; lanes are shared by all projects.",
 			InputSchema: schema([]string{"name"}, map[string]any{"name": prop("string", "Lane name"), "color": prop("string", "CSS colour, e.g. #3b82f6")}),
 			call:        fixed("POST", "/api/lanes", true),
 		},
@@ -212,21 +263,7 @@ func (s *Server) mcpTools() []mcpTool {
 				"task_id": prop("integer", "Only this task's sessions"),
 				"status":  map[string]any{"type": "string", "enum": []string{"running", "idle", "error", "cancelled", "interrupted"}},
 			}),
-			call: func(a mcpArgs) (string, string, any, error) {
-				q := []string{}
-				if a["task_id"] != nil {
-					id, err := a.id("task_id")
-					if err != nil {
-						return "", "", nil, err
-					}
-					q = append(q, fmt.Sprintf("task_id=%d", id))
-				}
-				var status string
-				if a["status"] != nil && json.Unmarshal(a["status"], &status) == nil && status != "" {
-					q = append(q, "status="+status)
-				}
-				return "GET", "/api/sessions?" + strings.Join(q, "&"), nil, nil
-			},
+			call: list("/api/sessions", "task_id", "status"),
 		},
 		{
 			Name:        "get_session",
@@ -276,7 +313,8 @@ func (s *Server) mcp(w http.ResponseWriter, r *http.Request) {
 			"protocolVersion": version,
 			"capabilities":    map[string]any{"tools": map[string]any{}},
 			"serverInfo":      map[string]any{"name": "assistant", "version": "1"},
-			"instructions": "The user's personal kanban board. Tasks sit in lanes; call get_board first for lane and task ids. " +
+			"instructions": "The user's personal kanban board. Each project has its own board of tasks on the shared lanes; " +
+				"call get_board first for project, lane and task ids. " +
 				"Agent sessions run Claude Code on a task. Archive rather than delete unless told otherwise.",
 		}
 	case "ping":
