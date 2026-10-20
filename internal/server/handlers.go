@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -17,6 +18,8 @@ import (
 )
 
 // ---- board & meta ----
+
+var taskKinds = []string{"task", "coding", "research", "discussion", "reminder"}
 
 // board returns the lanes and the tasks of one project (?project_id=, else the
 // first project), plus every project to switch to.
@@ -86,7 +89,7 @@ func (s *Server) meta(w http.ResponseWriter, r *http.Request) {
 		"models":       agent.Models,
 		"default_mode": s.app.DefaultMode,
 		"workdir":      s.app.DefaultWorkdir,
-		"kinds":        []string{"task", "coding", "research", "discussion", "reminder"},
+		"kinds":        taskKinds,
 	})
 }
 
@@ -446,7 +449,13 @@ func (s *Server) getTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"task": t, "sessions": out, "schedules": schedules, "builds_on": builds, "used_by": usedBy})
+	artifacts, err := s.app.Store.Artifacts(ctx, id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"task": t, "sessions": out, "schedules": schedules, "builds_on": builds, "used_by": usedBy,
+		"artifacts": artifacts})
 }
 
 // taskRef names a related task for the task page.
@@ -978,6 +987,164 @@ func (s *Server) deleteRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.app.Store.DeleteRule(r.Context(), id); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(204)
+}
+
+// ---- skills ----
+
+func (s *Server) listSkills(w http.ResponseWriter, r *http.Request) {
+	xs, err := s.app.Store.Skills(r.Context())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, xs)
+}
+
+func (s *Server) createSkill(w http.ResponseWriter, r *http.Request) {
+	var x store.Skill
+	if err := decode(r, &x); err != nil {
+		writeErr(w, err)
+		return
+	}
+	x.ID = 0
+	s.saveSkill(w, r, x)
+}
+
+// updateSkill changes the given keys only; automations, if given, replace the list.
+func (s *Server) updateSkill(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	x, err := s.app.Store.Skill(r.Context(), id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	cur := x.Automations
+	x.Automations = nil // decoding into the old list would mix old and new entries
+	if err := decode(r, &x); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if x.Automations == nil {
+		x.Automations = cur
+	}
+	x.ID = id
+	s.saveSkill(w, r, x)
+}
+
+func (s *Server) saveSkill(w http.ResponseWriter, r *http.Request, x store.Skill) {
+	x.Name = strings.TrimSpace(x.Name)
+	if x.Name == "" || strings.TrimSpace(x.Body) == "" {
+		writeErr(w, badRequest{"name and body are required"})
+		return
+	}
+	if _, err := app.RenderPrompt(x.Body, store.Task{}); err != nil {
+		writeErr(w, badRequest{"body template: " + err.Error()})
+		return
+	}
+	if x.Automations == nil {
+		x.Automations = []store.SkillAutomation{}
+	}
+	for i := range x.Automations {
+		a := &x.Automations[i]
+		if a.ProjectID != nil && *a.ProjectID == 0 {
+			a.ProjectID = nil
+		}
+		if a.LaneID != nil && *a.LaneID == 0 {
+			a.LaneID = nil
+		}
+		if a.Kind != "" && !slices.Contains(taskKinds, a.Kind) {
+			writeErr(w, badRequest{"unknown kind " + a.Kind})
+			return
+		}
+		if a.ProjectID != nil {
+			if err := s.checkProject(r.Context(), *a.ProjectID); err != nil {
+				writeErr(w, err)
+				return
+			}
+		}
+		if err := s.checkLane(r.Context(), a.LaneID, "lane_id"); err != nil {
+			writeErr(w, err)
+			return
+		}
+	}
+	saved, err := s.app.Store.SaveSkill(r.Context(), x)
+	if errors.Is(err, store.ErrSkillExists) {
+		err = badRequest{err.Error()}
+	}
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, saved)
+}
+
+func (s *Server) deleteSkill(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.app.Store.DeleteSkill(r.Context(), id); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(204)
+}
+
+// runSkill applies a skill to an idle session as its next turn.
+func (s *Server) runSkill(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	var in struct {
+		SkillID int64 `json:"skill_id"`
+	}
+	if err := decode(r, &in); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if _, err := s.app.Store.Skill(r.Context(), in.SkillID); errors.Is(err, store.ErrNotFound) {
+		writeErr(w, badRequest{"unknown skill_id"})
+		return
+	}
+	if err := s.app.RunSkill(r.Context(), id, in.SkillID); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(202)
+}
+
+func (s *Server) listArtifacts(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	xs, err := s.app.Store.Artifacts(r.Context(), id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, xs)
+}
+
+func (s *Server) deleteArtifact(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.app.Store.DeleteArtifact(r.Context(), id); err != nil {
 		writeErr(w, err)
 		return
 	}

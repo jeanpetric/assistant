@@ -63,6 +63,7 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/tasks/{id}/sessions", s.startSession)
 	m.HandleFunc("GET /api/tasks/{id}/schedules", s.listSchedules)
 	m.HandleFunc("POST /api/tasks/{id}/schedules", s.createSchedule)
+	m.HandleFunc("GET /api/tasks/{id}/artifacts", s.listArtifacts)
 
 	m.HandleFunc("GET /api/sessions", s.listSessions)
 	m.HandleFunc("POST /api/sessions", s.startStandaloneSession)
@@ -72,11 +73,18 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/sessions/{id}/cancel", s.cancelSession)
 	m.HandleFunc("POST /api/sessions/{id}/resume", s.resumeSession)
 	m.HandleFunc("POST /api/sessions/{id}/handoff", s.handoffSession)
+	m.HandleFunc("POST /api/sessions/{id}/skill", s.runSkill)
 
 	m.HandleFunc("GET /api/rules", s.listRules)
 	m.HandleFunc("POST /api/rules", s.saveRule)
 	m.HandleFunc("PUT /api/rules/{id}", s.saveRule)
 	m.HandleFunc("DELETE /api/rules/{id}", s.deleteRule)
+
+	m.HandleFunc("GET /api/skills", s.listSkills)
+	m.HandleFunc("POST /api/skills", s.createSkill)
+	m.HandleFunc("PATCH /api/skills/{id}", s.updateSkill)
+	m.HandleFunc("DELETE /api/skills/{id}", s.deleteSkill)
+	m.HandleFunc("DELETE /api/artifacts/{id}", s.deleteArtifact)
 
 	m.HandleFunc("PUT /api/schedules/{id}", s.updateSchedule)
 	m.HandleFunc("DELETE /api/schedules/{id}", s.deleteSchedule)
@@ -136,7 +144,7 @@ func writeErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, store.ErrNotFound):
 		status = http.StatusNotFound
 	case errors.Is(err, store.ErrLaneNotEmpty), errors.Is(err, store.ErrProjectNotEmpty), errors.Is(err, store.ErrLastProject),
-		errors.Is(err, app.ErrBusy), errors.Is(err, app.ErrNoResume):
+		errors.Is(err, app.ErrBusy), errors.Is(err, app.ErrNoResume), errors.Is(err, app.ErrStopping):
 		status = http.StatusConflict
 	case errors.As(err, new(badRequest)), errors.Is(err, app.ErrBadAction), errors.Is(err, app.ErrBadCron), errors.Is(err, store.ErrBadContext):
 		status = http.StatusBadRequest

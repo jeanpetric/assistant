@@ -702,3 +702,71 @@ func TestTaskContextSharing(t *testing.T) {
 		t.Fatalf("get_task = %s", text)
 	}
 }
+
+func TestSkills(t *testing.T) {
+	c := newClient(t)
+	var b board
+	c.do("GET", "/api/board", nil, 200, &b)
+	var skills []store.Skill
+	c.do("GET", "/api/skills", nil, 200, &skills)
+	if len(skills) != 1 || skills[0].Name != "Research summary" {
+		t.Fatalf("seeded = %+v", skills)
+	}
+
+	c.do("POST", "/api/skills", map[string]any{"name": " ", "body": "x"}, 400, nil)
+	c.do("POST", "/api/skills", map[string]any{"name": "x", "body": "{{.Nope"}, 400, nil)
+	c.do("POST", "/api/skills", map[string]any{"name": "research SUMMARY", "body": "x"}, 400, nil)
+	c.do("POST", "/api/skills", map[string]any{"name": "x", "body": "x", "automations": []map[string]any{{"kind": "weird"}}}, 400, nil)
+	c.do("POST", "/api/skills", map[string]any{"name": "x", "body": "x", "automations": []map[string]any{{"lane_id": 999}}}, 400, nil)
+	c.do("POST", "/api/skills", map[string]any{"name": "x", "body": "x", "automations": []map[string]any{{"project_id": 999}}}, 400, nil)
+
+	var sk store.Skill
+	c.do("POST", "/api/skills", map[string]any{"name": "Digest", "body": "Digest {{.Task.Title}}", "artifact": true,
+		"automations": []map[string]any{{"kind": "research", "project_id": b.ProjectID, "enabled": true}}}, 200, &sk)
+	if sk.ID == 0 || len(sk.Automations) != 1 || *sk.Automations[0].ProjectID != b.ProjectID {
+		t.Fatalf("created = %+v", sk)
+	}
+	// A patch keeps what it leaves out.
+	c.do("PATCH", "/api/skills/"+itoa(sk.ID), map[string]any{"description": "short"}, 200, &sk)
+	if sk.Description != "short" || sk.Body != "Digest {{.Task.Title}}" || len(sk.Automations) != 1 || !sk.Artifact {
+		t.Fatalf("patched = %+v", sk)
+	}
+
+	// The automation runs the skill after a research task's turn; its reply becomes an artifact.
+	var task store.Task
+	c.do("POST", "/api/tasks", map[string]any{"title": "Dig", "kind": "research"}, 201, &task)
+	var sess store.Session
+	c.do("POST", "/api/tasks/"+itoa(task.ID)+"/sessions", map[string]any{"prompt": "dig"}, 201, &sess)
+	c.app.Wait()
+	var arts []store.Artifact
+	c.do("GET", "/api/tasks/"+itoa(task.ID)+"/artifacts", nil, 200, &arts)
+	if len(arts) != 1 || arts[0].Skill != "Digest" {
+		t.Fatalf("artifacts = %+v", arts)
+	}
+	var detail struct {
+		Artifacts []store.Artifact `json:"artifacts"`
+	}
+	c.do("GET", "/api/tasks/"+itoa(task.ID), nil, 200, &detail)
+	if len(detail.Artifacts) != 1 {
+		t.Fatalf("task detail = %+v", detail)
+	}
+
+	// By hand; [] clears the automations.
+	c.do("PATCH", "/api/skills/"+itoa(sk.ID), map[string]any{"automations": []any{}}, 200, &sk)
+	if len(sk.Automations) != 0 {
+		t.Fatalf("automations = %+v", sk.Automations)
+	}
+	c.do("POST", "/api/sessions/"+itoa(sess.ID)+"/skill", map[string]any{"skill_id": 999}, 400, nil)
+	c.do("POST", "/api/sessions/999/skill", map[string]any{"skill_id": sk.ID}, 404, nil)
+	c.do("POST", "/api/sessions/"+itoa(sess.ID)+"/skill", map[string]any{"skill_id": sk.ID}, 202, nil)
+	c.app.Wait()
+	c.do("GET", "/api/tasks/"+itoa(task.ID)+"/artifacts", nil, 200, &arts)
+	if len(arts) != 2 {
+		t.Fatalf("artifacts = %+v", arts)
+	}
+
+	c.do("DELETE", "/api/artifacts/"+itoa(arts[0].ID), nil, 204, nil)
+	c.do("DELETE", "/api/artifacts/"+itoa(arts[0].ID), nil, 404, nil)
+	c.do("DELETE", "/api/skills/"+itoa(sk.ID), nil, 204, nil)
+	c.do("PATCH", "/api/skills/"+itoa(sk.ID), map[string]any{"name": "x"}, 404, nil)
+}

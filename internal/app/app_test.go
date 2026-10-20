@@ -19,6 +19,7 @@ type fakeRunner struct {
 	mu     sync.Mutex
 	reqs   []agent.Request
 	err    error
+	failOn string            // if set, prompts starting with it fail
 	block  chan struct{}     // if set, Run waits for close or ctx cancel
 	limits *agent.RateLimits // if set, emitted as a rate_limit event
 }
@@ -43,6 +44,9 @@ func (f *fakeRunner) Run(ctx context.Context, req agent.Request, emit func(agent
 	}
 	emit(agent.Event{Role: "assistant", Kind: "text", Content: "echo: " + req.Prompt})
 	emit(agent.Event{Role: "system", Kind: "result", Content: "ok", CostUSD: 0.5})
+	if f.failOn != "" && strings.HasPrefix(req.Prompt, f.failOn) {
+		return errors.New("failed: " + f.failOn)
+	}
 	return f.err
 }
 
@@ -503,6 +507,10 @@ func TestShutdownInterruptsAndResume(t *testing.T) {
 	if got.Status != store.StatusInterrupted {
 		t.Fatalf("shutdown should mark interrupted, got %+v", got)
 	}
+	// Nothing new starts once shut down, e.g. skills after a turn that just finished.
+	if err := a.SendMessage(ctx, sess.ID, "more"); !errors.Is(err, ErrStopping) {
+		t.Fatalf("send after shutdown: %v", err)
+	}
 
 	// A fresh process picks the session up again.
 	b := New(a.Store, r, "/default/dir", "bypassPermissions")
@@ -737,3 +745,125 @@ func TestTaskBriefSharesEarlierResults(t *testing.T) {
 }
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
+
+func TestSkillAutomationRunsAfterTurn(t *testing.T) {
+	a, r := newApp(t)
+	ctx := context.Background()
+	lanes := lanesByName(t, a)
+	review := lanes["Review"]
+	task, _ := a.Store.CreateTask(ctx, store.Task{Title: "Find a queue", Kind: "research", LaneID: lanes["In progress"]})
+	other, _ := a.Store.CreateTask(ctx, store.Task{Title: "Code it", Kind: "coding", LaneID: lanes["In progress"]})
+	sum, err := a.Store.SaveSkill(ctx, store.Skill{Name: "Summary", Body: "Summarise {{.Task.Title}}.", Artifact: true,
+		Automations: []store.SkillAutomation{{Kind: "research", Enabled: true}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Store.SaveSkill(ctx, store.Skill{Name: "Notes", Body: "Note it.", Automations: []store.SkillAutomation{{Enabled: true}}})
+
+	sess, err := a.StartSession(ctx, StartOpts{TaskID: task.ID, Prompt: "research", DoneLaneID: &review})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Wait()
+	reqs := r.requests()
+	if len(reqs) != 3 {
+		t.Fatalf("want the turn and two skill turns, got %+v", reqs)
+	}
+	// Skills run in automation order, each continuing the session.
+	if !strings.HasPrefix(reqs[1].Prompt, `Apply the skill "Summary"`) || !strings.Contains(reqs[1].Prompt, ArtifactNote) ||
+		!strings.HasSuffix(reqs[1].Prompt, "Summarise Find a queue.") || reqs[1].ResumeID != "claude-1" {
+		t.Fatalf("summary prompt = %+v", reqs[1])
+	}
+	if !strings.HasPrefix(reqs[2].Prompt, `Apply the skill "Notes"`) || strings.Contains(reqs[2].Prompt, ArtifactNote) {
+		t.Fatalf("notes prompt = %q", reqs[2].Prompt)
+	}
+	arts, _ := a.Store.Artifacts(ctx, task.ID)
+	if len(arts) != 1 || arts[0].Skill != "Summary" || arts[0].Content != "ok" || *arts[0].SessionID != sess.ID {
+		t.Fatalf("artifacts = %+v", arts)
+	}
+	// The done lane waits for the skills.
+	if got, _ := a.Store.Task(ctx, task.ID); got.LaneID != review {
+		t.Fatalf("task in lane %d, want %d", got.LaneID, review)
+	}
+	if got, _ := a.Store.Session(ctx, sess.ID); got.Status != store.StatusIdle {
+		t.Fatalf("session = %+v", got)
+	}
+
+	// A coding task only matches the any-kind skill; skill turns don't trigger skills.
+	if _, err := a.StartSession(ctx, StartOpts{TaskID: other.ID, Prompt: "code"}); err != nil {
+		t.Fatal(err)
+	}
+	a.Wait()
+	if reqs = r.requests()[3:]; len(reqs) != 2 || !strings.HasPrefix(reqs[1].Prompt, `Apply the skill "Notes"`) {
+		t.Fatalf("coding requests = %+v", reqs)
+	}
+
+	// Standalone sessions run no automations.
+	if _, err := a.StartSession(ctx, StartOpts{Prompt: "chat"}); err != nil {
+		t.Fatal(err)
+	}
+	a.Wait()
+	if n := len(r.requests()); n != 6 {
+		t.Fatalf("standalone ran skills: %d requests", n)
+	}
+
+	// Run by hand.
+	if err := a.RunSkill(ctx, sess.ID, sum.ID); err != nil {
+		t.Fatal(err)
+	}
+	a.Wait()
+	if arts, _ = a.Store.Artifacts(ctx, task.ID); len(arts) != 2 {
+		t.Fatalf("artifacts = %+v", arts)
+	}
+	if n := len(r.requests()); n != 7 {
+		t.Fatalf("a skill run by hand triggered automations: %d requests", n)
+	}
+}
+
+func TestFailedSkillStopsTheChain(t *testing.T) {
+	a, r := newApp(t)
+	ctx := context.Background()
+	lanes := lanesByName(t, a)
+	review := lanes["Review"]
+	task, _ := a.Store.CreateTask(ctx, store.Task{Title: "T", LaneID: lanes["Todo"]})
+	a.Store.SaveSkill(ctx, store.Skill{Name: "A", Body: "a", Automations: []store.SkillAutomation{{Enabled: true}}})
+	a.Store.SaveSkill(ctx, store.Skill{Name: "B", Body: "{{.Task.Nope}}", Automations: []store.SkillAutomation{{Enabled: true}}})
+
+	// B's template is broken: it never runs and the task stays put.
+	sess, _ := a.Store.CreateSession(ctx, store.Session{TaskID: task.ID, Title: "s", Mode: "plan", DoneLaneID: &review})
+	if err := a.launch(sess, "work", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	a.Wait() // the work turn and skill A both succeed; B's template fails
+	if n := len(r.requests()); n != 2 {
+		t.Fatalf("requests = %d", n)
+	}
+	if got, _ := a.Store.Task(ctx, task.ID); got.LaneID != lanes["Todo"] {
+		t.Fatalf("task moved despite a failed skill: %+v", got)
+	}
+	notes, _ := a.Store.Notifications(ctx, true)
+	if len(notes) != 1 || !strings.Contains(notes[0].Message, `Skill "B" could not run`) {
+		t.Fatalf("notifications = %+v", notes)
+	}
+
+	// A skill turn that fails ends the chain the same way.
+	r.mu.Lock()
+	r.failOn = `Apply the skill "A"`
+	r.mu.Unlock()
+	a.Store.MarkNotificationRead(ctx, notes[0].ID)
+	sess, _ = a.Store.CreateSession(ctx, store.Session{TaskID: task.ID, Title: "s2", Mode: "plan", DoneLaneID: &review})
+	if err := a.launch(sess, "work", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	a.Wait()
+	if n := len(r.requests()); n != 4 {
+		t.Fatalf("requests = %d", n)
+	}
+	if got, _ := a.Store.Task(ctx, task.ID); got.LaneID != lanes["Todo"] {
+		t.Fatalf("task moved despite a failed skill: %+v", got)
+	}
+	notes, _ = a.Store.Notifications(ctx, true)
+	if len(notes) != 1 || !strings.Contains(notes[0].Message, `Skill "A" ended error`) {
+		t.Fatalf("notifications = %+v", notes)
+	}
+}

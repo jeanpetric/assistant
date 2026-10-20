@@ -206,6 +206,57 @@ CREATE TABLE task_context (
 );
 CREATE INDEX task_context_source ON task_context(source_id);
 `,
+	// Skills: instructions an agent applies to the work of its session, run
+	// after a successful turn when one of the skill's automations matches the
+	// task. A skill's reply can be kept as an artifact on the task. Starts with
+	// an example research summary whose automation is off.
+	`
+CREATE TABLE skills (
+	id INTEGER PRIMARY KEY,
+	name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+	description TEXT NOT NULL DEFAULT '',
+	body TEXT NOT NULL,
+	artifact INTEGER NOT NULL DEFAULT 0,
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL
+);
+CREATE TABLE skill_automations (
+	id INTEGER PRIMARY KEY,
+	skill_id INTEGER NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+	kind TEXT NOT NULL DEFAULT '',
+	project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
+	lane_id INTEGER REFERENCES lanes(id) ON DELETE CASCADE,
+	enabled INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX skill_automations_skill ON skill_automations(skill_id);
+CREATE TABLE artifacts (
+	id INTEGER PRIMARY KEY,
+	task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+	session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
+	skill TEXT NOT NULL DEFAULT '',
+	content TEXT NOT NULL,
+	created_at INTEGER NOT NULL
+);
+CREATE INDEX artifacts_task ON artifacts(task_id, id);
+INSERT INTO skills (id, name, description, body, artifact, created_at, updated_at) VALUES (1, 'Research summary',
+	'Sums up a research session as a short report',
+	'Write a summary of the research done in this session, for someone who did not follow it.
+
+Use this format:
+
+# {{.Task.Title}}
+
+## TL;DR
+The answer in two or three sentences.
+
+## Findings
+- One bullet per finding, each with its source (link, file or command).
+
+## Open questions
+
+## Recommended next steps', 1, strftime('%s', 'now') * 1000, strftime('%s', 'now') * 1000);
+INSERT INTO skill_automations (skill_id, kind, enabled) VALUES (1, 'research', 0);
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

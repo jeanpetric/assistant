@@ -123,7 +123,7 @@ function trunc(s, n) {
 // ---------- state & routing ----------
 
 // projectId: the project whose tasks the board, list and archive show; remembered across reloads.
-const state = { meta: null, board: null, workdirs: [], timers: [], projectId: Number(recall('project')) || 0 };
+const state = { meta: null, board: null, workdirs: [], skills: [], timers: [], projectId: Number(recall('project')) || 0 };
 const view = document.getElementById('view');
 
 function every(ms, fn) {
@@ -548,21 +548,25 @@ async function taskView(id, { every, leave, reload }) {
   };
   data.sessions.forEach(addSession);
 
-  const main = h('div', {}, sessionPanel.el, sessionsEl,
+  const artifacts = artifactsPanel(id, data.artifacts);
+  const main = h('div', {}, sessionPanel.el, artifacts.el, sessionsEl,
     data.sessions.length ? null : h('p', { class: 'muted' }, 'No agent sessions yet.'));
   every(2000, async () => {
     components.forEach(c => c.drawLimits());
     const list = await api('GET', `/api/sessions?task_id=${id}`);
+    let finished = false; // a turn ended: a skill may have left an artifact
     for (const s of list) {
       const c = components.get(s.id);
       if (!c) {
         const full = await api('GET', `/api/sessions/${s.id}`);
         addSession(Object.assign(full.session, { messages: full.messages }));
       } else if (s.status === 'running' || s.status !== c.session.status || s.updated_at !== c.session.updated_at) {
+        finished = finished || (c.session.status === 'running' && s.status !== 'running');
         const upd = await api('GET', `/api/sessions/${s.id}?after=${c.lastId()}`);
         c.update(upd.session, upd.messages);
       }
     }
+    if (finished) artifacts.reload();
   });
 
   return {
@@ -691,8 +695,20 @@ function sessionComponent(session, messages) {
     class: 'small', style: 'width:auto',
     onchange: async e => { c.session = await api('PATCH', `/api/sessions/${c.session.id}`, { done_lane_id: doneLaneValue(e.target) }); },
   }) : null;
+  // Applies a skill to the session's work as its next turn.
+  const runSkill = state.skills.length ? select([['', 'Run skill…'], ...state.skills.map(sk => [sk.id, sk.name])], '', {
+    class: 'small', style: 'width:auto', title: 'Apply a skill to the work of this session',
+    onchange: async e => {
+      const skillId = Number(e.target.value);
+      e.target.value = '';
+      if (!skillId) return;
+      await api('POST', `/api/sessions/${c.session.id}/skill`, { skill_id: skillId });
+      c.session.status = 'running';
+      drawHead();
+    },
+  }) : null;
   const foot = h('div', { class: 'session-foot' }, input,
-    h('div', { class: 'row', style: 'margin-top:6px; justify-content:flex-end' }, doneLane, send));
+    h('div', { class: 'row', style: 'margin-top:6px; justify-content:flex-end' }, runSkill, doneLane, send));
   const el = h('div', { class: 'session' }, head, body, limits, foot);
   const c = { el, session, lastId: () => last };
 
@@ -740,6 +756,7 @@ function sessionComponent(session, messages) {
       h('button', { class: 'ghost small', onclick: () => el.classList.toggle('collapsed') }, '▾'),
     ].filter(Boolean));
     send.disabled = running || !s.claude_session_id;
+    if (runSkill) runSkill.disabled = send.disabled;
     drawLimits();
   }
 
@@ -909,7 +926,8 @@ function sessionDialog() {
 
 async function renderSettings() {
   const b = await loadBoard();
-  const [rules, settings] = await Promise.all([api('GET', '/api/rules'), api('GET', '/api/settings')]);
+  const [rules, settings, skills] = await Promise.all([api('GET', '/api/rules'), api('GET', '/api/settings'), api('GET', '/api/skills')]);
+  state.skills = skills;
   const rerender = () => renderSettings();
 
   const lanes = h('div', { class: 'panel' }, h('h2', {}, 'Lanes'),
@@ -1003,7 +1021,105 @@ async function renderSettings() {
       : h('p', { class: 'muted' }, 'No rules yet.'));
 
   view.replaceChildren(h('div', { style: 'max-width:900px' }, projects, lanes, workdirsPanel(settings.workdirs, rerender), rulesPanel,
-    archivePanel(b.lanes, settings), fields));
+    skillsPanel(skills, b, rerender), archivePanel(b.lanes, settings), fields));
+}
+
+// ---------- skills ----------
+
+// One automation in words, e.g. "research tasks · Assistant · in Review".
+function automationLabel(a) {
+  return [a.kind ? `${a.kind} tasks` : 'any task', a.project_id ? projectName(a.project_id) : null,
+    a.lane_id ? 'in ' + laneName(a.lane_id) : null].filter(Boolean).join(' · ');
+}
+
+function skillsPanel(skills, b, rerender) {
+  const runsWhen = sk => {
+    const on = sk.automations.filter(a => a.enabled);
+    return on.length ? 'After a turn on ' + on.map(automationLabel).join('; ') : 'By hand only';
+  };
+  return h('div', { class: 'panel' },
+    h('div', { class: 'row' }, h('h2', { class: 'grow' }, 'Skills'), h('button', { onclick: () => skillDialog(null, b, rerender) }, '+ Add skill')),
+    h('p', { class: 'muted small' }, 'Instructions an agent applies to the work of its session: automatically after a successful turn on a ' +
+      'matching task, or by hand from a session ("Run skill"). A skill can keep the agent\'s reply as an artifact on the task.'),
+    skills.length ? h('table', {}, h('thead', {}, h('tr', {}, ['Skill', 'Runs', 'Artifact', ''].map(x => h('th', {}, x)))),
+      h('tbody', {}, skills.map(sk => h('tr', {},
+        h('td', {}, sk.name, sk.description ? h('div', { class: 'muted small' }, sk.description) : null),
+        h('td', { class: 'small' }, runsWhen(sk)),
+        h('td', { class: 'muted small' }, sk.artifact ? 'kept' : '—'),
+        h('td', {}, h('button', { class: 'ghost small', onclick: () => skillDialog(sk, b, rerender) }, 'Edit'), ' ',
+          h('button', {
+            class: 'danger small', onclick: async () => {
+              if (confirm(`Delete skill ${sk.name}? Artifacts it made stay.`)) { await api('DELETE', `/api/skills/${sk.id}`); rerender(); }
+            },
+          }, 'Delete'))))))
+      : h('p', { class: 'muted' }, 'No skills yet.'));
+}
+
+function skillDialog(skill, b, done) {
+  skill = skill || { name: '', description: '', body: '', artifact: true, automations: [] };
+  const dlg = document.getElementById('dialog');
+  const name = h('input', { value: skill.name, placeholder: 'e.g. Research summary' });
+  const description = h('input', { value: skill.description, placeholder: 'What it is for' });
+  const body = h('textarea', { rows: 14, class: 'mono' }, skill.body);
+  const artifact = h('input', { type: 'checkbox', checked: skill.artifact });
+  const nullableID = sel => sel.value ? Number(sel.value) : null;
+  const rows = h('div');
+  const addRow = a => {
+    const enabled = h('input', { type: 'checkbox', checked: a.enabled, title: 'Enabled' });
+    const kind = select([['', 'Any kind'], ...state.meta.kinds.map(k => [k, k])], a.kind);
+    const project = select([['', 'Any project'], ...b.projects.map(p => [p.id, p.name])], a.project_id ?? '');
+    const lane = select([['', 'In any lane'], ...b.lanes.map(l => [l.id, 'In ' + l.name])], a.lane_id ?? '');
+    const row = h('div', { class: 'row automation', style: 'margin-bottom:6px' }, enabled,
+      h('div', { class: 'grow' }, kind), h('div', { class: 'grow' }, project), h('div', { class: 'grow' }, lane),
+      h('button', { class: 'ghost small', title: 'Remove', onclick: () => row.remove() }, '✕'));
+    row.value = () => ({ enabled: enabled.checked, kind: kind.value, project_id: nullableID(project), lane_id: nullableID(lane) });
+    rows.append(row);
+  };
+  skill.automations.forEach(addRow);
+  dlg.replaceChildren(h('h2', {}, skill.id ? 'Edit skill' : 'New skill'),
+    h('div', { class: 'row' }, h('div', { class: 'grow' }, h('label', {}, 'Name'), name),
+      h('div', { class: 'grow' }, h('label', {}, 'Description'), description)),
+    h('label', {}, 'Instructions — what the agent does with its session\'s work, e.g. the shape of a summary. ' +
+      'Template vars: {{.Task.Title}}, {{.Task.ID}}, {{.Fields.pull_request}}, {{.Context}}'),
+    body,
+    h('label', { class: 'row', style: 'margin-top:8px' }, artifact, 'Keep the agent\'s reply as an artifact on the task'),
+    h('label', {}, 'Run automatically after an agent turn finishes successfully, on a task that matches any of:'),
+    rows,
+    h('button', { class: 'ghost small', onclick: () => addRow({ enabled: true, kind: '', project_id: null, lane_id: null }) }, '+ Add condition'),
+    h('div', { class: 'dialog-actions' },
+      cancelButton(dlg),
+      h('button', {
+        onclick: async () => {
+          const out = {
+            name: name.value, description: description.value, body: body.value, artifact: artifact.checked,
+            automations: [...rows.children].map(r => r.value()),
+          };
+          await api(skill.id ? 'PATCH' : 'POST', skill.id ? `/api/skills/${skill.id}` : '/api/skills', out);
+          dlg.close();
+          done();
+        },
+      }, 'Save')));
+  dlg.showModal();
+  name.focus();
+}
+
+// The task's artifacts, newest first; reload() fetches them again.
+function artifactsPanel(taskId, artifacts) {
+  const el = h('div');
+  const draw = xs => el.replaceChildren(...(xs.length ? [h('div', { class: 'panel' }, h('h3', {}, 'Artifacts'),
+    xs.map((x, i) => h('details', { class: 'artifact', open: i === 0 },
+      h('summary', {}, h('strong', {}, x.skill || 'Artifact'), ' ', h('span', { class: 'muted small' }, fmtTime(x.created_at))),
+      h('div', { class: 'md' }, markdown(x.content)),
+      h('div', { class: 'row', style: 'justify-content:flex-end; margin-top:6px' },
+        h('button', { class: 'ghost small', onclick: () => navigator.clipboard.writeText(x.content).then(() => toast('Copied')) }, 'Copy'),
+        h('button', {
+          class: 'danger small', onclick: async () => {
+            if (confirm('Delete this artifact?')) { await api('DELETE', `/api/artifacts/${x.id}`); reload(); }
+          },
+        }, 'Delete')))))] : []));
+  const reload = async () => draw(await api('GET', `/api/tasks/${taskId}/artifacts`));
+  draw(artifacts);
+  return { el, reload };
 }
 
 // The directories agents can be started in; every directory field is a dropdown of these.
@@ -1305,7 +1421,8 @@ function drawHeaderHints() {
 // ---------- boot ----------
 
 (async function boot() {
-  [state.meta, { workdirs: state.workdirs }] = await Promise.all([api('GET', '/api/meta'), api('GET', '/api/settings')]);
+  [state.meta, { workdirs: state.workdirs }, state.skills] = await Promise.all([api('GET', '/api/meta'), api('GET', '/api/settings'),
+    api('GET', '/api/skills')]);
   document.getElementById('new-task-btn').addEventListener('click', newTaskDialog);
   document.getElementById('reminder-btn').addEventListener('click', reminderDialog);
   document.getElementById('new-session-btn').addEventListener('click', sessionDialog);

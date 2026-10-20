@@ -279,3 +279,8 @@ kbd {
 .topbar nav a.active .kbd-hint { opacity: .4; }
 @media (max-width: 1200px) { .topbar .kbd-hint { display: none; } }
 .topbar > .kbd-hint { margin-left: -12px; color: var(--muted); }
+
+textarea.mono { font-family: var(--mono); font-size: 13px; }
+.artifact { border-top: 1px solid var(--border); padding: 8px 0; }
+.artifact:first-of-type { border-top: 0; }
+.artifact > summary { cursor: pointer; margin-bottom: 6px; }

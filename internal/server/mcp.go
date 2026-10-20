@@ -104,15 +104,25 @@ func schema(required []string, props map[string]any) map[string]any {
 func prop(typ, desc string) map[string]any { return map[string]any{"type": typ, "description": desc} }
 
 var (
-	pTaskID         = prop("integer", "Task id")
-	pLaneID         = prop("integer", "Lane id (see get_board)")
-	pProjectID      = prop("integer", "Project id (see get_board); every project has its own board on the shared lanes")
-	pFields         = map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}, "description": "Custom fields by key, e.g. {\"pull_request\": \"https://…\"}; see get_board for the keys. An empty value removes a field."}
-	pDueAt          = prop("string", "Due time, RFC 3339 (e.g. 2026-10-21T09:00:00+02:00); a notification fires when it's reached")
-	pKind           = map[string]any{"type": "string", "enum": []string{"task", "coding", "research", "discussion", "reminder"}}
-	pWorkdir        = prop("string", "Absolute working directory for agent sessions")
-	pProjectWorkdir = prop("string", "Default working directory for agent sessions on the project's tasks; empty means the app default")
-	pContextFrom    = map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "Ids of earlier tasks this task builds on, e.g. the research it follows from. Their agents' final replies go into the context of this task's agents (include_context, rules and schedules using {{.Context}}). Empty: the task starts from scratch."}
+	pTaskID           = prop("integer", "Task id")
+	pLaneID           = prop("integer", "Lane id (see get_board)")
+	pProjectID        = prop("integer", "Project id (see get_board); every project has its own board on the shared lanes")
+	pFields           = map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}, "description": "Custom fields by key, e.g. {\"pull_request\": \"https://…\"}; see get_board for the keys. An empty value removes a field."}
+	pDueAt            = prop("string", "Due time, RFC 3339 (e.g. 2026-10-21T09:00:00+02:00); a notification fires when it's reached")
+	pKind             = map[string]any{"type": "string", "enum": taskKinds}
+	pWorkdir          = prop("string", "Absolute working directory for agent sessions")
+	pProjectWorkdir   = prop("string", "Default working directory for agent sessions on the project's tasks; empty means the app default")
+	pSkillAutomations = map[string]any{"type": "array", "description": "When the skill runs by itself: after an agent turn on a task finishes successfully, in that session, " +
+		"if the task matches one of these. Left out keeps the saved list; [] means only by hand (run_skill).",
+		"items": schema(nil, map[string]any{
+			"kind":       map[string]any{"type": "string", "enum": append([]string{""}, taskKinds...), "description": "Task kind; empty matches any"},
+			"project_id": prop("integer", "Only tasks of this project; left out matches any"),
+			"lane_id":    prop("integer", "Only tasks in this lane when the turn ends; left out matches any"),
+			"enabled":    prop("boolean", "Off keeps the automation without running it"),
+		})}
+	pSkillBody = prop("string", "Instructions for the agent (Markdown), e.g. how a summary should look and where to write it. "+
+		"A prompt template: {{.Task.Title}}, {{.Task.ID}}, {{.Fields.pull_request}}, {{.Context}}")
+	pContextFrom = map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "Ids of earlier tasks this task builds on, e.g. the research it follows from. Their agents' final replies go into the context of this task's agents (include_context, rules and schedules using {{.Context}}). Empty: the task starts from scratch."}
 )
 
 func (s *Server) mcpTools() []mcpTool {
@@ -260,6 +270,44 @@ func (s *Server) mcpTools() []mcpTool {
 				"done_lane_id":    prop("integer", "Move the task to this lane once the agent finishes successfully"),
 			}),
 			call: byID("POST", "/api/tasks/%d/sessions", "task_id", true),
+		},
+		{
+			Name: "list_skills",
+			Description: "The user's skills: instructions an agent applies to the work of its session, by hand (run_skill) or automatically " +
+				"after a successful agent turn on a matching task. A skill with artifact on keeps the agent's reply on the task (see get_task).",
+			InputSchema: schema(nil, map[string]any{}),
+			call:        fixed("GET", "/api/skills", false),
+		},
+		{
+			Name:        "create_skill",
+			Description: "Add a skill.",
+			InputSchema: schema([]string{"name", "body"}, map[string]any{
+				"name": prop("string", "Unique name"), "description": prop("string", "What it is for"), "body": pSkillBody,
+				"artifact":    prop("boolean", "Keep the agent's reply as an artifact on the task"),
+				"automations": pSkillAutomations,
+			}),
+			call: fixed("POST", "/api/skills", true),
+		},
+		{
+			Name:        "update_skill",
+			Description: "Change a skill; only the given keys change (automations, if given, replace the list).",
+			InputSchema: schema([]string{"skill_id"}, map[string]any{
+				"skill_id": prop("integer", "Skill id"), "name": prop("string", "Unique name"), "description": prop("string", "What it is for"),
+				"body": pSkillBody, "artifact": prop("boolean", "Keep the agent's reply as an artifact on the task"), "automations": pSkillAutomations,
+			}),
+			call: byID("PATCH", "/api/skills/%d", "skill_id", true),
+		},
+		{
+			Name:        "delete_skill",
+			Description: "Delete a skill and its automations; artifacts it made stay.",
+			InputSchema: schema([]string{"skill_id"}, map[string]any{"skill_id": prop("integer", "Skill id")}),
+			call:        byID("DELETE", "/api/skills/%d", "skill_id", false),
+		},
+		{
+			Name:        "run_skill",
+			Description: "Apply a skill to an idle agent session now, as its next turn.",
+			InputSchema: schema([]string{"session_id", "skill_id"}, map[string]any{"session_id": prop("integer", "Session id"), "skill_id": prop("integer", "Skill id")}),
+			call:        byID("POST", "/api/sessions/%d/skill", "session_id", true),
 		},
 		{
 			Name:        "list_sessions",
@@ -431,6 +479,7 @@ func taskWithoutTranscripts(raw []byte) ([]byte, error) {
 		Schedules json.RawMessage              `json:"schedules"`
 		BuildsOn  json.RawMessage              `json:"builds_on"`
 		UsedBy    json.RawMessage              `json:"used_by"`
+		Artifacts json.RawMessage              `json:"artifacts"`
 	}
 	if err := json.Unmarshal(raw, &t); err != nil {
 		return nil, err

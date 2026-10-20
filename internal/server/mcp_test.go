@@ -227,3 +227,38 @@ func TestMCPTransport(t *testing.T) {
 		t.Fatalf("ping: %d %v", status, out)
 	}
 }
+
+func TestMCPSkills(t *testing.T) {
+	c := newClient(t)
+	text, isErr := c.tool("create_skill", map[string]any{"name": "Digest", "body": "Digest it", "artifact": true,
+		"automations": []map[string]any{{"kind": "research", "enabled": true}}})
+	var sk store.Skill
+	if isErr || json.Unmarshal([]byte(text), &sk) != nil || len(sk.Automations) != 1 {
+		t.Fatalf("create_skill: %s", text)
+	}
+	if text, isErr = c.tool("update_skill", map[string]any{"skill_id": sk.ID, "description": "d"}); isErr || !strings.Contains(text, `"description":"d"`) ||
+		!strings.Contains(text, `"kind":"research"`) {
+		t.Fatalf("update_skill: %s", text)
+	}
+	if text, _ = c.tool("list_skills", nil); !strings.Contains(text, "Digest") {
+		t.Fatalf("list_skills: %s", text)
+	}
+
+	text, _ = c.tool("create_task", map[string]any{"title": "Dig"})
+	var task store.Task
+	json.Unmarshal([]byte(text), &task)
+	text, _ = c.tool("start_session", map[string]any{"task_id": task.ID, "prompt": "dig"})
+	var sess store.Session
+	json.Unmarshal([]byte(text), &sess)
+	c.app.Wait()
+	if text, isErr = c.tool("run_skill", map[string]any{"session_id": sess.ID, "skill_id": sk.ID}); isErr {
+		t.Fatalf("run_skill: %s", text)
+	}
+	c.app.Wait()
+	if text, _ = c.tool("get_task", map[string]any{"task_id": task.ID}); !strings.Contains(text, `"artifacts":[{`) || !strings.Contains(text, `"skill":"Digest"`) {
+		t.Fatalf("get_task should list artifacts: %s", text)
+	}
+	if text, isErr = c.tool("delete_skill", map[string]any{"skill_id": sk.ID}); isErr || text != "ok" {
+		t.Fatalf("delete_skill: %s", text)
+	}
+}

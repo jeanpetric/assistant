@@ -24,6 +24,7 @@ var (
 	ErrNoResume  = errors.New("session has no agent session to resume")
 	ErrBadAction = errors.New("action must be agent or remind")
 	ErrBadCron   = errors.New("invalid cron expression")
+	ErrStopping  = errors.New("the app is shutting down")
 )
 
 type App struct {
@@ -274,6 +275,11 @@ func (a *App) launch(sess store.Session, prompt, resumeID string, done func(ctx 
 		cancel()
 		return ErrBusy
 	}
+	if a.stopping {
+		a.mu.Unlock()
+		cancel()
+		return ErrStopping
+	}
 	a.running[sess.ID] = cancel
 	a.wg.Add(1)
 	a.mu.Unlock()
@@ -295,12 +301,6 @@ func (a *App) launch(sess store.Session, prompt, resumeID string, done func(ctx 
 
 	go func() {
 		defer a.wg.Done()
-		defer func() {
-			a.mu.Lock()
-			delete(a.running, sess.ID)
-			a.mu.Unlock()
-			cancel()
-		}()
 		bg := context.Background()
 		req := agent.Request{Prompt: prompt, Workdir: sess.Workdir, Mode: sess.Mode, Model: sess.Model, ResumeID: resumeID}
 		failed := false
@@ -340,11 +340,16 @@ func (a *App) launch(sess store.Session, prompt, resumeID string, done func(ctx 
 			status = store.StatusError
 		}
 		a.Store.SetSessionStatus(bg, sess.ID, status, msg)
+		// Free the session first: what follows may start its next turn.
+		a.mu.Lock()
+		delete(a.running, sess.ID)
+		a.mu.Unlock()
+		cancel()
 		switch {
 		case done != nil:
 			done(bg, status)
 		case status == store.StatusIdle:
-			a.moveWhenDone(bg, sess.ID, startLane)
+			a.afterTurn(bg, sess.ID, startLane)
 		}
 	}()
 	return nil
@@ -371,6 +376,112 @@ func (a *App) Limits(sessionID int64) agent.RateLimits {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.limits[sessionID]
+}
+
+// afterTurn follows a successful turn: the skills whose automations match the
+// task run in the session, one turn each, then the task moves to its done lane.
+// A skill turn that does not finish successfully ends the chain there.
+func (a *App) afterTurn(ctx context.Context, sessionID, startLane int64) {
+	sess, err := a.Store.Session(ctx, sessionID)
+	if err != nil {
+		return
+	}
+	var skills []store.Skill
+	if sess.TaskID != 0 {
+		if task, err := a.Store.Task(ctx, sess.TaskID); err == nil {
+			if skills, err = a.Store.MatchingSkills(ctx, task.Kind, task.ProjectID, task.LaneID); err != nil {
+				log.Printf("session %d: skills: %v", sessionID, err)
+			}
+		}
+	}
+	a.runSkills(ctx, sess, skills, func(ctx context.Context) { a.moveWhenDone(ctx, sessionID, startLane) })
+}
+
+func (a *App) runSkills(ctx context.Context, sess store.Session, skills []store.Skill, then func(context.Context)) {
+	if len(skills) == 0 {
+		then(ctx)
+		return
+	}
+	sk := skills[0]
+	err := a.runSkill(ctx, sess, sk, func(ctx context.Context, status string) {
+		if status != store.StatusIdle {
+			a.notifySession(ctx, sess, fmt.Sprintf("Skill %q ended %s in session %q", sk.Name, status, sess.Title))
+			return
+		}
+		a.runSkills(ctx, sess, skills[1:], then)
+	})
+	if err != nil {
+		a.notifySession(ctx, sess, fmt.Sprintf("Skill %q could not run in session %q: %v", sk.Name, sess.Title, err))
+	}
+}
+
+// SkillIntro opens the prompt that applies a skill; ArtifactNote follows it
+// for skills whose reply is kept.
+const (
+	SkillIntro   = "Apply the skill %q to the work done in this session so far. Its instructions follow."
+	ArtifactNote = "Your final reply is saved as an artifact on the task: reply with the artifact itself, nothing before or after it."
+)
+
+// RunSkill applies a skill to an idle session by hand, as its next turn.
+func (a *App) RunSkill(ctx context.Context, sessionID, skillID int64) error {
+	sess, err := a.Store.Session(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	sk, err := a.Store.Skill(ctx, skillID)
+	if err != nil {
+		return err
+	}
+	return a.runSkill(ctx, sess, sk, nil)
+}
+
+// runSkill continues the session with the skill's prompt. Once the turn ends,
+// a successful reply is kept as an artifact if the skill asks for it, then
+// done, if set, gets the turn's status.
+func (a *App) runSkill(ctx context.Context, sess store.Session, sk store.Skill, done func(context.Context, string)) error {
+	if sess.ClaudeSessionID == "" {
+		return ErrNoResume
+	}
+	var task store.Task
+	brief := ""
+	if sess.TaskID != 0 {
+		var err error
+		if task, err = a.Store.Task(ctx, sess.TaskID); err != nil {
+			return err
+		}
+		brief = a.TaskBrief(ctx, task)
+	}
+	body, err := renderPrompt(sk.Body, task, brief)
+	if err != nil {
+		return fmt.Errorf("skill template: %w", err)
+	}
+	parts := []string{fmt.Sprintf(SkillIntro, sk.Name)}
+	if sk.Artifact && sess.TaskID != 0 {
+		parts = append(parts, ArtifactNote)
+	}
+	prompt := strings.Join(append(parts, body), "\n\n")
+	return a.launch(sess, prompt, sess.ClaudeSessionID, func(ctx context.Context, status string) {
+		if status == store.StatusIdle && sk.Artifact && sess.TaskID != 0 {
+			if reply, err := a.lastReply(ctx, sess.ID); err != nil {
+				a.notifySession(ctx, sess, fmt.Sprintf("Skill %q wrote no artifact in session %q", sk.Name, sess.Title))
+			} else if _, err := a.Store.AddArtifact(ctx, store.Artifact{TaskID: sess.TaskID, SessionID: &sess.ID, Skill: sk.Name,
+				Content: strings.TrimSpace(reply)}); err != nil {
+				log.Printf("session %d: artifact: %v", sess.ID, err)
+			}
+		}
+		if done != nil {
+			done(ctx, status)
+		}
+	})
+}
+
+// notifySession notifies about a session, on its task if it has one.
+func (a *App) notifySession(ctx context.Context, sess store.Session, msg string) {
+	var taskID *int64
+	if sess.TaskID != 0 {
+		taskID = &sess.TaskID
+	}
+	a.Store.Notify(ctx, taskID, msg)
 }
 
 // moveWhenDone moves the session's task to its done lane after a successful
