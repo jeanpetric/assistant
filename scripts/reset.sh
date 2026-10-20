@@ -42,4 +42,4 @@ else
 	echo "no database at $db"
 fi
 
-echo "reset done — start with ./assistant"
+echo "reset done"

@@ -11,5 +11,6 @@ test:
 run: build
 	./assistant
 
-reset:
+reset: build
 	scripts/reset.sh
+	./assistant
