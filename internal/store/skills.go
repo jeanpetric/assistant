@@ -16,7 +16,9 @@ type Skill struct {
 	Description string `json:"description"`
 	Body        string `json:"body"` // prompt template, like a rule's
 	// Artifact keeps the agent's reply to the skill on the task.
-	Artifact    bool              `json:"artifact"`
+	Artifact bool `json:"artifact"`
+	// Model runs the skill's turn with this model; empty keeps the session's.
+	Model       string            `json:"model"`
 	Automations []SkillAutomation `json:"automations"`
 	CreatedAt   time.Time         `json:"created_at"`
 	UpdatedAt   time.Time         `json:"updated_at"`
@@ -47,13 +49,13 @@ var ErrSkillExists = errors.New("a skill with this name already exists")
 
 // ---- skills ----
 
-const skillCols = `id, name, description, body, artifact, created_at, updated_at`
+const skillCols = `id, name, description, body, artifact, model, created_at, updated_at`
 
 func scanSkill(sc interface{ Scan(...any) error }) (Skill, error) {
 	var x Skill
 	var artifact int
 	var created, updated int64
-	err := sc.Scan(&x.ID, &x.Name, &x.Description, &x.Body, &artifact, &created, &updated)
+	err := sc.Scan(&x.ID, &x.Name, &x.Description, &x.Body, &artifact, &x.Model, &created, &updated)
 	x.Artifact = artifact == 1
 	x.CreatedAt, x.UpdatedAt = fromMillis(created), fromMillis(updated)
 	return x, err
@@ -125,15 +127,15 @@ func (s *Store) SaveSkill(ctx context.Context, x Skill) (Skill, error) {
 	err := s.tx(ctx, func(tx *sql.Tx) error {
 		now := s.ts()
 		if x.ID == 0 {
-			res, err := tx.ExecContext(ctx, `INSERT INTO skills (name, description, body, artifact, created_at, updated_at)
-				VALUES (?, ?, ?, ?, ?, ?)`, x.Name, x.Description, x.Body, boolInt(x.Artifact), now, now)
+			res, err := tx.ExecContext(ctx, `INSERT INTO skills (name, description, body, artifact, model, created_at, updated_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?)`, x.Name, x.Description, x.Body, boolInt(x.Artifact), x.Model, now, now)
 			if err != nil {
 				return err
 			}
 			x.ID, _ = res.LastInsertId()
 		} else {
-			err := affected(tx.ExecContext(ctx, `UPDATE skills SET name = ?, description = ?, body = ?, artifact = ?, updated_at = ?
-				WHERE id = ?`, x.Name, x.Description, x.Body, boolInt(x.Artifact), now, x.ID))
+			err := affected(tx.ExecContext(ctx, `UPDATE skills SET name = ?, description = ?, body = ?, artifact = ?, model = ?, updated_at = ?
+				WHERE id = ?`, x.Name, x.Description, x.Body, boolInt(x.Artifact), x.Model, now, x.ID))
 			if err != nil {
 				return err
 			}

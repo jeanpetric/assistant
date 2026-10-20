@@ -59,8 +59,8 @@ func TestSkillsCRUDAndMatching(t *testing.T) {
 
 	// Saving replaces the automations.
 	sk.Automations = []SkillAutomation{{Kind: "research", Enabled: true}}
-	sk.Artifact = true
-	if sk, err = s.SaveSkill(ctx, sk); err != nil || len(sk.Automations) != 1 || !sk.Artifact {
+	sk.Artifact, sk.Model = true, "fable"
+	if sk, err = s.SaveSkill(ctx, sk); err != nil || len(sk.Automations) != 1 || !sk.Artifact || sk.Model != "fable" {
 		t.Fatalf("updated = %+v, %v", sk, err)
 	}
 	if got := names("coding", 1, review); len(got) != 0 {
@@ -165,5 +165,52 @@ func TestSkillsMigrationKeepsData(t *testing.T) {
 	}
 	if _, err := s.AddArtifact(ctx, Artifact{TaskID: 1, Skill: "x", Content: "y"}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSkillModelMigrationKeepsSkills(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const n = 13 // migrations before the skill model
+	for _, m := range migrations[:n] {
+		if _, err := db.Exec(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, q := range []string{
+		`PRAGMA user_version = 13`,
+		`INSERT INTO tasks (id, title, kind, lane_id, position, created_at, updated_at) VALUES (1, 'old', 'research', 1, 0, 0, 0)`,
+		`INSERT INTO skills (id, name, description, body, artifact, created_at, updated_at) VALUES (5, 'Mine', 'd', 'b', 1, 0, 0)`,
+		`INSERT INTO skill_automations (skill_id, kind, enabled) VALUES (5, 'research', 1)`,
+		`INSERT INTO artifacts (task_id, skill, content, created_at) VALUES (1, 'Mine', 'kept', 0)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(q, err)
+		}
+	}
+	db.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	sk, err := s.Skill(ctx, 5)
+	if err != nil || sk.Name != "Mine" || sk.Body != "b" || !sk.Artifact || sk.Model != "" || len(sk.Automations) != 1 || !sk.Automations[0].Enabled {
+		t.Fatalf("skill = %+v, %v", sk, err)
+	}
+	if all, _ := s.Skills(ctx); len(all) != 2 {
+		t.Fatalf("skills = %+v", all)
+	}
+	if arts, _ := s.Artifacts(ctx, 1); len(arts) != 1 || arts[0].Content != "kept" {
+		t.Fatalf("artifacts = %+v", arts)
+	}
+	sk.Model = "fable"
+	if sk, err = s.SaveSkill(ctx, sk); err != nil || sk.Model != "fable" {
+		t.Fatalf("saved = %+v, %v", sk, err)
 	}
 }

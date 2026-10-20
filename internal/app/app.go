@@ -469,6 +469,9 @@ func (a *App) runSkill(ctx context.Context, sess store.Session, sk store.Skill, 
 		parts = append(parts, ArtifactNote)
 	}
 	prompt := strings.Join(append(parts, body), "\n\n")
+	if sk.Model != "" {
+		sess.Model = sk.Model // this turn only: the session keeps its model
+	}
 	return a.launch(sess, prompt, sess.ClaudeSessionID, func(ctx context.Context, status string) {
 		if status == store.StatusIdle && sk.Artifact && sess.TaskID != 0 {
 			if reply, err := a.lastReply(ctx, sess.ID); err != nil {

@@ -264,6 +264,10 @@ ALTER TABLE sessions ADD COLUMN summary TEXT NOT NULL DEFAULT '';
 ALTER TABLE sessions ADD COLUMN summary_upto INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE sessions ADD COLUMN summary_at INTEGER;
 `,
+	// The model a skill's turn runs with; empty keeps the session's.
+	`
+ALTER TABLE skills ADD COLUMN model TEXT NOT NULL DEFAULT '';
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

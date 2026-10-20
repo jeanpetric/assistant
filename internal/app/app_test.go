@@ -801,14 +801,14 @@ func TestSkillAutomationRunsAfterTurn(t *testing.T) {
 	review := lanes["Review"]
 	task, _ := a.Store.CreateTask(ctx, store.Task{Title: "Find a queue", Kind: "research", LaneID: lanes["In progress"]})
 	other, _ := a.Store.CreateTask(ctx, store.Task{Title: "Code it", Kind: "coding", LaneID: lanes["In progress"]})
-	sum, err := a.Store.SaveSkill(ctx, store.Skill{Name: "Summary", Body: "Summarise {{.Task.Title}}.", Artifact: true,
+	sum, err := a.Store.SaveSkill(ctx, store.Skill{Name: "Summary", Body: "Summarise {{.Task.Title}}.", Artifact: true, Model: "fable",
 		Automations: []store.SkillAutomation{{Kind: "research", Enabled: true}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	a.Store.SaveSkill(ctx, store.Skill{Name: "Notes", Body: "Note it.", Automations: []store.SkillAutomation{{Enabled: true}}})
 
-	sess, err := a.StartSession(ctx, StartOpts{TaskID: task.ID, Prompt: "research", DoneLaneID: &review})
+	sess, err := a.StartSession(ctx, StartOpts{TaskID: task.ID, Prompt: "research", Model: "sonnet", DoneLaneID: &review})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -816,6 +816,10 @@ func TestSkillAutomationRunsAfterTurn(t *testing.T) {
 	reqs := r.requests()
 	if len(reqs) != 3 {
 		t.Fatalf("want the turn and two skill turns, got %+v", reqs)
+	}
+	// A skill's model runs its turn only; one without keeps the session's.
+	if reqs[0].Model != "sonnet" || reqs[1].Model != "fable" || reqs[2].Model != "sonnet" {
+		t.Fatalf("models = %q, %q, %q", reqs[0].Model, reqs[1].Model, reqs[2].Model)
 	}
 	// Skills run in automation order, each continuing the session.
 	if !strings.HasPrefix(reqs[1].Prompt, `Apply the skill "Summary"`) || !strings.Contains(reqs[1].Prompt, ArtifactNote) ||
@@ -833,7 +837,7 @@ func TestSkillAutomationRunsAfterTurn(t *testing.T) {
 	if got, _ := a.Store.Task(ctx, task.ID); got.LaneID != review {
 		t.Fatalf("task in lane %d, want %d", got.LaneID, review)
 	}
-	if got, _ := a.Store.Session(ctx, sess.ID); got.Status != store.StatusIdle {
+	if got, _ := a.Store.Session(ctx, sess.ID); got.Status != store.StatusIdle || got.Model != "sonnet" {
 		t.Fatalf("session = %+v", got)
 	}
 
@@ -863,8 +867,8 @@ func TestSkillAutomationRunsAfterTurn(t *testing.T) {
 	if arts, _ = a.Store.Artifacts(ctx, task.ID); len(arts) != 2 {
 		t.Fatalf("artifacts = %+v", arts)
 	}
-	if n := len(r.requests()); n != 7 {
-		t.Fatalf("a skill run by hand triggered automations: %d requests", n)
+	if reqs = r.requests(); len(reqs) != 7 || reqs[6].Model != "fable" {
+		t.Fatalf("a skill run by hand triggered automations, or lost its model: %+v", reqs)
 	}
 }
 

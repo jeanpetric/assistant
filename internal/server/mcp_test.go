@@ -236,8 +236,8 @@ func TestMCPSkills(t *testing.T) {
 	if isErr || json.Unmarshal([]byte(text), &sk) != nil || len(sk.Automations) != 1 {
 		t.Fatalf("create_skill: %s", text)
 	}
-	if text, isErr = c.tool("update_skill", map[string]any{"skill_id": sk.ID, "description": "d"}); isErr || !strings.Contains(text, `"description":"d"`) ||
-		!strings.Contains(text, `"kind":"research"`) {
+	if text, isErr = c.tool("update_skill", map[string]any{"skill_id": sk.ID, "description": "d", "model": "fable"}); isErr ||
+		!strings.Contains(text, `"description":"d"`) || !strings.Contains(text, `"kind":"research"`) || !strings.Contains(text, `"model":"fable"`) {
 		t.Fatalf("update_skill: %s", text)
 	}
 	if text, _ = c.tool("list_skills", nil); !strings.Contains(text, "Digest") {
