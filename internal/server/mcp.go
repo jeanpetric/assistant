@@ -128,6 +128,11 @@ var (
 		"Use search_memories to find the memories on the task's topic."}
 	pMemoryID          = prop("integer", "Memory id (see list_memories)")
 	pMemoryDescription = prop("string", "What the memory is about; it tells agents what belongs in it")
+	pTrelloBoardID     = prop("integer", "Id of the board link (see list_trello_boards)")
+	pTrelloBoard       = prop("string", "The board's URL (https://trello.com/b/…), short link or id")
+	pTrelloProject     = prop("integer", "Project its cards become tasks of (default: the first project)")
+	pTrelloLane        = prop("integer", "Lane new cards land in (default: the first lane)")
+	pTrelloDoneLane    = prop("integer", "Tasks moved into this lane get their card archived (default: never)")
 	pContextFrom       = map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "Ids of earlier tasks this task builds on, e.g. the research it follows from. Summaries of their agent sessions (or the final replies, where a session has no up-to-date summary) go into the context of this task's agents (include_context, rules and schedules using {{.Context}}). Empty: the task starts from scratch."}
 )
 
@@ -270,6 +275,33 @@ func (s *Server) mcpTools() []mcpTool {
 			Description: "Delete a lane; it must have no tasks on the board.",
 			InputSchema: schema([]string{"lane_id"}, map[string]any{"lane_id": pLaneID}),
 			call:        byID("DELETE", "/api/lanes/%d", "lane_id", false),
+		},
+		{
+			Name: "list_trello_boards",
+			Description: "The Trello boards kept in sync: each board's open cards become tasks (title, description, due date, a trello link field) in its project and lane, " +
+				"a due date changed on Trello updates its task, and a task moved into the board's done lane gets its card archived (moved out, the card comes back). " +
+				"With each board how its last sync went; configured is false while the Trello key and token are missing from the config.",
+			InputSchema: schema(nil, map[string]any{}),
+			call:        fixed("GET", "/api/trello", false),
+		},
+		{
+			Name:        "add_trello_board",
+			Description: "Start syncing a Trello board; its open cards are imported within a minute. A board can be synced only once.",
+			InputSchema: schema([]string{"board"}, map[string]any{"board": pTrelloBoard, "project_id": pTrelloProject, "lane_id": pTrelloLane, "done_lane_id": pTrelloDoneLane}),
+			call:        fixed("POST", "/api/trello/boards", true),
+		},
+		{
+			Name:        "update_trello_board",
+			Description: "Change a synced board, or where its cards go; the whole link is replaced, so pass every setting to keep. Cards already imported stay where they are.",
+			InputSchema: schema([]string{"trello_board_id", "board"}, map[string]any{"trello_board_id": pTrelloBoardID, "board": pTrelloBoard,
+				"project_id": pTrelloProject, "lane_id": pTrelloLane, "done_lane_id": pTrelloDoneLane}),
+			call: byID("PUT", "/api/trello/boards/%d", "trello_board_id", true),
+		},
+		{
+			Name:        "remove_trello_board",
+			Description: "Stop syncing a Trello board. Its tasks stay; added again later, its cards are not imported twice.",
+			InputSchema: schema([]string{"trello_board_id"}, map[string]any{"trello_board_id": pTrelloBoardID}),
+			call:        byID("DELETE", "/api/trello/boards/%d", "trello_board_id", false),
 		},
 		{
 			Name:        "start_session",

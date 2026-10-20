@@ -358,6 +358,24 @@ CREATE TABLE trello_cards (
 INSERT OR IGNORE INTO field_defs (key, label, type, position)
 	VALUES ('trello', 'Trello card', 'url', (SELECT COALESCE(MAX(position), -1) + 1 FROM field_defs));
 `,
+	// Several Trello boards, each with its own project and lanes. The board set
+	// in the settings becomes the first; its cards stay imported. A card belongs
+	// to the board it was last seen on (NULL: its board was removed). The
+	// settings' trello_* columns are left unused.
+	`
+CREATE TABLE trello_boards (
+	id INTEGER PRIMARY KEY,
+	board TEXT NOT NULL,
+	project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+	lane_id INTEGER REFERENCES lanes(id) ON DELETE SET NULL,
+	done_lane_id INTEGER REFERENCES lanes(id) ON DELETE SET NULL
+);
+INSERT INTO trello_boards (id, board, project_id, lane_id, done_lane_id)
+	SELECT 1, trello_board, trello_project_id, trello_lane_id, trello_done_lane_id FROM settings WHERE id = 1 AND trello_board != '';
+ALTER TABLE trello_cards ADD COLUMN board_id INTEGER REFERENCES trello_boards(id) ON DELETE SET NULL;
+UPDATE trello_cards SET board_id = (SELECT id FROM trello_boards WHERE id = 1);
+CREATE INDEX trello_cards_board ON trello_cards(board_id);
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

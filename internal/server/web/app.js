@@ -1482,7 +1482,7 @@ async function renderSettings() {
       : h('p', { class: 'muted' }, 'No rules yet.'));
 
   view.replaceChildren(h('div', { style: 'max-width:900px' }, projects, lanes, workdirsPanel(settings.workdirs, rerender), rulesPanel,
-    skillsPanel(skills, b, rerender), archivePanel(b.lanes, settings), trelloPanel(b, trello), fields));
+    skillsPanel(skills, b, rerender), archivePanel(b.lanes, settings), trelloPanel(b, trello, rerender), fields));
 }
 
 // ---------- skills ----------
@@ -1635,33 +1635,52 @@ function archivePanel(lanes, settings) {
       h('div', {}, h('label', {}, 'After'), h('div', { class: 'row' }, amount, unitSel))));
 }
 
-// Trello sync: the board whose open cards become tasks, and the lane that archives their cards.
-function trelloPanel(b, trello) {
+// Trello sync: boards whose open cards become tasks, each with its project, lane and the lane that archives its cards.
+function trelloPanel(b, trello, rerender) {
   const id = el => (el.value ? Number(el.value) : null);
-  const board = h('input', { value: trello.board, placeholder: 'https://trello.com/b/… — empty turns the sync off' });
-  const project = select([['', `First project (${b.projects[0]?.name ?? ''})`], ...b.projects.map(p => [p.id, p.name])], trello.project_id ?? '');
-  const lane = select([['', `First lane (${b.lanes[0]?.name ?? ''})`], ...b.lanes.map(l => [l.id, l.name])], trello.lane_id ?? '');
-  const done = select([['', 'None — never archive cards'], ...b.lanes.map(l => [l.id, l.name])], trello.done_lane_id ?? '');
-  const status = h('p', { class: 'small grow' });
-  const show = t => status.replaceChildren(
-    !t.configured ? h('span', { class: 'muted' }, 'Off: add trello_key and trello_token to ~/.assistant/config.json and restart.')
-      : t.error ? h('span', { style: 'color:var(--danger)' }, `Last sync failed: ${t.error}`)
-        : h('span', { class: 'muted' }, t.last_sync_at ? `Last synced ${fmtTime(t.last_sync_at)}` : 'Not synced yet'));
-  const save = async () => {
-    show(await api('PUT', '/api/trello', { board: board.value, project_id: id(project), lane_id: id(lane), done_lane_id: id(done) }));
-    toast('Saved');
+  const selects = x => [
+    select([['', `First project (${b.projects[0]?.name ?? ''})`], ...b.projects.map(p => [p.id, p.name])], x.project_id ?? ''),
+    select([['', `First lane (${b.lanes[0]?.name ?? ''})`], ...b.lanes.map(l => [l.id, l.name])], x.lane_id ?? ''),
+    select([['', 'Done lane: none'], ...b.lanes.map(l => [l.id, 'Done lane: ' + l.name])], x.done_lane_id ?? ''),
+  ];
+  const body = (board, [project, lane, done]) => ({ board: board.value, project_id: id(project), lane_id: id(lane), done_lane_id: id(done) });
+  const status = x => !trello.configured ? null
+    : x.error ? h('span', { style: 'color:var(--danger)' }, `Last sync failed: ${x.error}`)
+      : h('span', { class: 'muted' }, x.last_sync_at ? `Last synced ${fmtTime(x.last_sync_at)}` : 'Not synced yet');
+  const row = (board, sels, ...end) => h('div', { class: 'row' }, h('div', { class: 'grow' }, board), sels.map(el => h('div', {}, el)), ...end);
+
+  const boards = trello.boards.map(x => {
+    const board = h('input', { value: x.board, title: 'Board URL, short link or id' });
+    const sels = selects(x);
+    const save = async () => { await api('PUT', `/api/trello/boards/${x.id}`, body(board, sels)); toast('Saved'); };
+    [board, ...sels].forEach(el => el.addEventListener('change', save));
+    return h('div', { style: 'margin-bottom:10px' },
+      row(board, sels, h('button', {
+        class: 'danger', title: 'Stop syncing this board; its tasks stay',
+        onclick: async () => {
+          if (confirm(`Stop syncing ${x.board}? Its tasks stay here.`)) { await api('DELETE', `/api/trello/boards/${x.id}`); rerender(); }
+        },
+      }, 'Remove')),
+      h('div', { class: 'small' }, status(x)));
+  });
+
+  const board = h('input', { placeholder: 'https://trello.com/b/…' });
+  const sels = selects({});
+  const add = async () => {
+    if (!board.value.trim()) { toast('Enter a board URL'); return; }
+    await api('POST', '/api/trello/boards', body(board, sels));
+    rerender();
   };
-  [board, project, lane, done].forEach(el => el.addEventListener('change', save));
-  show(trello);
+  board.addEventListener('keydown', e => { if (e.key === 'Enter') add(); });
+
   return h('div', { class: 'panel' }, h('h2', {}, 'Trello'),
-    h('p', { class: 'muted small' }, "Every minute the board's open cards become tasks with their description and due date, and a card's new due date updates its task. A task moved into the done lane gets its card archived on Trello; moved out again, the card comes back."),
-    h('label', {}, 'Board'), board,
-    h('div', { class: 'row' },
-      h('div', { class: 'grow' }, h('label', {}, 'Project'), project),
-      h('div', { class: 'grow' }, h('label', {}, 'Lane for new cards'), lane),
-      h('div', { class: 'grow' }, h('label', {}, 'Done lane'), done)),
-    h('div', { class: 'row' }, status, h('button', {
-      class: 'ghost', disabled: !trello.configured, onclick: async () => show(await api('POST', '/api/trello/sync')),
+    h('p', { class: 'muted small' }, "Every minute each board's open cards become tasks in its project, with their description and due date, and a card's new due date updates its task. A task moved into its board's done lane gets its card archived on Trello; moved out again, the card comes back."),
+    !trello.configured ? h('p', { class: 'small muted' }, 'Off: add trello_key and trello_token to ~/.assistant/config.json and restart.') : null,
+    boards.length ? boards : h('p', { class: 'muted' }, 'No boards yet.'),
+    row(board, sels, h('button', { onclick: add }, 'Add')),
+    h('div', { class: 'row', style: 'margin-top:10px' }, h('div', { class: 'grow' }), h('button', {
+      class: 'ghost', disabled: !trello.configured || !trello.boards.length,
+      onclick: async () => { await api('POST', '/api/trello/sync'); rerender(); },
     }, 'Sync now')));
 }
 

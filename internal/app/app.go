@@ -52,7 +52,7 @@ type App struct {
 	Trello       TrelloClient // nil: Trello sync off
 	trelloMu     sync.Mutex   // one sync at a time
 	trelloKick   chan struct{}
-	trelloStatus TrelloStatus
+	trelloStatus map[int64]TrelloStatus // by board id
 }
 
 func New(s *store.Store, r agent.Runner, workdir, mode string) *App {

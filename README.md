@@ -31,10 +31,13 @@ One Go binary, one SQLite file, no JavaScript build step.
 - **Due times & quick reminders**: any task can have a due time; when it's reached you get a
   notification. *⏰ Reminder* (`⌥R`) creates a reminder task in two keystrokes, with presets
   like *15 min* or *Tomorrow 9:00*.
-- **Trello**: with `trello_key` and `trello_token` in the config, *Settings → Trello* picks a
-  board. Every minute its open cards become tasks (title, description, due date, a *Trello card*
-  link) in the chosen project and lane; a due date changed on Trello updates its task. Moving a
-  task into the *Done lane* archives its card on Trello; moving it out brings the card back.
+- **Trello**: with `trello_key` and `trello_token` in the config, *Settings → Trello* syncs any
+  number of boards, each with its own project, lane and *Done lane*. Every minute a board's open
+  cards become tasks (title, description, due date, a *Trello card* link) in its project and
+  lane; a due date changed on Trello updates its task. Moving a task into its board's *Done lane*
+  archives the card on Trello; moving it out brings the card back. A removed board's tasks stay,
+  and adding it again doesn't import them twice. The MCP tools `list_trello_boards`,
+  `add_trello_board`, `update_trello_board` and `remove_trello_board` do the same.
   Create the key at trello.com/power-ups/admin and a token with read and write scope from the
   key's page (*Allowed origins* doesn't matter: the server calls Trello, not the browser).
 

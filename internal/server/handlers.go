@@ -15,6 +15,7 @@ import (
 	"github.com/jeanpetric/assistant/internal/agent"
 	"github.com/jeanpetric/assistant/internal/app"
 	"github.com/jeanpetric/assistant/internal/store"
+	"github.com/jeanpetric/assistant/internal/trello"
 )
 
 // ---- board & meta ----
@@ -168,60 +169,120 @@ func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) {
 
 // ---- trello ----
 
-type trelloView struct {
-	store.TrelloSettings
+type trelloBoardView struct {
+	store.TrelloBoard
 	app.TrelloStatus
-	Configured bool `json:"configured"` // key and token are in the config
 }
 
-func (s *Server) trelloView(ctx context.Context) (trelloView, error) {
-	x, err := s.app.Store.TrelloSettings(ctx)
-	return trelloView{x, s.app.TrelloStatus(), s.app.Trello != nil}, err
+type trelloView struct {
+	Configured bool              `json:"configured"` // key and token are in the config
+	Boards     []trelloBoardView `json:"boards"`
 }
 
 func (s *Server) getTrello(w http.ResponseWriter, r *http.Request) {
-	v, err := s.trelloView(r.Context())
+	boards, err := s.app.Store.TrelloBoards(r.Context())
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
+	v := trelloView{Configured: s.app.Trello != nil, Boards: []trelloBoardView{}}
+	for _, b := range boards {
+		v.Boards = append(v.Boards, trelloBoardView{b, s.app.TrelloStatus(b.ID)})
+	}
 	writeJSON(w, 200, v)
 }
 
-func (s *Server) saveTrello(w http.ResponseWriter, r *http.Request) {
-	var x store.TrelloSettings
-	if err := decode(r, &x); err != nil {
-		writeErr(w, err)
-		return
+// checkTrelloBoard validates a board link; id is the link's own id when
+// updating, 0 when adding.
+func (s *Server) checkTrelloBoard(ctx context.Context, b *store.TrelloBoard, id int64) error {
+	b.Board = strings.TrimSpace(b.Board)
+	if b.Board == "" {
+		return badRequest{"board is required"}
 	}
-	x.Board = strings.TrimSpace(x.Board)
-	if x.ProjectID != nil {
-		if _, err := s.app.Store.Project(r.Context(), *x.ProjectID); errors.Is(err, store.ErrNotFound) {
-			writeErr(w, badRequest{"unknown project_id"})
-			return
-		} else if err != nil {
-			writeErr(w, err)
-			return
+	boards, err := s.app.Store.TrelloBoards(ctx)
+	if err != nil {
+		return err
+	}
+	for _, o := range boards {
+		if o.ID != id && trello.BoardID(o.Board) == trello.BoardID(b.Board) {
+			return badRequest{"board is already synced"}
 		}
 	}
-	if err := s.checkLane(r.Context(), x.LaneID, "lane_id"); err != nil {
+	if b.ProjectID != nil {
+		if _, err := s.app.Store.Project(ctx, *b.ProjectID); errors.Is(err, store.ErrNotFound) {
+			return badRequest{"unknown project_id"}
+		} else if err != nil {
+			return err
+		}
+	}
+	if err := s.checkLane(ctx, b.LaneID, "lane_id"); err != nil {
+		return err
+	}
+	return s.checkLane(ctx, b.DoneLaneID, "done_lane_id")
+}
+
+func (s *Server) addTrelloBoard(w http.ResponseWriter, r *http.Request) {
+	var b store.TrelloBoard
+	if err := decode(r, &b); err != nil {
 		writeErr(w, err)
 		return
 	}
-	if err := s.checkLane(r.Context(), x.DoneLaneID, "done_lane_id"); err != nil {
+	if err := s.checkTrelloBoard(r.Context(), &b, 0); err != nil {
 		writeErr(w, err)
 		return
 	}
-	if err := s.app.Store.SaveTrelloSettings(r.Context(), x); err != nil {
+	b, err := s.app.Store.AddTrelloBoard(r.Context(), b)
+	if err != nil {
 		writeErr(w, err)
 		return
 	}
 	s.app.KickTrello()
-	s.getTrello(w, r)
+	writeJSON(w, 201, trelloBoardView{TrelloBoard: b})
 }
 
-// syncTrello syncs now and reports how it went; a failed sync is in the
-// status, not an error of the request.
+func (s *Server) updateTrelloBoard(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	var b store.TrelloBoard
+	if err := decode(r, &b); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if _, err := s.app.Store.TrelloBoard(r.Context(), id); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.checkTrelloBoard(r.Context(), &b, id); err != nil {
+		writeErr(w, err)
+		return
+	}
+	b.ID = id
+	if err := s.app.Store.UpdateTrelloBoard(r.Context(), b); err != nil {
+		writeErr(w, err)
+		return
+	}
+	s.app.KickTrello()
+	writeJSON(w, 200, trelloBoardView{b, s.app.TrelloStatus(id)})
+}
+
+func (s *Server) deleteTrelloBoard(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.app.Store.DeleteTrelloBoard(r.Context(), id); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(204)
+}
+
+// syncTrello syncs every board now and reports how it went; a failed sync is
+// in the boards' status, not an error of the request.
 func (s *Server) syncTrello(w http.ResponseWriter, r *http.Request) {
 	s.app.SyncTrello(r.Context())
 	s.getTrello(w, r)

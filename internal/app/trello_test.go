@@ -15,15 +15,23 @@ import (
 
 type fakeTrello struct {
 	mu      sync.Mutex
-	cards   []trello.Card
-	closed  map[string]bool // archived by SetClosed
-	err     error           // OpenCards fails with it
-	missing map[string]bool // SetClosed: card gone
+	cards   []trello.Card            // of board "b"
+	boards  map[string][]trello.Card // of the other boards
+	closed  map[string]bool          // archived by SetClosed
+	err     error                    // OpenCards fails with it
+	failing map[string]bool          // OpenCards of these boards fails
+	missing map[string]bool          // SetClosed: card gone
 }
 
 func (f *fakeTrello) OpenCards(ctx context.Context, board string) ([]trello.Card, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.failing[board] {
+		return nil, errors.New("board unreachable")
+	}
+	if board != "b" {
+		return f.boards[board], f.err
+	}
 	return f.cards, f.err
 }
 
@@ -40,12 +48,12 @@ func (f *fakeTrello) SetClosed(ctx context.Context, id string, closed bool) erro
 func newTrelloApp(t *testing.T) (*App, *fakeTrello, map[string]int64) {
 	t.Helper()
 	a, _ := newApp(t)
-	f := &fakeTrello{closed: map[string]bool{}, missing: map[string]bool{}}
+	f := &fakeTrello{boards: map[string][]trello.Card{}, closed: map[string]bool{}, failing: map[string]bool{}, missing: map[string]bool{}}
 	a.Trello = f
 	lanes := lanesByName(t, a)
 	done := lanes["Done"]
 	todo := lanes["Todo"]
-	if err := a.Store.SaveTrelloSettings(context.Background(), store.TrelloSettings{Board: "b", LaneID: &todo, DoneLaneID: &done}); err != nil {
+	if _, err := a.Store.AddTrelloBoard(context.Background(), store.TrelloBoard{Board: "b", LaneID: &todo, DoneLaneID: &done}); err != nil {
 		t.Fatal(err)
 	}
 	return a, f, lanes
@@ -85,7 +93,7 @@ func TestSyncTrelloImportsCardsOnce(t *testing.T) {
 		t.Fatalf("task = %+v", milk)
 	}
 	taskByTitle(t, a, "(untitled Trello card)")
-	if st := a.TrelloStatus(); st.LastSyncAt == nil || st.Error != "" {
+	if st := a.TrelloStatus(1); st.LastSyncAt == nil || st.Error != "" {
 		t.Fatalf("status = %+v", st)
 	}
 
@@ -182,16 +190,16 @@ func TestSyncTrelloFailureNotifiesOnce(t *testing.T) {
 			t.Fatal("no error")
 		}
 	}
-	if st := a.TrelloStatus(); !strings.Contains(st.Error, "invalid token") {
+	if st := a.TrelloStatus(1); !strings.Contains(st.Error, "invalid token") {
 		t.Fatalf("status = %+v", st)
 	}
 	notes, _ := a.Store.Notifications(ctx, false)
-	if len(notes) != 1 || !strings.Contains(notes[0].Message, "Trello sync failed") {
+	if len(notes) != 1 || !strings.Contains(notes[0].Message, "Trello sync of b failed") {
 		t.Fatalf("notifications = %+v", notes)
 	}
 	f.err = nil
 	a.SyncTrello(ctx)
-	if st := a.TrelloStatus(); st.Error != "" {
+	if st := a.TrelloStatus(1); st.Error != "" {
 		t.Fatalf("status = %+v", st)
 	}
 }
@@ -203,7 +211,92 @@ func TestSyncTrelloOff(t *testing.T) {
 	}
 	f := &fakeTrello{err: errors.New("must not be called")}
 	a.Trello = f
-	if err := a.SyncTrello(context.Background()); err != nil { // no board
+	if err := a.SyncTrello(context.Background()); err != nil { // no boards
 		t.Fatal(err)
+	}
+}
+
+func TestSyncTrelloKeepsBoardsApart(t *testing.T) {
+	a, f, lanes := newTrelloApp(t)
+	ctx := context.Background()
+	private, _ := a.Store.CreateProject(ctx, store.Project{Name: "Private"})
+	review, done := lanes["Review"], lanes["Done"]
+	home, err := a.Store.AddTrelloBoard(ctx, store.TrelloBoard{Board: "home", ProjectID: &private.ID, LaneID: &review, DoneLaneID: &review})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.cards = []trello.Card{{ID: "w1", Name: "Work card"}}
+	f.boards["home"] = []trello.Card{{ID: "h1", Name: "Home card"}, {ID: "h2", Name: "Moving card"}}
+	if err := a.SyncTrello(ctx); err != nil {
+		t.Fatal(err)
+	}
+	work, homeTask := taskByTitle(t, a, "Work card"), taskByTitle(t, a, "Home card")
+	if work.ProjectID == private.ID || work.LaneID != lanes["Todo"] || homeTask.ProjectID != private.ID || homeTask.LaneID != review {
+		t.Fatalf("work = %+v, home = %+v", work, homeTask)
+	}
+	// The home board's done lane archives only its own cards: the work card
+	// there stays open, and Done doesn't archive home cards.
+	a.MoveTask(ctx, work.ID, review, -1)
+	moving := taskByTitle(t, a, "Moving card")
+	a.MoveTask(ctx, moving.ID, done, -1)
+	a.SyncTrello(ctx)
+	if len(f.closed) != 1 || !f.closed["h1"] {
+		t.Fatalf("closed = %v", f.closed)
+	}
+
+	// A card moved to the other board goes with it, without a second task:
+	// the work board's done lane now archives it (on the next sync).
+	f.boards["home"] = nil
+	f.cards = append(f.cards, trello.Card{ID: "h2", Name: "Moving card"})
+	a.SyncTrello(ctx)
+	a.SyncTrello(ctx)
+	taskByTitle(t, a, "Moving card")
+	if cards, _ := a.Store.TrelloCards(ctx); *cards["h2"].BoardID != 1 || !f.closed["h2"] {
+		t.Fatalf("moved card = %+v, closed = %v", cards["h2"], f.closed)
+	}
+
+	// A board removed and added again doesn't import its cards twice.
+	f.boards["home"] = []trello.Card{{ID: "h1", Name: "Home card"}, {ID: "h3", Name: "New home card"}}
+	a.Store.DeleteTrelloBoard(ctx, home.ID)
+	a.SyncTrello(ctx)
+	if _, err := a.Store.AddTrelloBoard(ctx, store.TrelloBoard{Board: "home", ProjectID: &private.ID}); err != nil {
+		t.Fatal(err)
+	}
+	a.SyncTrello(ctx)
+	taskByTitle(t, a, "Home card")
+	if got := taskByTitle(t, a, "New home card"); got.ProjectID != private.ID {
+		t.Fatalf("new home card = %+v", got)
+	}
+}
+
+func TestSyncTrelloBoardFailureLeavesOthers(t *testing.T) {
+	a, f, _ := newTrelloApp(t)
+	ctx := context.Background()
+	broken, _ := a.Store.AddTrelloBoard(ctx, store.TrelloBoard{Board: "broken"})
+	f.failing["broken"] = true
+	f.cards = []trello.Card{{ID: "c1", Name: "Still here"}}
+	for range 2 {
+		if err := a.SyncTrello(ctx); err == nil || !strings.Contains(err.Error(), "board broken") {
+			t.Fatalf("err = %v", err)
+		}
+	}
+	taskByTitle(t, a, "Still here")
+	if st := a.TrelloStatus(1); st.Error != "" || st.LastSyncAt == nil {
+		t.Fatalf("good board = %+v", st)
+	}
+	if st := a.TrelloStatus(broken.ID); !strings.Contains(st.Error, "unreachable") {
+		t.Fatalf("broken board = %+v", st)
+	}
+	notes, _ := a.Store.Notifications(ctx, false)
+	if len(notes) != 1 || !strings.Contains(notes[0].Message, "Trello sync of broken failed") {
+		t.Fatalf("notifications = %+v", notes)
+	}
+	// A removed board's status goes with it.
+	a.Store.DeleteTrelloBoard(ctx, broken.ID)
+	if err := a.SyncTrello(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if st := a.TrelloStatus(broken.ID); st.LastSyncAt != nil {
+		t.Fatalf("removed board = %+v", st)
 	}
 }

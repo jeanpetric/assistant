@@ -193,7 +193,7 @@ func TestProjectWorkdirMigrationKeepsProjects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	old := len(migrations) - 1
+	const old = 8 // migrations before the projects' workdir
 	for _, m := range migrations[:old] {
 		if _, err := db.Exec(m); err != nil {
 			t.Fatal(err)
