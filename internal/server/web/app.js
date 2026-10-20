@@ -1145,6 +1145,64 @@ async function toggleNotifications() {
   panel.classList.remove('hidden');
 }
 
+// ---------- keyboard shortcuts ----------
+
+// Single keys work anywhere outside a text field; "g" starts a two-key jump to a page.
+const shortcuts = [
+  { keys: 'n', label: 'New task', run: newTaskDialog },
+  { keys: 'r', label: 'Quick reminder', run: reminderDialog },
+  { keys: 's', label: 'Agent session without a task', run: sessionDialog },
+  { keys: '/', label: 'Filter the list or archive', run: focusFilter },
+  { keys: '[', label: 'Previous project', run: () => stepProject(-1) },
+  { keys: ']', label: 'Next project', run: () => stepProject(1) },
+  { keys: 'g b', label: 'Go to Board', run: () => { location.hash = '#/board'; } },
+  { keys: 'g l', label: 'Go to List', run: () => { location.hash = '#/list'; } },
+  { keys: 'g s', label: 'Go to Sessions', run: () => { location.hash = '#/sessions'; } },
+  { keys: 'g a', label: 'Go to Archive', run: () => { location.hash = '#/archive'; } },
+  { keys: 'g ,', label: 'Go to Settings', run: () => { location.hash = '#/settings'; } },
+  { keys: '?', label: 'Show these shortcuts', run: shortcutsDialog },
+];
+let pendingKey = null; // first key of a two-key shortcut, cleared after a moment
+
+function onShortcut(e) {
+  if (e.metaKey || e.ctrlKey || e.altKey || e.repeat || document.getElementById('dialog').open) return;
+  if (e.target.closest('input, textarea, select, [contenteditable]')) return;
+  if (e.key === 'Escape') { document.getElementById('notif-panel').classList.add('hidden'); return; }
+  const keys = pendingKey ? `${pendingKey.key} ${e.key}` : e.key;
+  if (pendingKey) { clearTimeout(pendingKey.timer); pendingKey = null; }
+  const sc = shortcuts.find(s => s.keys === keys);
+  if (sc) { e.preventDefault(); sc.run(); return; }
+  if (shortcuts.some(s => s.keys.startsWith(keys + ' '))) {
+    e.preventDefault();
+    pendingKey = { key: keys, timer: setTimeout(() => { pendingKey = null; }, 1500) };
+  }
+}
+
+function focusFilter() {
+  const f = view.querySelector('.toolbar input');
+  if (f) f.focus();
+  else location.hash = '#/list'; // the list focuses its filter on open
+}
+
+function stepProject(by) {
+  const ps = state.board?.projects;
+  if (!ps || ps.length < 2) return;
+  const i = ps.findIndex(p => p.id === state.projectId);
+  const next = ps[(i + by + ps.length) % ps.length];
+  switchProject(next.id);
+  toast(next.name);
+}
+
+function shortcutsDialog() {
+  const dlg = document.getElementById('dialog');
+  dlg.replaceChildren(h('h2', {}, 'Keyboard shortcuts'),
+    h('table', { class: 'shortcuts' }, shortcuts.map(s => h('tr', {},
+      h('td', {}, s.keys.split(' ').map(k => h('kbd', {}, k))), h('td', {}, s.label)))),
+    h('p', { class: 'muted small' }, '⌘/Ctrl+Enter sends a prompt or reply. Esc closes a dialog or the notifications.'),
+    h('div', { class: 'dialog-actions' }, h('button', { onclick: () => dlg.close() }, 'Close')));
+  dlg.showModal();
+}
+
 // ---------- boot ----------
 
 (async function boot() {
@@ -1152,14 +1210,7 @@ async function toggleNotifications() {
   document.getElementById('new-task-btn').addEventListener('click', newTaskDialog);
   document.getElementById('reminder-btn').addEventListener('click', reminderDialog);
   document.getElementById('new-session-btn').addEventListener('click', sessionDialog);
-  // "r" (reminder) and "s" (session) anywhere outside a text field.
-  const shortcuts = { r: reminderDialog, s: sessionDialog };
-  document.addEventListener('keydown', e => {
-    if (!shortcuts[e.key] || e.metaKey || e.ctrlKey || e.altKey || document.getElementById('dialog').open) return;
-    if (e.target.closest('input, textarea, select, [contenteditable]')) return;
-    e.preventDefault();
-    shortcuts[e.key]();
-  });
+  document.addEventListener('keydown', onShortcut);
   document.getElementById('notif-btn').addEventListener('click', toggleNotifications);
   document.getElementById('project-select').addEventListener('change', e => switchProject(Number(e.target.value)));
   window.addEventListener('hashchange', route);

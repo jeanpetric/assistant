@@ -317,7 +317,10 @@ func TestStaticUI(t *testing.T) {
 	res.Body.Close()
 	for _, want := range []string{"getElementById('task-dialog')", "function workdirSelect(", "workdirsPanel(settings.workdirs, rerender)",
 		// Tool calls fold into one collapsed group per run instead of one row each.
-		"appendMessage(body, m)", "h('details', { class: 'tools' }", "onclick: e => { if (e.metaKey || e.ctrlKey) location.hash = `#/task/${t.id}`; else openTaskDialog(t.id); }"} {
+		"appendMessage(body, m)", "h('details', { class: 'tools' }", "onclick: e => { if (e.metaKey || e.ctrlKey) location.hash = `#/task/${t.id}`; else openTaskDialog(t.id); }",
+		// Keyboard shortcuts come from one table, which the "?" dialog lists.
+		"document.addEventListener('keydown', onShortcut)", "{ keys: 'n', label: 'New task', run: newTaskDialog }",
+		"{ keys: 'g b', label: 'Go to Board'", "{ keys: '?', label: 'Show these shortcuts', run: shortcutsDialog }"} {
 		if !bytes.Contains(js, []byte(want)) {
 			t.Fatalf("app.js lacks %q", want)
 		}

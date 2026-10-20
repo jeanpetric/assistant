@@ -237,3 +237,12 @@ dialog::backdrop { background: rgba(0, 0, 0, .35); }
 }
 
 .archived-note { background: var(--surface-2); border-radius: var(--radius); padding: 6px 10px; margin-bottom: 10px; }
+
+.shortcuts { border-collapse: collapse; width: 100%; }
+.shortcuts td { padding: 5px 8px 5px 0; border-bottom: 1px solid var(--border); }
+.shortcuts td:first-child { white-space: nowrap; width: 1%; }
+kbd {
+  display: inline-block; min-width: 1.4em; margin-right: 4px; padding: 1px 6px; text-align: center;
+  font: 12px ui-monospace, monospace; border: 1px solid var(--border); border-bottom-width: 2px;
+  border-radius: 4px; background: var(--bg);
+}

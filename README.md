@@ -42,6 +42,9 @@ One Go binary, one SQLite file, no JavaScript build step.
 - **Recurring schedules** per task (cron syntax): start an agent session or create a reminder.
 - **Notifications** for reminders, due tasks and failed automations — also as desktop
   notifications while the board is open in a browser tab (allow them when asked).
+- **Keyboard shortcuts** outside text fields: `n` new task, `r` reminder, `s` session, `/` filter,
+  `[` / `]` previous / next project, `g` then `b` `l` `s` `a` `,` to jump to Board, List,
+  Sessions, Archive or Settings. Press `?` for the list.
 
 ## Run
 
