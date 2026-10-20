@@ -17,6 +17,7 @@ type Rule struct {
 	Prompt     string `json:"prompt"`
 	Mode       string `json:"mode"`
 	Workdir    string `json:"workdir"`
+	DoneLaneID *int64 `json:"done_lane_id"` // copied to the sessions the rule starts
 	Enabled    bool   `json:"enabled"`
 }
 
@@ -26,15 +27,16 @@ const (
 )
 
 type Schedule struct {
-	ID        int64      `json:"id"`
-	TaskID    int64      `json:"task_id"`
-	Cron      string     `json:"cron"`
-	Action    string     `json:"action"` // agent | remind
-	Prompt    string     `json:"prompt"`
-	Mode      string     `json:"mode"`
-	Enabled   bool       `json:"enabled"`
-	NextRunAt *time.Time `json:"next_run_at"`
-	LastRunAt *time.Time `json:"last_run_at"`
+	ID         int64      `json:"id"`
+	TaskID     int64      `json:"task_id"`
+	Cron       string     `json:"cron"`
+	Action     string     `json:"action"` // agent | remind
+	Prompt     string     `json:"prompt"`
+	Mode       string     `json:"mode"`
+	DoneLaneID *int64     `json:"done_lane_id"` // copied to the sessions the schedule starts
+	Enabled    bool       `json:"enabled"`
+	NextRunAt  *time.Time `json:"next_run_at"`
+	LastRunAt  *time.Time `json:"last_run_at"`
 }
 
 type Notification struct {
@@ -48,16 +50,17 @@ type Notification struct {
 
 // ---- rules ----
 
-const ruleCols = `id, name, from_lane_id, to_lane_id, prompt, mode, workdir, enabled`
+const ruleCols = `id, name, from_lane_id, to_lane_id, prompt, mode, workdir, done_lane_id, enabled`
 
 func scanRule(sc interface{ Scan(...any) error }) (Rule, error) {
 	var r Rule
-	var from sql.NullInt64
+	var from, doneLane sql.NullInt64
 	var enabled int
-	err := sc.Scan(&r.ID, &r.Name, &from, &r.ToLaneID, &r.Prompt, &r.Mode, &r.Workdir, &enabled)
+	err := sc.Scan(&r.ID, &r.Name, &from, &r.ToLaneID, &r.Prompt, &r.Mode, &r.Workdir, &doneLane, &enabled)
 	if from.Valid {
 		r.FromLaneID = &from.Int64
 	}
+	r.DoneLaneID = fromNullID(doneLane)
 	r.Enabled = enabled == 1
 	return r, err
 }
@@ -99,16 +102,16 @@ func (s *Store) Rule(ctx context.Context, id int64) (Rule, error) {
 
 func (s *Store) SaveRule(ctx context.Context, r Rule) (Rule, error) {
 	if r.ID == 0 {
-		res, err := s.db.ExecContext(ctx, `INSERT INTO transition_rules (name, from_lane_id, to_lane_id, prompt, mode, workdir, enabled)
-			VALUES (?, ?, ?, ?, ?, ?, ?)`, r.Name, r.FromLaneID, r.ToLaneID, r.Prompt, r.Mode, r.Workdir, boolInt(r.Enabled))
+		res, err := s.db.ExecContext(ctx, `INSERT INTO transition_rules (name, from_lane_id, to_lane_id, prompt, mode, workdir, done_lane_id, enabled)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, r.Name, r.FromLaneID, r.ToLaneID, r.Prompt, r.Mode, r.Workdir, r.DoneLaneID, boolInt(r.Enabled))
 		if err != nil {
 			return r, err
 		}
 		r.ID, _ = res.LastInsertId()
 	} else {
 		err := affected(s.db.ExecContext(ctx, `UPDATE transition_rules SET name = ?, from_lane_id = ?, to_lane_id = ?,
-			prompt = ?, mode = ?, workdir = ?, enabled = ? WHERE id = ?`,
-			r.Name, r.FromLaneID, r.ToLaneID, r.Prompt, r.Mode, r.Workdir, boolInt(r.Enabled), r.ID))
+			prompt = ?, mode = ?, workdir = ?, done_lane_id = ?, enabled = ? WHERE id = ?`,
+			r.Name, r.FromLaneID, r.ToLaneID, r.Prompt, r.Mode, r.Workdir, r.DoneLaneID, boolInt(r.Enabled), r.ID))
 		if err != nil {
 			return r, err
 		}
@@ -122,13 +125,14 @@ func (s *Store) DeleteRule(ctx context.Context, id int64) error {
 
 // ---- schedules ----
 
-const scheduleCols = `id, task_id, cron, action, prompt, mode, enabled, next_run_at, last_run_at`
+const scheduleCols = `id, task_id, cron, action, prompt, mode, done_lane_id, enabled, next_run_at, last_run_at`
 
 func scanSchedule(sc interface{ Scan(...any) error }) (Schedule, error) {
 	var x Schedule
 	var enabled int
-	var next, last sql.NullInt64
-	err := sc.Scan(&x.ID, &x.TaskID, &x.Cron, &x.Action, &x.Prompt, &x.Mode, &enabled, &next, &last)
+	var doneLane, next, last sql.NullInt64
+	err := sc.Scan(&x.ID, &x.TaskID, &x.Cron, &x.Action, &x.Prompt, &x.Mode, &doneLane, &enabled, &next, &last)
+	x.DoneLaneID = fromNullID(doneLane)
 	x.Enabled = enabled == 1
 	x.NextRunAt, x.LastRunAt = fromNullMillis(next), fromNullMillis(last)
 	return x, err
@@ -171,15 +175,15 @@ func (s *Store) Schedule(ctx context.Context, id int64) (Schedule, error) {
 
 func (s *Store) SaveSchedule(ctx context.Context, x Schedule) (Schedule, error) {
 	if x.ID == 0 {
-		res, err := s.db.ExecContext(ctx, `INSERT INTO schedules (task_id, cron, action, prompt, mode, enabled, next_run_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?)`, x.TaskID, x.Cron, x.Action, x.Prompt, x.Mode, boolInt(x.Enabled), toNullMillis(x.NextRunAt))
+		res, err := s.db.ExecContext(ctx, `INSERT INTO schedules (task_id, cron, action, prompt, mode, done_lane_id, enabled, next_run_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, x.TaskID, x.Cron, x.Action, x.Prompt, x.Mode, x.DoneLaneID, boolInt(x.Enabled), toNullMillis(x.NextRunAt))
 		if err != nil {
 			return x, err
 		}
 		x.ID, _ = res.LastInsertId()
 	} else {
-		err := affected(s.db.ExecContext(ctx, `UPDATE schedules SET cron = ?, action = ?, prompt = ?, mode = ?, enabled = ?,
-			next_run_at = ? WHERE id = ?`, x.Cron, x.Action, x.Prompt, x.Mode, boolInt(x.Enabled), toNullMillis(x.NextRunAt), x.ID))
+		err := affected(s.db.ExecContext(ctx, `UPDATE schedules SET cron = ?, action = ?, prompt = ?, mode = ?, done_lane_id = ?, enabled = ?,
+			next_run_at = ? WHERE id = ?`, x.Cron, x.Action, x.Prompt, x.Mode, x.DoneLaneID, boolInt(x.Enabled), toNullMillis(x.NextRunAt), x.ID))
 		if err != nil {
 			return x, err
 		}

@@ -82,6 +82,12 @@ function modeOptions(includeDefault) {
   return includeDefault ? [['', `App default (${state.meta.default_mode})`], ...opts] : opts;
 }
 
+// Where the task goes when an agent turn finishes successfully; '' keeps it in place.
+function doneLaneSelect(lanes, value, attrs) {
+  return select([['', 'When done: stay in lane'], ...lanes.map(l => [l.id, `When done: move to ${l.name}`])], value ?? '', attrs);
+}
+const doneLaneValue = sel => sel.value ? Number(sel.value) : null;
+
 // Free-text input with suggestions; empty means the CLI's default model.
 function modelInput(value) {
   const list = h('datalist', { id: 'models-' + Math.random().toString(36).slice(2) }, state.meta.models.map(m => h('option', { value: m })));
@@ -402,10 +408,12 @@ function newSessionPanel(task, onStarted) {
   const [model, modelList] = modelInput('');
   const ctx = h('input', { type: 'checkbox', checked: true });
   const [workdir, workdirList] = workdirInput('', task.workdir || state.meta.workdir);
+  const doneLane = doneLaneSelect(state.board.lanes, '');
   const start = async () => {
     if (!prompt.value.trim()) return;
     const s = await api('POST', `/api/tasks/${task.id}/sessions`, {
       prompt: prompt.value, mode: mode.value, model: model.value, workdir: workdir.value, include_context: ctx.checked,
+      done_lane_id: doneLaneValue(doneLane),
     });
     prompt.value = '';
     const full = await api('GET', `/api/sessions/${s.id}`);
@@ -419,6 +427,7 @@ function newSessionPanel(task, onStarted) {
       h('div', { class: 'grow', style: 'min-width:200px' }, mode),
       h('div', { class: 'grow', style: 'min-width:140px' }, model, modelList),
       h('div', { class: 'grow', style: 'min-width:200px' }, workdir, workdirList),
+      h('div', { class: 'grow', style: 'min-width:200px' }, doneLane),
       h('label', { class: 'row', style: 'margin:0' }, ctx, 'Include task context'),
       h('button', { onclick: start }, 'Start ⌘↵')));
 }
@@ -450,7 +459,13 @@ function sessionComponent(session, messages) {
   const head = h('div', { class: 'session-head' });
   const input = h('textarea', { rows: 2, placeholder: 'Reply to continue this session… (⌘↵ to send)' });
   const send = h('button', {}, 'Send');
-  const foot = h('div', { class: 'session-foot' }, input, h('div', { class: 'row', style: 'margin-top:6px; justify-content:flex-end' }, send));
+  // Task sessions can change where the task goes when the agent finishes, even mid-run.
+  const doneLane = session.task_id && state.board ? doneLaneSelect(state.board.lanes, session.done_lane_id, {
+    class: 'small', style: 'width:auto',
+    onchange: async e => { c.session = await api('PATCH', `/api/sessions/${c.session.id}`, { done_lane_id: doneLaneValue(e.target) }); },
+  }) : null;
+  const foot = h('div', { class: 'session-foot' }, input,
+    h('div', { class: 'row', style: 'margin-top:6px; justify-content:flex-end' }, doneLane, send));
   const el = h('div', { class: 'session' }, head, body, foot);
   const c = { el, session, lastId: () => last };
 
@@ -496,6 +511,7 @@ function sessionComponent(session, messages) {
 
   c.update = (s, msgs) => {
     c.session = s;
+    if (doneLane && document.activeElement !== doneLane) doneLane.value = s.done_lane_id ?? '';
     for (const m of msgs) {
       body.append(messageEl(m));
       last = Math.max(last, m.id);
@@ -515,6 +531,7 @@ function schedulesPanel(taskId, schedules) {
     }),
     h('div', { class: 'grow' },
       h('code', {}, x.cron), ' ', h('span', { class: 'badge' }, x.action),
+      x.done_lane_id ? h('span', { class: 'badge' }, '→ ' + laneName(x.done_lane_id)) : null,
       h('div', { class: 'muted small' }, trunc(x.prompt, 80)),
       h('div', { class: 'muted small' }, x.enabled && x.next_run_at ? 'Next: ' + fmtTime(x.next_run_at) : 'Paused')),
     h('button', { class: 'ghost small', onclick: async () => { await api('DELETE', `/api/schedules/${x.id}`); draw(await reload()); } }, '✕'))));
@@ -525,15 +542,18 @@ function schedulesPanel(taskId, schedules) {
   const action = select([['agent', 'Run agent'], ['remind', 'Remind me']], 'agent');
   const prompt = h('textarea', { rows: 2, placeholder: 'Prompt (agent) or reminder text. Template vars: {{.Context}}, {{.Task.Title}}, {{.Fields.pull_request}}' });
   const mode = select(modeOptions(true), '');
+  const doneLane = doneLaneSelect(state.board.lanes, '');
   return h('div', { class: 'panel' },
     h('h3', {}, 'Recurring'),
     list,
     h('label', {}, 'Cron (min hour day month weekday) or @daily, @hourly'),
     cron, h('label', {}, 'Action'), action, h('label', {}, 'Prompt / message'), prompt, h('label', {}, 'Agent mode'), mode,
+    h('label', {}, 'After the agent finishes'), doneLane,
     h('div', { class: 'row', style: 'margin-top:8px; justify-content:flex-end' }, h('button', {
       onclick: async () => {
         await api('POST', `/api/tasks/${taskId}/schedules`, {
           cron: cron.value, action: action.value, prompt: prompt.value, mode: mode.value, enabled: true,
+          done_lane_id: action.value === 'agent' ? doneLaneValue(doneLane) : null,
         });
         cron.value = prompt.value = '';
         draw(await reload());
@@ -666,13 +686,14 @@ async function renderSettings() {
   const rulesPanel = h('div', { class: 'panel' },
     h('div', { class: 'row' }, h('h2', { class: 'grow' }, 'Transition rules'), h('button', { onclick: () => ruleDialog(null, b.lanes, rerender) }, '+ Add rule')),
     h('p', { class: 'muted small' }, 'Start an agent session automatically when a task moves between lanes.'),
-    rules.length ? h('table', {}, h('thead', {}, h('tr', {}, ['', 'Rule', 'Transition', 'Prompt', 'Mode', ''].map(x => h('th', {}, x)))),
+    rules.length ? h('table', {}, h('thead', {}, h('tr', {}, ['', 'Rule', 'Transition', 'Prompt', 'Mode', 'When done', ''].map(x => h('th', {}, x)))),
       h('tbody', {}, rules.map(r => h('tr', {},
         h('td', {}, h('input', { type: 'checkbox', checked: r.enabled, onchange: async e => { await api('PUT', `/api/rules/${r.id}`, { ...r, enabled: e.target.checked }); } })),
         h('td', {}, r.name),
         h('td', {}, `${laneLabel(r.from_lane_id)} → ${laneLabel(r.to_lane_id)}`),
         h('td', { class: 'small' }, h('code', {}, trunc(r.prompt, 80))),
         h('td', { class: 'muted small' }, r.mode || 'app default'),
+        h('td', { class: 'muted small' }, r.done_lane_id ? '→ ' + laneLabel(r.done_lane_id) : 'stay'),
         h('td', {}, h('button', { class: 'ghost small', onclick: () => ruleDialog(r, b.lanes, rerender) }, 'Edit'), ' ',
           h('button', { class: 'danger small', onclick: async () => { await api('DELETE', `/api/rules/${r.id}`); rerender(); } }, 'Delete'))))))
       : h('p', { class: 'muted' }, 'No rules yet.'));
@@ -681,7 +702,10 @@ async function renderSettings() {
 }
 
 function ruleDialog(rule, lanes, done) {
-  rule = rule || { name: '', from_lane_id: null, to_lane_id: lanes[0].id, prompt: '{{.Context}}\n\n', mode: '', workdir: '', enabled: true };
+  // Automated sessions usually end in review, so new rules default to a Review lane if there is one.
+  const review = lanes.find(l => /review/i.test(l.name));
+  rule = rule || { name: '', from_lane_id: null, to_lane_id: lanes[0].id, prompt: '{{.Context}}\n\n', mode: '', workdir: '',
+    done_lane_id: review ? review.id : null, enabled: true };
   const dlg = document.getElementById('dialog');
   const name = h('input', { value: rule.name, placeholder: 'e.g. Start coding' });
   const from = select([['', 'Any lane'], ...lanes.map(l => [l.id, l.name])], rule.from_lane_id ?? '');
@@ -689,6 +713,7 @@ function ruleDialog(rule, lanes, done) {
   const prompt = h('textarea', { rows: 6 }, rule.prompt);
   const mode = select(modeOptions(true), rule.mode);
   const workdir = h('input', { value: rule.workdir, placeholder: 'Task workdir, else app default' });
+  const doneLane = doneLaneSelect(lanes, rule.done_lane_id);
   dlg.replaceChildren(h('h2', {}, rule.id ? 'Edit rule' : 'New rule'),
     h('label', {}, 'Name'), name,
     h('div', { class: 'row' }, h('div', { class: 'grow' }, h('label', {}, 'From'), from), h('div', { class: 'grow' }, h('label', {}, 'To'), to)),
@@ -696,13 +721,14 @@ function ruleDialog(rule, lanes, done) {
     prompt,
     h('label', {}, 'Agent mode'), mode,
     h('label', {}, 'Working directory'), workdir,
+    h('label', {}, 'After the agent finishes (skipped if the task was moved meanwhile)'), doneLane,
     h('div', { class: 'dialog-actions' },
       h('button', { class: 'ghost', onclick: () => dlg.close() }, 'Cancel'),
       h('button', {
         onclick: async () => {
           const body = {
             ...rule, name: name.value, prompt: prompt.value, mode: mode.value, workdir: workdir.value,
-            from_lane_id: from.value ? Number(from.value) : null, to_lane_id: Number(to.value),
+            from_lane_id: from.value ? Number(from.value) : null, to_lane_id: Number(to.value), done_lane_id: doneLaneValue(doneLane),
           };
           await api(rule.id ? 'PUT' : 'POST', rule.id ? `/api/rules/${rule.id}` : '/api/rules', body);
           dlg.close();

@@ -53,6 +53,13 @@ func fromNullMillis(ms sql.NullInt64) *time.Time {
 	return &t
 }
 
+func fromNullID(id sql.NullInt64) *int64 {
+	if !id.Valid {
+		return nil
+	}
+	return &id.Int64
+}
+
 func toNullMillis(t *time.Time) sql.NullInt64 {
 	if t == nil {
 		return sql.NullInt64{}

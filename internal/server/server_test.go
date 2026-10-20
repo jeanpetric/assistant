@@ -305,3 +305,55 @@ func TestStandaloneSession(t *testing.T) {
 	c.do("POST", "/api/sessions", map[string]any{"prompt": "x", "model": "--dangerously-skip"}, 400, nil)
 	c.do("POST", "/api/sessions", map[string]any{"prompt": "x", "mode": "yolo"}, 400, nil)
 }
+
+func TestDoneLane(t *testing.T) {
+	c := newClient(t)
+	var b board
+	c.do("GET", "/api/board", nil, 200, &b)
+	lane := map[string]int64{}
+	for _, l := range b.Lanes {
+		lane[l.Name] = l.ID
+	}
+	var task store.Task
+	c.do("POST", "/api/tasks", map[string]any{"title": "T", "lane_id": lane["In progress"]}, 201, &task)
+	path := "/api/tasks/" + itoa(task.ID)
+
+	var sess store.Session
+	c.do("POST", path+"/sessions", map[string]any{"prompt": "p", "done_lane_id": lane["Review"]}, 201, &sess)
+	c.app.Wait()
+	got, _ := c.app.Store.Task(context.Background(), task.ID)
+	if got.LaneID != lane["Review"] {
+		t.Fatalf("task in lane %d, want Review", got.LaneID)
+	}
+	c.do("POST", path+"/sessions", map[string]any{"prompt": "p", "done_lane_id": 999}, 400, nil)
+
+	var upd store.Session
+	c.do("PATCH", "/api/sessions/"+itoa(sess.ID), map[string]any{"done_lane_id": nil}, 200, &upd)
+	if upd.DoneLaneID != nil {
+		t.Fatalf("done lane not cleared: %+v", upd)
+	}
+	c.do("PATCH", "/api/sessions/"+itoa(sess.ID), map[string]any{"done_lane_id": lane["Done"]}, 200, &upd)
+	if upd.DoneLaneID == nil || *upd.DoneLaneID != lane["Done"] {
+		t.Fatalf("done lane not set: %+v", upd)
+	}
+	c.do("PATCH", "/api/sessions/"+itoa(sess.ID), map[string]any{"done_lane_id": 999}, 400, nil)
+	c.do("PATCH", "/api/sessions/999", map[string]any{"done_lane_id": nil}, 404, nil)
+
+	var standalone store.Session
+	c.do("POST", "/api/sessions", map[string]any{"prompt": "p"}, 201, &standalone)
+	c.do("PATCH", "/api/sessions/"+itoa(standalone.ID), map[string]any{"done_lane_id": lane["Review"]}, 400, nil)
+
+	var rule store.Rule
+	c.do("POST", "/api/rules", map[string]any{"name": "r", "to_lane_id": lane["Todo"], "prompt": "p", "done_lane_id": lane["Review"]}, 200, &rule)
+	if rule.DoneLaneID == nil || *rule.DoneLaneID != lane["Review"] {
+		t.Fatalf("rule = %+v", rule)
+	}
+	c.do("POST", "/api/rules", map[string]any{"name": "r", "to_lane_id": lane["Todo"], "prompt": "p", "done_lane_id": 999}, 400, nil)
+
+	var sched store.Schedule
+	c.do("POST", path+"/schedules", map[string]any{"cron": "@daily", "action": "agent", "prompt": "p", "done_lane_id": lane["Review"]}, 200, &sched)
+	if sched.DoneLaneID == nil || *sched.DoneLaneID != lane["Review"] {
+		t.Fatalf("schedule = %+v", sched)
+	}
+	c.do("POST", path+"/schedules", map[string]any{"cron": "@daily", "action": "agent", "prompt": "p", "done_lane_id": 999}, 400, nil)
+}

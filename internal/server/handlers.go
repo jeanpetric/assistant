@@ -1,7 +1,9 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -342,6 +344,7 @@ type sessionInput struct {
 	Model          string `json:"model"`
 	Workdir        string `json:"workdir"`
 	IncludeContext bool   `json:"include_context"`
+	DoneLaneID     *int64 `json:"done_lane_id"` // task sessions only
 }
 
 func (in *sessionInput) validate() error {
@@ -437,8 +440,13 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request) {
 		}
 		prompt = app.TaskContext(t) + "\n\n---\n\n" + prompt
 	}
+	if err := s.checkLane(r.Context(), in.DoneLaneID); err != nil {
+		writeErr(w, err)
+		return
+	}
 	sess, err := s.app.StartSession(r.Context(), app.StartOpts{
 		TaskID: id, Prompt: prompt, Title: in.Title, Mode: in.Mode, Model: in.Model, Workdir: in.Workdir,
+		DoneLaneID: in.DoneLaneID,
 	})
 	if err != nil {
 		writeErr(w, err)
@@ -501,6 +509,57 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(202)
 }
 
+// updateSession changes where the task moves when the session's turn finishes.
+func (s *Server) updateSession(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	var in struct {
+		DoneLaneID *int64 `json:"done_lane_id"`
+	}
+	if err := decode(r, &in); err != nil {
+		writeErr(w, err)
+		return
+	}
+	sess, err := s.app.Store.Session(r.Context(), id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if sess.TaskID == 0 && in.DoneLaneID != nil {
+		writeErr(w, badRequest{"a session without a task has no lane to move"})
+		return
+	}
+	if err := s.checkLane(r.Context(), in.DoneLaneID); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.app.Store.SetSessionDoneLane(r.Context(), id, in.DoneLaneID); err != nil {
+		writeErr(w, err)
+		return
+	}
+	sess, err = s.app.Store.Session(r.Context(), id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, sess)
+}
+
+// checkLane rejects a lane id that doesn't exist; nil is fine.
+func (s *Server) checkLane(ctx context.Context, id *int64) error {
+	if id == nil {
+		return nil
+	}
+	_, err := s.app.Store.Lane(ctx, *id)
+	if errors.Is(err, store.ErrNotFound) {
+		return badRequest{"unknown done_lane_id"}
+	}
+	return err
+}
+
 func (s *Server) cancelSession(w http.ResponseWriter, r *http.Request) {
 	id, err := pathID(r)
 	if err != nil {
@@ -556,6 +615,10 @@ func (s *Server) saveRule(w http.ResponseWriter, r *http.Request) {
 	}
 	if !validMode(rule.Mode) {
 		writeErr(w, badRequest{"unknown mode"})
+		return
+	}
+	if err := s.checkLane(r.Context(), rule.DoneLaneID); err != nil {
+		writeErr(w, err)
 		return
 	}
 	if _, err := app.RenderPrompt(rule.Prompt, store.Task{}); err != nil {
@@ -641,6 +704,10 @@ func (s *Server) updateSchedule(w http.ResponseWriter, r *http.Request) {
 func (s *Server) saveSchedule(w http.ResponseWriter, r *http.Request, x store.Schedule) {
 	if !validMode(x.Mode) {
 		writeErr(w, badRequest{"unknown mode"})
+		return
+	}
+	if err := s.checkLane(r.Context(), x.DoneLaneID); err != nil {
+		writeErr(w, err)
 		return
 	}
 	if x.Action == store.ActionAgent {

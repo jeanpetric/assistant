@@ -342,3 +342,65 @@ func TestSessionsMigrationKeepsData(t *testing.T) {
 		t.Fatal("session should cascade")
 	}
 }
+
+func TestDoneLaneMigrationAndLaneDelete(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range migrations[:3] {
+		if _, err := db.Exec(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, q := range []string{
+		`PRAGMA user_version = 3`,
+		`INSERT INTO tasks (id, title, lane_id, position, created_at, updated_at) VALUES (1, 'old', 1, 0, 0, 0)`,
+		`INSERT INTO sessions (id, task_id, status, mode, created_at, updated_at) VALUES (7, 1, 'idle', 'plan', 0, 0)`,
+		`INSERT INTO transition_rules (id, name, to_lane_id, prompt) VALUES (2, 'r', 3, 'p')`,
+		`INSERT INTO schedules (id, task_id, cron, action) VALUES (4, 1, '@daily', 'agent')`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(q, err)
+		}
+	}
+	db.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	x, err := s.Session(ctx, 7)
+	if err != nil || x.TaskTitle != "old" || x.DoneLaneID != nil {
+		t.Fatalf("session = %+v, %v", x, err)
+	}
+	if r, err := s.Rule(ctx, 2); err != nil || r.Name != "r" || r.DoneLaneID != nil {
+		t.Fatalf("rule = %+v, %v", r, err)
+	}
+	if sc, err := s.Schedule(ctx, 4); err != nil || sc.Cron != "@daily" || sc.DoneLaneID != nil {
+		t.Fatalf("schedule = %+v, %v", sc, err)
+	}
+
+	// Deleting a lane clears it as a done lane instead of deleting what points at it.
+	l, _ := s.CreateLane(ctx, "QA", "")
+	if err := s.SetSessionDoneLane(ctx, 7, &l.ID); err != nil {
+		t.Fatal(err)
+	}
+	r, _ := s.SaveRule(ctx, Rule{Name: "to qa", ToLaneID: 1, Prompt: "p", DoneLaneID: &l.ID, Enabled: true})
+	sc, _ := s.SaveSchedule(ctx, Schedule{TaskID: 1, Cron: "@daily", Action: "agent", DoneLaneID: &l.ID})
+	if x, _ := s.Session(ctx, 7); x.DoneLaneID == nil || *x.DoneLaneID != l.ID {
+		t.Fatalf("done lane not saved: %+v", x)
+	}
+	if err := s.DeleteLane(ctx, l.ID); err != nil {
+		t.Fatal(err)
+	}
+	x, _ = s.Session(ctx, 7)
+	r, rerr := s.Rule(ctx, r.ID)
+	sc, serr := s.Schedule(ctx, sc.ID)
+	if x.DoneLaneID != nil || rerr != nil || r.DoneLaneID != nil || serr != nil || sc.DoneLaneID != nil {
+		t.Fatalf("after lane delete: session %+v, rule %+v %v, schedule %+v %v", x, r, rerr, sc, serr)
+	}
+}

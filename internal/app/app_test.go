@@ -219,6 +219,102 @@ func TestMoveTaskFiresRules(t *testing.T) {
 	a.Wait()
 }
 
+func TestDoneLaneMovesTaskAfterSuccessfulTurn(t *testing.T) {
+	a, r := newApp(t)
+	ctx := context.Background()
+	lanes := lanesByName(t, a)
+	todo, wip, review := lanes["Todo"], lanes["In progress"], lanes["Review"]
+	task, _ := a.Store.CreateTask(ctx, store.Task{Title: "Ship it", LaneID: todo})
+	a.Store.SaveRule(ctx, store.Rule{Name: "Code", ToLaneID: wip, Enabled: true, Prompt: "code", DoneLaneID: &review})
+	a.Store.SaveRule(ctx, store.Rule{Name: "Review", ToLaneID: review, Enabled: true, Prompt: "review"})
+
+	started, err := a.MoveTask(ctx, task.ID, wip, 0)
+	if err != nil || len(started) != 1 || started[0].DoneLaneID == nil || *started[0].DoneLaneID != review {
+		t.Fatalf("started = %+v, %v", started, err)
+	}
+	a.Wait()
+	if got, _ := a.Store.Task(ctx, task.ID); got.LaneID != review {
+		t.Fatalf("task in lane %d, want review %d", got.LaneID, review)
+	}
+	// Arriving in Review fires that lane's rule, which has no done lane: the chain stops there.
+	reqs := r.requests()
+	if len(reqs) != 2 || reqs[1].Prompt != "review" {
+		t.Fatalf("requests = %+v", reqs)
+	}
+	n, _ := a.Store.Notifications(ctx, true)
+	if len(n) != 1 || !strings.Contains(n[0].Message, "moved to Review") {
+		t.Fatalf("notifications = %+v", n)
+	}
+}
+
+func TestDoneLaneSkipped(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("no done lane", func(t *testing.T) {
+		a, _ := newApp(t)
+		lanes := lanesByName(t, a)
+		task, _ := a.Store.CreateTask(ctx, store.Task{Title: "T", LaneID: lanes["In progress"]})
+		a.StartSession(ctx, StartOpts{TaskID: task.ID, Prompt: "p"})
+		a.Wait()
+		if got, _ := a.Store.Task(ctx, task.ID); got.LaneID != lanes["In progress"] {
+			t.Fatal("task moved without a done lane")
+		}
+	})
+
+	t.Run("failed turn", func(t *testing.T) {
+		a, r := newApp(t)
+		lanes := lanesByName(t, a)
+		review := lanes["Review"]
+		task, _ := a.Store.CreateTask(ctx, store.Task{Title: "T", LaneID: lanes["In progress"]})
+		r.err = errors.New("boom")
+		a.StartSession(ctx, StartOpts{TaskID: task.ID, Prompt: "p", DoneLaneID: &review})
+		a.Wait()
+		if got, _ := a.Store.Task(ctx, task.ID); got.LaneID != lanes["In progress"] {
+			t.Fatal("failed turn must not move the task")
+		}
+	})
+
+	t.Run("moved by hand during the turn", func(t *testing.T) {
+		a, r := newApp(t)
+		lanes := lanesByName(t, a)
+		review := lanes["Review"]
+		task, _ := a.Store.CreateTask(ctx, store.Task{Title: "T", LaneID: lanes["In progress"]})
+		r.block = make(chan struct{})
+		a.StartSession(ctx, StartOpts{TaskID: task.ID, Prompt: "p", DoneLaneID: &review})
+		a.Store.MoveTask(ctx, task.ID, lanes["Done"], 0)
+		close(r.block)
+		a.Wait()
+		if got, _ := a.Store.Task(ctx, task.ID); got.LaneID != lanes["Done"] {
+			t.Fatal("a manual move must win over the done lane")
+		}
+	})
+
+	t.Run("done lane switched off mid-turn", func(t *testing.T) {
+		a, r := newApp(t)
+		lanes := lanesByName(t, a)
+		review := lanes["Review"]
+		task, _ := a.Store.CreateTask(ctx, store.Task{Title: "T", LaneID: lanes["In progress"]})
+		r.block = make(chan struct{})
+		sess, _ := a.StartSession(ctx, StartOpts{TaskID: task.ID, Prompt: "p", DoneLaneID: &review})
+		a.Store.SetSessionDoneLane(ctx, sess.ID, nil)
+		close(r.block)
+		a.Wait()
+		if got, _ := a.Store.Task(ctx, task.ID); got.LaneID != lanes["In progress"] {
+			t.Fatal("cleared done lane must not move the task")
+		}
+	})
+
+	t.Run("standalone session", func(t *testing.T) {
+		a, _ := newApp(t)
+		review := lanesByName(t, a)["Review"]
+		sess, err := a.StartSession(ctx, StartOpts{Prompt: "p", DoneLaneID: &review})
+		a.Wait()
+		if err != nil || sess.DoneLaneID != nil {
+			t.Fatalf("standalone session kept a done lane: %+v, %v", sess, err)
+		}
+	})
+}
+
 func TestBadRuleTemplateNotifies(t *testing.T) {
 	a, _ := newApp(t)
 	ctx := context.Background()
@@ -240,6 +336,7 @@ func TestSchedules(t *testing.T) {
 	now := time.Date(2026, 10, 20, 8, 59, 30, 0, time.Local)
 	a.Now = func() time.Time { return now }
 	task, _ := a.Store.CreateTask(ctx, store.Task{Title: "Daily digest"})
+	review := lanesByName(t, a)["Review"]
 
 	if _, err := a.SaveSchedule(ctx, store.Schedule{TaskID: task.ID, Cron: "bad", Action: "agent"}); err == nil {
 		t.Fatal("expected cron error")
@@ -248,7 +345,7 @@ func TestSchedules(t *testing.T) {
 		t.Fatal("expected bad action")
 	}
 	agentSched, err := a.SaveSchedule(ctx, store.Schedule{TaskID: task.ID, Cron: "0 9 * * *", Action: "agent",
-		Prompt: "Summarise: {{.Context}}", Enabled: true})
+		Prompt: "Summarise: {{.Context}}", Enabled: true, DoneLaneID: &review})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,9 +369,16 @@ func TestSchedules(t *testing.T) {
 	if len(reqs) != 1 || !strings.Contains(reqs[0].Prompt, "Task #1: Daily digest") {
 		t.Fatalf("reqs = %+v", reqs)
 	}
+	var msgs []string
 	notes, _ := a.Store.Notifications(ctx, true)
-	if len(notes) != 1 || notes[0].Message != "Reminder: Daily digest" {
-		t.Fatalf("notes = %+v", notes)
+	for _, n := range notes {
+		msgs = append(msgs, n.Message)
+	}
+	if all := strings.Join(msgs, "|"); len(notes) != 2 || !strings.Contains(all, "Reminder: Daily digest") || !strings.Contains(all, "moved to Review") {
+		t.Fatalf("notes = %v", msgs)
+	}
+	if moved, _ := a.Store.Task(ctx, task.ID); moved.LaneID != review {
+		t.Fatal("scheduled session should carry the schedule's done lane")
 	}
 	got, _ := a.Store.Schedule(ctx, agentSched.ID)
 	if want := time.Date(2026, 10, 21, 9, 0, 0, 0, time.Local); !got.NextRunAt.Equal(want) || got.LastRunAt == nil {

@@ -127,6 +127,13 @@ DROP TABLE sessions;
 ALTER TABLE sessions_new RENAME TO sessions;
 CREATE INDEX sessions_task ON sessions(task_id);
 `,
+	// The lane a task moves to when an agent turn finishes successfully:
+	// set per session, with defaults carried by rules and schedules.
+	`
+ALTER TABLE sessions ADD COLUMN done_lane_id INTEGER REFERENCES lanes(id) ON DELETE SET NULL;
+ALTER TABLE transition_rules ADD COLUMN done_lane_id INTEGER REFERENCES lanes(id) ON DELETE SET NULL;
+ALTER TABLE schedules ADD COLUMN done_lane_id INTEGER REFERENCES lanes(id) ON DELETE SET NULL;
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

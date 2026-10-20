@@ -25,6 +25,7 @@ type Session struct {
 	Model           string    `json:"model"` // empty: CLI default
 	Workdir         string    `json:"workdir"`
 	Trigger         string    `json:"trigger"`
+	DoneLaneID      *int64    `json:"done_lane_id"` // move the task here when a turn finishes successfully
 	ClaudeSessionID string    `json:"claude_session_id"`
 	CostUSD         float64   `json:"cost_usd"`
 	Error           string    `json:"error"`
@@ -42,15 +43,17 @@ type Message struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-const sessionCols = `s.id, COALESCE(s.task_id, 0), COALESCE(t.title, ''), s.title, s.status, s.mode, s.model, s.workdir, s.trigger, s.claude_session_id,
+const sessionCols = `s.id, COALESCE(s.task_id, 0), COALESCE(t.title, ''), s.title, s.status, s.mode, s.model, s.workdir, s.trigger, s.done_lane_id, s.claude_session_id,
 	s.cost_usd, s.error, s.created_at, s.updated_at,
 	COALESCE((SELECT content FROM messages m WHERE m.session_id = s.id AND m.kind IN ('text', 'result', 'error') ORDER BY m.id DESC LIMIT 1), '')`
 
 func scanSession(sc interface{ Scan(...any) error }) (Session, error) {
 	var x Session
 	var created, updated int64
+	var doneLane sql.NullInt64
 	err := sc.Scan(&x.ID, &x.TaskID, &x.TaskTitle, &x.Title, &x.Status, &x.Mode, &x.Model, &x.Workdir, &x.Trigger,
-		&x.ClaudeSessionID, &x.CostUSD, &x.Error, &created, &updated, &x.LastMessage)
+		&doneLane, &x.ClaudeSessionID, &x.CostUSD, &x.Error, &created, &updated, &x.LastMessage)
+	x.DoneLaneID = fromNullID(doneLane)
 	x.CreatedAt, x.UpdatedAt = fromMillis(created), fromMillis(updated)
 	return x, err
 }
@@ -58,9 +61,10 @@ func scanSession(sc interface{ Scan(...any) error }) (Session, error) {
 func (s *Store) CreateSession(ctx context.Context, x Session) (Session, error) {
 	now := s.ts()
 	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO sessions (task_id, title, status, mode, model, workdir, trigger, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		sql.NullInt64{Int64: x.TaskID, Valid: x.TaskID != 0}, x.Title, StatusRunning, x.Mode, x.Model, x.Workdir, x.Trigger, now, now)
+		INSERT INTO sessions (task_id, title, status, mode, model, workdir, trigger, done_lane_id, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		sql.NullInt64{Int64: x.TaskID, Valid: x.TaskID != 0}, x.Title, StatusRunning, x.Mode, x.Model, x.Workdir, x.Trigger,
+		x.DoneLaneID, now, now)
 	if err != nil {
 		return Session{}, err
 	}
@@ -123,6 +127,13 @@ func (s *Store) RecentWorkdirs(ctx context.Context, limit int) ([]string, error)
 func (s *Store) SetSessionStatus(ctx context.Context, id int64, status, errMsg string) error {
 	return affected(s.db.ExecContext(ctx,
 		`UPDATE sessions SET status = ?, error = ?, updated_at = ? WHERE id = ?`, status, errMsg, s.ts(), id))
+}
+
+// SetSessionDoneLane changes where the session's task moves when a turn
+// finishes; nil keeps the task where it is.
+func (s *Store) SetSessionDoneLane(ctx context.Context, id int64, laneID *int64) error {
+	return affected(s.db.ExecContext(ctx,
+		`UPDATE sessions SET done_lane_id = ?, updated_at = ? WHERE id = ?`, laneID, s.ts(), id))
 }
 
 func (s *Store) SetClaudeSessionID(ctx context.Context, id int64, claudeID string) error {

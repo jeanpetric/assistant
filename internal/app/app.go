@@ -67,6 +67,9 @@ type StartOpts struct {
 	Model   string
 	Workdir string
 	Trigger string // manual | rule:<name> | schedule:<id>
+	// DoneLaneID moves the task to this lane when a turn finishes successfully
+	// (see moveWhenDone). Nil leaves the task where it is.
+	DoneLaneID *int64
 }
 
 // StartSession creates a session, for the task if one is given, and runs its
@@ -97,8 +100,12 @@ func (a *App) StartSession(ctx context.Context, o StartOpts) (store.Session, err
 	if o.Title == "" {
 		o.Title = firstLine(o.Prompt, 80)
 	}
+	if o.TaskID == 0 {
+		o.DoneLaneID = nil
+	}
 	sess, err := a.Store.CreateSession(ctx, store.Session{
 		TaskID: o.TaskID, Title: o.Title, Mode: o.Mode, Model: o.Model, Workdir: o.Workdir, Trigger: o.Trigger,
+		DoneLaneID: o.DoneLaneID,
 	})
 	if err != nil {
 		return sess, err
@@ -171,6 +178,13 @@ func (a *App) launch(sess store.Session, prompt, resumeID string) error {
 	a.wg.Add(1)
 	a.mu.Unlock()
 
+	// The lane the task is in now; moveWhenDone only acts if it is still there.
+	var startLane int64
+	if sess.TaskID != 0 {
+		if t, err := a.Store.Task(ctx, sess.TaskID); err == nil {
+			startLane = t.LaneID
+		}
+	}
 	// Record status and prompt before returning so the transcript is ordered.
 	if err := a.Store.SetSessionStatus(ctx, sess.ID, store.StatusRunning, ""); err != nil {
 		log.Printf("session %d: %v", sess.ID, err)
@@ -222,8 +236,32 @@ func (a *App) launch(sess store.Session, prompt, resumeID string) error {
 			status = store.StatusError
 		}
 		a.Store.SetSessionStatus(bg, sess.ID, status, msg)
+		if status == store.StatusIdle {
+			a.moveWhenDone(bg, sess.ID, startLane)
+		}
 	}()
 	return nil
+}
+
+// moveWhenDone moves the session's task to its done lane after a successful
+// turn, firing that lane's transition rules. It does nothing if the task left
+// startLane during the turn: someone moved it by hand, and that wins.
+func (a *App) moveWhenDone(ctx context.Context, sessionID, startLane int64) {
+	sess, err := a.Store.Session(ctx, sessionID) // the done lane may have changed mid-turn
+	if err != nil || sess.TaskID == 0 || sess.DoneLaneID == nil {
+		return
+	}
+	task, err := a.Store.Task(ctx, sess.TaskID)
+	if err != nil || task.LaneID != startLane || task.LaneID == *sess.DoneLaneID {
+		return
+	}
+	taskID := task.ID
+	if _, err := a.MoveTask(ctx, taskID, *sess.DoneLaneID, -1); err != nil {
+		a.Store.Notify(ctx, &taskID, fmt.Sprintf("Session %q finished but the task could not be moved: %v", sess.Title, err))
+		return
+	}
+	lane, _ := a.Store.Lane(ctx, *sess.DoneLaneID)
+	a.Store.Notify(ctx, &taskID, fmt.Sprintf("Agent finished %q — moved to %s", sess.Title, lane.Name))
 }
 
 // MoveTask moves a task on the board and fires matching transition rules.
@@ -250,6 +288,7 @@ func (a *App) MoveTask(ctx context.Context, taskID, laneID int64, index int) ([]
 		}
 		sess, err := a.StartSession(ctx, StartOpts{
 			TaskID: taskID, Prompt: prompt, Title: r.Name, Mode: r.Mode, Workdir: r.Workdir, Trigger: "rule:" + r.Name,
+			DoneLaneID: r.DoneLaneID,
 		})
 		if err != nil {
 			a.Store.Notify(ctx, &taskID, fmt.Sprintf("Rule %q: %v", r.Name, err))
@@ -309,7 +348,7 @@ func (a *App) RunDueSchedules(ctx context.Context) error {
 			prompt, err := RenderPrompt(x.Prompt, task)
 			if err == nil {
 				_, err = a.StartSession(ctx, StartOpts{TaskID: taskID, Prompt: prompt, Mode: x.Mode,
-					Trigger: fmt.Sprintf("schedule:%d", x.ID)})
+					Trigger: fmt.Sprintf("schedule:%d", x.ID), DoneLaneID: x.DoneLaneID})
 			}
 			if err != nil {
 				a.Store.Notify(ctx, &taskID, fmt.Sprintf("Scheduled session failed: %v", err))
