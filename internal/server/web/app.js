@@ -70,6 +70,13 @@ function modeOptions(includeDefault) {
   return includeDefault ? [['', `App default (${state.meta.default_mode})`], ...opts] : opts;
 }
 
+function modelOptions() {
+  const def = state.meta.default_model;
+  const opts = state.meta.models.map(m => [m, m]);
+  if (def && !state.meta.models.includes(def)) opts.unshift([def, def]);
+  return def ? opts : [['', 'Claude default model'], ...opts];
+}
+
 // Minimal rendering: fenced code blocks become <pre>, the rest stays plain text.
 function richText(text) {
   const out = [];
@@ -323,6 +330,7 @@ async function renderTask(id, focusSession) {
   const sessionsEl = h('div');
   const components = new Map();
   const addSession = s => {
+    if (components.has(s.id)) return; // the poller may have added it first
     const c = sessionComponent(s, s.messages || []);
     components.set(s.id, c);
     sessionsEl.prepend(c.el); // newest first
@@ -353,12 +361,13 @@ async function renderTask(id, focusSession) {
 function newSessionPanel(task, onStarted) {
   const prompt = h('textarea', { rows: 4, placeholder: 'What should the agent do? Skills work too, e.g. /p-dev:review 123' });
   const mode = select(modeOptions(false), state.meta.default_mode);
+  const model = select(modelOptions(), state.meta.default_model);
   const ctx = h('input', { type: 'checkbox', checked: true });
   const workdir = h('input', { placeholder: task.workdir || state.meta.workdir });
   const start = async () => {
     if (!prompt.value.trim()) return;
     const s = await api('POST', `/api/tasks/${task.id}/sessions`, {
-      prompt: prompt.value, mode: mode.value, workdir: workdir.value, include_context: ctx.checked,
+      prompt: prompt.value, mode: mode.value, model: model.value, workdir: workdir.value, include_context: ctx.checked,
     });
     prompt.value = '';
     const full = await api('GET', `/api/sessions/${s.id}`);
@@ -370,6 +379,7 @@ function newSessionPanel(task, onStarted) {
     prompt,
     h('div', { class: 'row', style: 'margin-top:8px; flex-wrap:wrap' },
       h('div', { class: 'grow', style: 'min-width:200px' }, mode),
+      h('div', { style: 'min-width:120px' }, model),
       h('div', { class: 'grow', style: 'min-width:200px' }, workdir),
       h('label', { class: 'row', style: 'margin:0' }, ctx, 'Include task context'),
       h('button', { onclick: start }, 'Start ⌘↵')));
@@ -424,10 +434,15 @@ function sessionComponent(session, messages) {
       h('span', { class: 'title' }, s.title || `Session ${s.id}`),
       h('span', { class: 'badge status-' + s.status }, running ? h('span', { class: 'pulse' }) : null, s.status),
       h('span', { class: 'badge' }, s.mode),
+      s.model ? h('span', { class: 'badge' }, s.model) : null,
       s.trigger !== 'manual' ? h('span', { class: 'badge' }, s.trigger) : null,
       s.cost_usd ? h('span', { class: 'muted small' }, '$' + s.cost_usd.toFixed(2)) : null,
       h('span', { class: 'muted small' }, fmtTime(s.created_at)),
-      resumeCmd ? h('button', {
+      s.attach ? h('button', {
+        class: 'ghost small', title: s.attach,
+        onclick: () => navigator.clipboard.writeText(s.attach).then(() => toast('Attach command copied')),
+      }, 'Copy tmux attach') : null,
+      resumeCmd && !s.attach ? h('button', {
         class: 'ghost small', title: resumeCmd,
         onclick: () => navigator.clipboard.writeText(resumeCmd).then(() => toast('Resume command copied')),
       }, 'Copy resume cmd') : null,
@@ -496,7 +511,7 @@ async function renderSessions() {
       h('td', {}, h('span', { class: 'badge status-' + s.status }, s.status === 'running' ? h('span', { class: 'pulse' }) : null, s.status)),
       h('td', {}, h('div', {}, s.task_title), h('div', { class: 'muted small' }, s.title)),
       h('td', { class: 'small' }, trunc(s.last_message, 220)),
-      h('td', { class: 'muted small' }, s.trigger, h('br'), s.mode),
+      h('td', { class: 'muted small' }, s.trigger, h('br'), s.mode, s.model ? ' · ' + s.model : ''),
       h('td', { class: 'muted small' }, ago(s.updated_at)))));
   }
   view.replaceChildren(h('div', { class: 'panel' },

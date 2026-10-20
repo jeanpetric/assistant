@@ -31,6 +31,8 @@ type App struct {
 	Runner         agent.Runner
 	DefaultWorkdir string
 	DefaultMode    string
+	DefaultModel   string   // empty uses the CLI default
+	Models         []string // models offered in the UI
 	Now            func() time.Time
 
 	mu      sync.Mutex
@@ -61,6 +63,7 @@ type StartOpts struct {
 	Prompt  string
 	Title   string
 	Mode    string
+	Model   string
 	Workdir string
 	Trigger string // manual | rule:<name> | schedule:<id>
 }
@@ -77,6 +80,9 @@ func (a *App) StartSession(ctx context.Context, o StartOpts) (store.Session, err
 	if o.Mode == "" {
 		o.Mode = a.DefaultMode
 	}
+	if o.Model == "" {
+		o.Model = a.DefaultModel
+	}
 	if o.Workdir == "" {
 		o.Workdir = task.Workdir
 	}
@@ -90,7 +96,7 @@ func (a *App) StartSession(ctx context.Context, o StartOpts) (store.Session, err
 		o.Title = firstLine(o.Prompt, 80)
 	}
 	sess, err := a.Store.CreateSession(ctx, store.Session{
-		TaskID: o.TaskID, Title: o.Title, Mode: o.Mode, Workdir: o.Workdir, Trigger: o.Trigger,
+		TaskID: o.TaskID, Title: o.Title, Mode: o.Mode, Model: o.Model, Workdir: o.Workdir, Trigger: o.Trigger,
 	})
 	if err != nil {
 		return sess, err
@@ -154,7 +160,8 @@ func (a *App) launch(sess store.Session, prompt, resumeID string) error {
 			cancel()
 		}()
 		bg := context.Background()
-		req := agent.Request{Prompt: prompt, Workdir: sess.Workdir, Mode: sess.Mode, ResumeID: resumeID}
+		req := agent.Request{Prompt: prompt, Workdir: sess.Workdir, Mode: sess.Mode, Model: sess.Model,
+			ResumeID: resumeID, Key: SessionKey(sess.ID)}
 		failed := false
 		err := a.Runner.Run(ctx, req, func(ev agent.Event) {
 			if ev.ClaudeSessionID != "" && ev.ClaudeSessionID != sess.ClaudeSessionID {
@@ -185,6 +192,18 @@ func (a *App) launch(sess store.Session, prompt, resumeID string) error {
 		a.Store.SetSessionStatus(bg, sess.ID, status, msg)
 	}()
 	return nil
+}
+
+// SessionKey names the agent's long-lived process for a session, e.g. its tmux session.
+func SessionKey(id int64) string { return fmt.Sprintf("assistant-%d", id) }
+
+// AttachCommand is the shell command that opens the session's live agent,
+// or "" when the runner has nothing to attach to.
+func (a *App) AttachCommand(id int64) string {
+	if r, ok := a.Runner.(interface{ AttachCommand(string) string }); ok {
+		return r.AttachCommand(SessionKey(id))
+	}
+	return ""
 }
 
 // MoveTask moves a task on the board and fires matching transition rules.

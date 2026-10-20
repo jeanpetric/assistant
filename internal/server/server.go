@@ -10,6 +10,7 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -146,6 +147,9 @@ func pathID(r *http.Request) (int64, error) {
 	}
 	return id, nil
 }
+
+// validModel accepts aliases and full model ids, e.g. "opus", "claude-opus-5-5", "opus[1m]".
+var validModel = regexp.MustCompile(`^([A-Za-z0-9][A-Za-z0-9._\[\]-]*)?$`).MatchString
 
 func validMode(m string) bool {
 	if m == "" {

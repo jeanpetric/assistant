@@ -44,10 +44,12 @@ func (s *Server) board(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) meta(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{
-		"modes":        agent.Modes,
-		"default_mode": s.app.DefaultMode,
-		"workdir":      s.app.DefaultWorkdir,
-		"kinds":        []string{"task", "coding", "research", "discussion", "reminder"},
+		"modes":         agent.Modes,
+		"default_mode":  s.app.DefaultMode,
+		"models":        s.app.Models,
+		"default_model": s.app.DefaultModel,
+		"workdir":       s.app.DefaultWorkdir,
+		"kinds":         []string{"task", "coding", "research", "discussion", "reminder"},
 	})
 }
 
@@ -219,6 +221,7 @@ func (s *Server) getTask(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, err)
 			return
 		}
+		sessions[i].Attach = s.app.AttachCommand(sessions[i].ID)
 		out = append(out, sessionWithMessages{sessions[i], msgs})
 	}
 	schedules, err := s.app.Store.Schedules(ctx, id)
@@ -331,6 +334,7 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request) {
 		Prompt         string `json:"prompt"`
 		Title          string `json:"title"`
 		Mode           string `json:"mode"`
+		Model          string `json:"model"`
 		Workdir        string `json:"workdir"`
 		IncludeContext bool   `json:"include_context"`
 	}
@@ -340,6 +344,10 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request) {
 	}
 	if !validMode(in.Mode) {
 		writeErr(w, badRequest{"unknown mode"})
+		return
+	}
+	if !validModel(in.Model) {
+		writeErr(w, badRequest{"invalid model"})
 		return
 	}
 	if strings.TrimSpace(in.Prompt) == "" {
@@ -356,7 +364,7 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request) {
 		prompt = app.TaskContext(t) + "\n\n---\n\n" + prompt
 	}
 	sess, err := s.app.StartSession(r.Context(), app.StartOpts{
-		TaskID: id, Prompt: prompt, Title: in.Title, Mode: in.Mode, Workdir: in.Workdir,
+		TaskID: id, Prompt: prompt, Title: in.Title, Mode: in.Mode, Model: in.Model, Workdir: in.Workdir,
 	})
 	if err != nil {
 		writeErr(w, err)
@@ -386,6 +394,7 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	sess.Attach = s.app.AttachCommand(id)
 	after, _ := strconv.ParseInt(r.URL.Query().Get("after"), 10, 64)
 	msgs, err := s.app.Store.Messages(r.Context(), id, after)
 	if err != nil {

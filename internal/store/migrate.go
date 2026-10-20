@@ -98,6 +98,7 @@ INSERT INTO field_defs (key, label, type, position) VALUES
 	('pull_request', 'Pull request', 'url', 1),
 	('slack', 'Slack thread', 'url', 2);
 `,
+	`ALTER TABLE sessions ADD COLUMN model TEXT NOT NULL DEFAULT '';`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

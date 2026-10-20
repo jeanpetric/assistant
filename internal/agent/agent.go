@@ -1,5 +1,6 @@
-// Package agent runs AI coding agent turns. ClaudeRunner drives the
-// Claude Code CLI in print mode and translates its stream-json output.
+// Package agent runs AI coding agent turns. TmuxRunner keeps an interactive
+// Claude Code in a tmux session; ClaudeRunner drives the CLI in print mode.
+// Both translate claude's JSON transcript lines with ParseLine.
 package agent
 
 import (
@@ -31,6 +32,8 @@ type Request struct {
 	Workdir  string
 	Mode     string // claude --permission-mode value; empty uses CLI default
 	ResumeID string // continue an existing claude session
+	Model    string // claude --model value; empty uses CLI default
+	Key      string // stable per app session; names the tmux session
 }
 
 type Runner interface {
@@ -51,10 +54,18 @@ func (r ClaudeRunner) Args(req Request) []string {
 	if req.ResumeID != "" {
 		args = append(args, "--resume", req.ResumeID)
 	}
+	return append(args, commonArgs(req, r.ExtraArgs)...)
+}
+
+func commonArgs(req Request, extra []string) []string {
+	var args []string
+	if req.Model != "" {
+		args = append(args, "--model", req.Model)
+	}
 	if req.Mode != "" && req.Mode != "default" {
 		args = append(args, "--permission-mode", req.Mode)
 	}
-	return append(args, r.ExtraArgs...)
+	return append(args, extra...)
 }
 
 func (r ClaudeRunner) Run(ctx context.Context, req Request, emit func(Event)) error {

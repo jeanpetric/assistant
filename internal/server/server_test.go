@@ -239,3 +239,35 @@ func itoa(n int64) string {
 	b, _ := json.Marshal(n)
 	return string(b)
 }
+
+type attachRunner struct{ echoRunner }
+
+func (attachRunner) AttachCommand(key string) string { return "tmux attach -t " + key }
+
+func TestSessionModelAndAttach(t *testing.T) {
+	c := newClient(t)
+	c.app.Runner = attachRunner{}
+	c.app.Models = []string{"opus", "haiku"}
+	var meta struct {
+		Models []string `json:"models"`
+	}
+	c.do("GET", "/api/meta", nil, 200, &meta)
+	if len(meta.Models) != 2 {
+		t.Fatalf("meta = %+v", meta)
+	}
+	var task store.Task
+	c.do("POST", "/api/tasks", map[string]any{"title": "x"}, 201, &task)
+	path := "/api/tasks/" + itoa(task.ID) + "/sessions"
+	c.do("POST", path, map[string]any{"prompt": "p", "model": "--dangerously-skip-permissions"}, 400, nil)
+	var sess store.Session
+	c.do("POST", path, map[string]any{"prompt": "p", "model": "claude-opus-5-5[1m]"}, 201, &sess)
+	c.app.Wait()
+
+	var got struct {
+		Session store.Session `json:"session"`
+	}
+	c.do("GET", "/api/sessions/"+itoa(sess.ID), nil, 200, &got)
+	if got.Session.Model != "claude-opus-5-5[1m]" || got.Session.Attach != "tmux attach -t assistant-"+itoa(sess.ID) {
+		t.Fatalf("session = %+v", got.Session)
+	}
+}

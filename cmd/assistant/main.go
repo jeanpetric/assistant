@@ -32,6 +32,10 @@ func main() {
 	flag.StringVar(&f.ClaudeArgs, "claude-args", "", "extra arguments for every claude run, space separated, e.g. \"--model opus\" (config: claude_args)")
 	flag.StringVar(&f.Workdir, "workdir", "", "default working directory for agent sessions (config: workdir)")
 	flag.StringVar(&f.Mode, "mode", "", "default permission mode: "+strings.Join(agent.Modes, ", ")+" (config: mode)")
+	flag.StringVar(&f.Model, "model", "", "default claude model, empty for the CLI default (config: model)")
+	flag.StringVar(&f.Models, "models", "", "models offered in the UI, comma separated (config: models)")
+	flag.StringVar(&f.Runner, "runner", "", "tmux: interactive claude per session in tmux; print: claude -p per turn (config: runner)")
+	flag.StringVar(&f.TmuxSocket, "tmux-socket", "", "tmux -L socket name, empty for the default server (config: tmux_socket)")
 	flag.Parse()
 
 	cfg, err := config.Load(*configPath, home)
@@ -53,6 +57,14 @@ func main() {
 			cfg.Workdir = f.Workdir
 		case "mode":
 			cfg.Mode = f.Mode
+		case "model":
+			cfg.Model = f.Model
+		case "models":
+			cfg.Models = f.Models
+		case "runner":
+			cfg.Runner = f.Runner
+		case "tmux-socket":
+			cfg.TmuxSocket = f.TmuxSocket
 		}
 	})
 	// Always loopback: agents run with your permissions.
@@ -72,8 +84,23 @@ func main() {
 		log.Fatal(err)
 	}
 
-	runner := agent.ClaudeRunner{Command: cfg.Claude, ExtraArgs: strings.Fields(cfg.ClaudeArgs)}
+	var runner agent.Runner
+	switch cfg.Runner {
+	case "tmux":
+		runner = agent.TmuxRunner{Claude: cfg.Claude, ExtraArgs: strings.Fields(cfg.ClaudeArgs),
+			Socket: cfg.TmuxSocket, StateDir: filepath.Join(filepath.Dir(cfg.DB), "agents")}
+	case "print":
+		runner = agent.ClaudeRunner{Command: cfg.Claude, ExtraArgs: strings.Fields(cfg.ClaudeArgs)}
+	default:
+		log.Fatalf("runner must be tmux or print, got %q", cfg.Runner)
+	}
 	a := app.New(st, runner, cfg.Workdir, cfg.Mode)
+	a.DefaultModel = cfg.Model
+	for _, m := range strings.Split(cfg.Models, ",") {
+		if m = strings.TrimSpace(m); m != "" {
+			a.Models = append(a.Models, m)
+		}
+	}
 	go a.RunScheduler(ctx, 20*time.Second)
 
 	srv := &http.Server{Addr: addr, Handler: server.New(a), ReadHeaderTimeout: 10 * time.Second}

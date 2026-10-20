@@ -35,7 +35,7 @@ func TestLoadOverridesDefaults(t *testing.T) {
 
 func TestLoadErrors(t *testing.T) {
 	dir := t.TempDir()
-	for name, body := range map[string]string{"bad.json": `{"port":`, "range.json": `{"port": 70000}`} {
+	for name, body := range map[string]string{"bad.json": `{"port":`, "range.json": `{"port": 70000}`, "runner.json": `{"runner": "ssh"}`} {
 		path := filepath.Join(dir, name)
 		os.WriteFile(path, []byte(body), 0o600)
 		if _, err := Load(path, "/h"); err == nil {

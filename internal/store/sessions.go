@@ -22,11 +22,13 @@ type Session struct {
 	Title           string    `json:"title"`
 	Status          string    `json:"status"`
 	Mode            string    `json:"mode"`
+	Model           string    `json:"model"`
 	Workdir         string    `json:"workdir"`
 	Trigger         string    `json:"trigger"`
 	ClaudeSessionID string    `json:"claude_session_id"`
 	CostUSD         float64   `json:"cost_usd"`
 	Error           string    `json:"error"`
+	Attach          string    `json:"attach,omitempty"` // filled by the server, not stored
 	LastMessage     string    `json:"last_message,omitempty"`
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
@@ -41,14 +43,14 @@ type Message struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-const sessionCols = `s.id, s.task_id, t.title, s.title, s.status, s.mode, s.workdir, s.trigger, s.claude_session_id,
+const sessionCols = `s.id, s.task_id, t.title, s.title, s.status, s.mode, s.model, s.workdir, s.trigger, s.claude_session_id,
 	s.cost_usd, s.error, s.created_at, s.updated_at,
 	COALESCE((SELECT content FROM messages m WHERE m.session_id = s.id AND m.kind IN ('text', 'result', 'error') ORDER BY m.id DESC LIMIT 1), '')`
 
 func scanSession(sc interface{ Scan(...any) error }) (Session, error) {
 	var x Session
 	var created, updated int64
-	err := sc.Scan(&x.ID, &x.TaskID, &x.TaskTitle, &x.Title, &x.Status, &x.Mode, &x.Workdir, &x.Trigger,
+	err := sc.Scan(&x.ID, &x.TaskID, &x.TaskTitle, &x.Title, &x.Status, &x.Mode, &x.Model, &x.Workdir, &x.Trigger,
 		&x.ClaudeSessionID, &x.CostUSD, &x.Error, &created, &updated, &x.LastMessage)
 	x.CreatedAt, x.UpdatedAt = fromMillis(created), fromMillis(updated)
 	return x, err
@@ -57,9 +59,9 @@ func scanSession(sc interface{ Scan(...any) error }) (Session, error) {
 func (s *Store) CreateSession(ctx context.Context, x Session) (Session, error) {
 	now := s.ts()
 	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO sessions (task_id, title, status, mode, workdir, trigger, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		x.TaskID, x.Title, StatusRunning, x.Mode, x.Workdir, x.Trigger, now, now)
+		INSERT INTO sessions (task_id, title, status, mode, model, workdir, trigger, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		x.TaskID, x.Title, StatusRunning, x.Mode, x.Model, x.Workdir, x.Trigger, now, now)
 	if err != nil {
 		return Session{}, err
 	}

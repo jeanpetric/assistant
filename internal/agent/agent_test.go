@@ -51,8 +51,8 @@ func TestParseErrorResult(t *testing.T) {
 
 func TestArgs(t *testing.T) {
 	r := ClaudeRunner{ExtraArgs: []string{"--model", "opus"}}
-	got := r.Args(Request{Prompt: "hi", ResumeID: "s1", Mode: "plan"})
-	want := []string{"-p", "hi", "--output-format", "stream-json", "--verbose", "--resume", "s1", "--permission-mode", "plan", "--model", "opus"}
+	got := r.Args(Request{Prompt: "hi", ResumeID: "s1", Mode: "plan", Model: "sonnet"})
+	want := []string{"-p", "hi", "--output-format", "stream-json", "--verbose", "--resume", "s1", "--model", "sonnet", "--permission-mode", "plan", "--model", "opus"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v", got)
 	}

@@ -83,7 +83,7 @@ func TestSessionLifecycle(t *testing.T) {
 	if got.Status != store.StatusIdle || got.ClaudeSessionID != "claude-1" || got.CostUSD != 0.5 {
 		t.Fatalf("unexpected session %+v", got)
 	}
-	if got.Mode != "bypassPermissions" || got.Workdir != "/repo" || got.Title != "look around" {
+	if got.Mode != "bypassPermissions" || got.Workdir != "/repo" || got.Title != "look around" || got.Model != "" {
 		t.Fatalf("defaults not applied: %+v", got)
 	}
 
@@ -94,6 +94,9 @@ func TestSessionLifecycle(t *testing.T) {
 	reqs := r.requests()
 	if len(reqs) != 2 || reqs[1].ResumeID != "claude-1" || reqs[1].Prompt != "now fix it" {
 		t.Fatalf("follow-up should resume: %+v", reqs)
+	}
+	if key := SessionKey(sess.ID); reqs[0].Key != key || reqs[1].Key != key {
+		t.Fatalf("turns should share the session key %s: %+v", key, reqs)
 	}
 
 	msgs, _ := a.Store.Messages(ctx, sess.ID, 0)
@@ -269,5 +272,31 @@ func TestTaskContext(t *testing.T) {
 	want := "Task #7: T\n\ndesc\n\nLinks:\n- productive: p\n- slack: s"
 	if got != want {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestSessionModel(t *testing.T) {
+	a, r := newApp(t)
+	a.DefaultModel = "sonnet"
+	ctx := context.Background()
+	task, _ := a.Store.CreateTask(ctx, store.Task{Title: "Pick a model"})
+
+	def, _ := a.StartSession(ctx, StartOpts{TaskID: task.ID, Prompt: "a"})
+	chosen, _ := a.StartSession(ctx, StartOpts{TaskID: task.ID, Prompt: "b", Model: "haiku"})
+	a.Wait()
+	if def.Model != "sonnet" || chosen.Model != "haiku" {
+		t.Fatalf("models: %q %q", def.Model, chosen.Model)
+	}
+	if err := a.SendMessage(ctx, chosen.ID, "c"); err != nil {
+		t.Fatal(err)
+	}
+	a.Wait()
+	for _, req := range r.requests() {
+		if want := map[string]string{"a": "sonnet", "b": "haiku", "c": "haiku"}[req.Prompt]; req.Model != want {
+			t.Errorf("prompt %q ran with model %q, want %q", req.Prompt, req.Model, want)
+		}
+	}
+	if a.AttachCommand(def.ID) != "" {
+		t.Error("a runner without AttachCommand has nothing to attach")
 	}
 }

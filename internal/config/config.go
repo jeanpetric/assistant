@@ -17,6 +17,10 @@ type Config struct {
 	ClaudeArgs string `json:"claude_args"`
 	Workdir    string `json:"workdir"`
 	Mode       string `json:"mode"`
+	Model      string `json:"model"`  // default model; empty uses the claude CLI default
+	Models     string `json:"models"` // comma separated, offered in the UI
+	Runner     string `json:"runner"` // tmux (interactive claude per session) | print (claude -p per turn)
+	TmuxSocket string `json:"tmux_socket"`
 }
 
 func Defaults(home string) Config {
@@ -26,6 +30,8 @@ func Defaults(home string) Config {
 		Claude:  "claude",
 		Workdir: home,
 		Mode:    "bypassPermissions",
+		Models:  "opus,sonnet,haiku",
+		Runner:  "tmux",
 	}
 }
 
@@ -45,6 +51,9 @@ func Load(path, home string) (Config, error) {
 	}
 	if c.Port < 1 || c.Port > 65535 {
 		return c, fmt.Errorf("%s: port %d out of range", path, c.Port)
+	}
+	if c.Runner != "tmux" && c.Runner != "print" {
+		return c, fmt.Errorf("%s: runner must be tmux or print, got %q", path, c.Runner)
 	}
 	return c, nil
 }
