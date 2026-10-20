@@ -580,12 +580,13 @@ async function taskView(id, { every, leave, reload }) {
 function buildsOnEditor(task, refs, usedBy, setIds) {
   const el = h('div');
   const taskLink = r => h('a', { href: `#/task/${r.id}`, onclick: closeTaskDialog }, `#${r.id} ${r.title}`, r.archived ? ' (archived)' : '');
+  const add = taskSearch({
+    placeholder: 'Add an earlier task — search any project by words or #id…',
+    exclude: x => x.id === task.id || refs.some(r => r.id === x.id),
+    note: x => [x.project_id !== task.project_id ? projectName(x.project_id) : null, x.archived_at ? 'archived' : null],
+    onPick: async x => { refs = await setIds([...refs.map(r => r.id), x.id]); draw(); add.input.focus(); },
+  });
   const draw = () => {
-    const linked = new Set(refs.map(r => r.id));
-    const options = state.board.tasks.filter(x => x.id !== task.id && !linked.has(x.id) && x.project_id === task.project_id);
-    const add = select([['', 'Add an earlier task…'], ...options.map(x => [x.id, `#${x.id} ${x.title}`])], '', {
-      onchange: async e => { if (e.target.value) { refs = await setIds([...refs.map(r => r.id), Number(e.target.value)]); draw(); } },
-    });
     el.replaceChildren(...[
       h('label', {}, 'Builds on — their agents\' results go into this task\'s agent context'),
       refs.length ? null : h('div', { class: 'muted small' }, 'Nothing: agents start from scratch.'),
@@ -594,7 +595,7 @@ function buildsOnEditor(task, refs, usedBy, setIds) {
           class: 'ghost small', title: 'Stop building on this task',
           onclick: async () => { refs = await setIds(refs.filter(x => x.id !== r.id).map(x => x.id)); draw(); },
         }, '✕'))),
-      options.length ? add : null,
+      add.el,
       h('label', {}, 'Used by'),
       usedBy.map(r => h('div', { class: 'link-ref' }, taskLink(r))),
       h('button', {
@@ -605,6 +606,45 @@ function buildsOnEditor(task, refs, usedBy, setIds) {
   };
   draw();
   return { el };
+}
+
+// A search box over every task (archived ones included) with a list of matches:
+// ↑/↓ choose, Enter (or a click) picks one, Esc closes the list. Focusing the
+// empty box lists the most recently updated tasks.
+function taskSearch({ placeholder, exclude, note, onPick }) {
+  const input = h('input', { type: 'search', placeholder });
+  const list = h('ul', { class: 'picker task-search', hidden: true });
+  let found = [], i = 0, timer = 0, seq = 0;
+  const draw = () => {
+    list.replaceChildren(...found.map((x, j) => h('li', {
+      class: j === i ? 'selected' : '',
+      onmousedown: e => { e.preventDefault(); pick(x); },
+      onmousemove: () => { if (i !== j) { i = j; draw(); } },
+    }, `#${x.id} ${x.title}`, ...note(x).filter(Boolean).map(n => h('span', { class: 'small task-search-note' }, ' · ' + n)))));
+    if (!found.length) list.append(h('li', { class: 'muted small' }, 'No matching tasks'));
+    list.hidden = false;
+    list.children[i]?.scrollIntoView({ block: 'nearest' });
+  };
+  const close = () => { clearTimeout(timer); seq++; list.hidden = true; };
+  const search = async () => {
+    const n = ++seq;
+    const ts = await api('GET', '/api/tasks?limit=50&q=' + encodeURIComponent(input.value.trim()));
+    if (n !== seq) return;
+    found = ts.filter(x => !exclude(x)).slice(0, 20);
+    i = 0;
+    draw();
+  };
+  const pick = x => { input.value = ''; close(); onPick(x); };
+  input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(search, 150); });
+  input.addEventListener('focus', search);
+  input.addEventListener('blur', close);
+  input.addEventListener('keydown', e => {
+    const by = { ArrowDown: 1, ArrowUp: -1 }[e.key];
+    if (by && !list.hidden && found.length) { e.preventDefault(); i = (i + by + found.length) % found.length; draw(); }
+    else if (e.key === 'Enter' && !list.hidden && found[i]) { e.preventDefault(); pick(found[i]); }
+    else if (e.key === 'Escape' && !list.hidden) { e.preventDefault(); e.stopPropagation(); close(); }
+  });
+  return { el: h('div', { class: 'task-search-box' }, input, list), input };
 }
 
 function newSessionPanel(task, onStarted) {

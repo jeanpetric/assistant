@@ -53,6 +53,7 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/fields", s.saveField)
 	m.HandleFunc("DELETE /api/fields/{key}", s.deleteField)
 
+	m.HandleFunc("GET /api/tasks", s.searchTasks)
 	m.HandleFunc("POST /api/tasks", s.createTask)
 	m.HandleFunc("GET /api/tasks/{id}", s.getTask)
 	m.HandleFunc("PATCH /api/tasks/{id}", s.updateTask)

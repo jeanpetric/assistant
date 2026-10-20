@@ -262,3 +262,29 @@ func TestMCPSkills(t *testing.T) {
 		t.Fatalf("delete_skill: %s", text)
 	}
 }
+
+func TestSearchTasksAPIAndTool(t *testing.T) {
+	c := newClient(t)
+	var p store.Project
+	c.do("POST", "/api/projects", map[string]any{"name": "Side"}, 201, &p)
+	var a, b store.Task
+	c.do("POST", "/api/tasks", map[string]any{"title": "Research caching"}, 201, &a)
+	c.do("POST", "/api/tasks", map[string]any{"title": "Caching spike", "project_id": p.ID}, 201, &b)
+	c.do("POST", "/api/tasks/"+itoa(b.ID)+"/archive", nil, 200, nil)
+
+	var found []store.Task
+	c.do("GET", "/api/tasks?q=caching", nil, 200, &found)
+	if len(found) != 2 || found[0].ID != a.ID || found[1].ID != b.ID {
+		t.Fatalf("search = %+v", found)
+	}
+	c.do("GET", "/api/tasks?q=caching&limit=1", nil, 200, &found)
+	if len(found) != 1 {
+		t.Fatalf("limit = %+v", found)
+	}
+	c.do("GET", "/api/tasks?limit=x", nil, 400, nil)
+
+	text, isErr := c.tool("search_tasks", map[string]any{"q": "#" + itoa(b.ID)})
+	if isErr || json.Unmarshal([]byte(text), &found) != nil || len(found) != 1 || found[0].ID != b.ID {
+		t.Fatalf("search_tasks: %s", text)
+	}
+}

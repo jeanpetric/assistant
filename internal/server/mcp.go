@@ -215,6 +215,12 @@ func (s *Server) mcpTools() []mcpTool {
 			call:        byID("POST", "/api/tasks/%d/unarchive", "task_id", false),
 		},
 		{
+			Name:        "search_tasks",
+			Description: "Find tasks of every project, archived ones included, whose title or description holds each word of query, or whose id it is (\"12\" or \"#12\"). Tasks on a board first, then the most recently updated. An empty query lists the most recently updated tasks.",
+			InputSchema: schema(nil, map[string]any{"q": prop("string", "Words to look for, or a task id"), "limit": prop("integer", "At most this many tasks (default 20, max 100)")}),
+			call:        list("/api/tasks", "q", "limit"),
+		},
+		{
 			Name:        "list_archived_tasks",
 			Description: "Archived tasks of one project, or of all projects if project_id is left out.",
 			InputSchema: schema(nil, map[string]any{"project_id": pProjectID}),

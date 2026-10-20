@@ -597,6 +597,25 @@ func (s *Server) moveTask(w http.ResponseWriter, r *http.Request) {
 }
 
 // archivedTasks lists one project's archived tasks (?project_id=), or all of them.
+// searchTasks finds tasks of every project, archived ones included, by
+// words of their title or description or by id (q); at most limit (default 20).
+func (s *Server) searchTasks(w http.ResponseWriter, r *http.Request) {
+	limit, err := queryID(r, "limit")
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	tasks, err := s.app.Store.SearchTasks(r.Context(), r.URL.Query().Get("q"), int(limit))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, tasks)
+}
+
 func (s *Server) archivedTasks(w http.ResponseWriter, r *http.Request) {
 	projectID, err := queryID(r, "project_id")
 	if err != nil {

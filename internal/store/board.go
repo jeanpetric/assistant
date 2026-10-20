@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -198,6 +199,30 @@ func (s *Store) ArchivedTasks(ctx context.Context, projectID int64) ([]Task, err
 	return s.queryTasks(ctx, `SELECT `+taskCols+` FROM tasks WHERE archived_at IS NOT NULL AND (? = 0 OR project_id = ?)
 		ORDER BY archived_at DESC, id DESC`, projectID, projectID)
 }
+
+// SearchTasks finds tasks of every project, archived ones included, whose
+// title or description holds each word of the query (case-insensitive), or
+// whose id is the query ("12" or "#12"). Tasks on a board come first, then
+// the most recently updated; at most limit. An empty query lists the most
+// recently updated tasks.
+func (s *Store) SearchTasks(ctx context.Context, query string, limit int) ([]Task, error) {
+	where, args := []string{"1"}, []any{}
+	for _, w := range strings.Fields(query) {
+		like := "%" + likeEscaper.Replace(w) + "%"
+		cond := `(title LIKE ? ESCAPE '\' OR description LIKE ? ESCAPE '\'`
+		args = append(args, like, like)
+		if id, err := strconv.ParseInt(strings.TrimPrefix(w, "#"), 10, 64); err == nil {
+			cond += ` OR id = ?`
+			args = append(args, id)
+		}
+		where = append(where, cond+")")
+	}
+	args = append(args, limit)
+	return s.queryTasks(ctx, `SELECT `+taskCols+` FROM tasks WHERE `+strings.Join(where, " AND ")+`
+		ORDER BY archived_at IS NOT NULL, updated_at DESC, id DESC LIMIT ?`, args...)
+}
+
+var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 
 // queryTasks runs a task query and loads the fields of the tasks it returns.
 func (s *Store) queryTasks(ctx context.Context, q string, args ...any) ([]Task, error) {
