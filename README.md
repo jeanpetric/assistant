@@ -29,8 +29,10 @@ One Go binary, one SQLite file, no JavaScript build step.
 ## Run
 
 ```sh
-make build
-./assistant                      # http://127.0.0.1:6767
+make start    # build and run in the background: http://127.0.0.1:6767, log in ~/.assistant/assistant.log
+make stop
+make reset    # stop, move the database to ~/.assistant/backups/, start fresh
+make run      # run in the foreground instead
 ```
 
 Settings live in `~/.assistant/config.json` (created with defaults on first run):

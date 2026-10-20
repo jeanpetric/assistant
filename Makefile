@@ -1,4 +1,4 @@
-.PHONY: build test run reset
+.PHONY: build test run start stop reset
 
 build:
 	go build -o assistant ./cmd/assistant
@@ -11,6 +11,12 @@ test:
 run: build
 	./assistant
 
+start: build
+	scripts/start.sh
+
+stop:
+	scripts/stop.sh
+
 reset: build
 	scripts/reset.sh
-	./assistant
+	scripts/start.sh
