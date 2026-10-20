@@ -79,12 +79,12 @@ func TestParseRateLimit(t *testing.T) {
 func TestArgs(t *testing.T) {
 	r := ClaudeRunner{ExtraArgs: []string{"--model", "opus"}}
 	got := r.Args(Request{Prompt: "hi", ResumeID: "s1", Mode: "plan"})
-	want := []string{"-p", "hi", "--output-format", "stream-json", "--verbose", "--resume", "s1", "--permission-mode", "plan", "--model", "opus"}
+	want := []string{"-p", "--output-format", "stream-json", "--verbose", "--resume", "s1", "--permission-mode", "plan", "--model", "opus"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v", got)
 	}
 	got = r.Args(Request{Prompt: "hi", Model: "sonnet"})
-	if want := []string{"-p", "hi", "--output-format", "stream-json", "--verbose", "--model", "opus", "--model", "sonnet"}; !reflect.DeepEqual(got, want) {
+	if want := []string{"-p", "--output-format", "stream-json", "--verbose", "--model", "opus", "--model", "sonnet"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("session model should come last: %v", got)
 	}
 	if got := r.Args(Request{Prompt: "hi", Mode: "default"}); strings.Contains(strings.Join(got, " "), "permission-mode") {
@@ -96,13 +96,13 @@ func TestArgs(t *testing.T) {
 func TestClaudeRunnerWithFakeCLI(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "fake-claude")
-	body := "#!/bin/sh\npwd > \"$(dirname \"$0\")/cwd\"\ncat <<'EOF'\n" + transcript + "EOF\n"
+	body := "#!/bin/sh\npwd > \"$(dirname \"$0\")/cwd\"\ncat > \"$(dirname \"$0\")/stdin\"\ncat <<'EOF'\n" + transcript + "EOF\n"
 	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	work := t.TempDir()
 	var events []Event
-	err := ClaudeRunner{Command: script}.Run(context.Background(), Request{Prompt: "x", Workdir: work}, func(e Event) {
+	err := ClaudeRunner{Command: script}.Run(context.Background(), Request{Prompt: "- a prompt that looks like an option", Workdir: work}, func(e Event) {
 		events = append(events, e)
 	})
 	if err != nil {
@@ -110,6 +110,9 @@ func TestClaudeRunnerWithFakeCLI(t *testing.T) {
 	}
 	if len(events) != 8 || events[7].CostUSD != 0.0125 {
 		t.Fatalf("unexpected events: %+v", events)
+	}
+	if in, _ := os.ReadFile(filepath.Join(dir, "stdin")); string(in) != "- a prompt that looks like an option" {
+		t.Errorf("prompt on stdin = %q", in)
 	}
 	cwd, _ := os.ReadFile(filepath.Join(dir, "cwd"))
 	gotDir, _ := filepath.EvalSymlinks(strings.TrimSpace(string(cwd)))

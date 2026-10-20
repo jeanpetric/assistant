@@ -66,8 +66,10 @@ type ClaudeRunner struct {
 	ExtraArgs []string // appended to every invocation
 }
 
+// Args are the CLI arguments for req. The prompt is not among them: Run writes
+// it to stdin, so a prompt starting with "-" is not read as an option.
 func (r ClaudeRunner) Args(req Request) []string {
-	args := []string{"-p", req.Prompt, "--output-format", "stream-json", "--verbose"}
+	args := []string{"-p", "--output-format", "stream-json", "--verbose"}
 	if req.ResumeID != "" {
 		args = append(args, "--resume", req.ResumeID)
 	}
@@ -90,6 +92,7 @@ func (r ClaudeRunner) Run(ctx context.Context, req Request, emit func(Event)) er
 	cmd := exec.CommandContext(ctx, command, r.Args(req)...)
 	cmd.Dir = req.Workdir
 	cmd.Env = cleanEnv(os.Environ())
+	cmd.Stdin = strings.NewReader(req.Prompt)
 	var stderr tailBuffer
 	cmd.Stderr = &stderr
 	stdout, err := cmd.StdoutPipe()
