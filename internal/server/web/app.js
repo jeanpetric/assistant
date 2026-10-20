@@ -724,6 +724,14 @@ function newSessionPanel(task, onStarted) {
   return { el, drawContextLabel };
 }
 
+// 7s, 2m 05s, 1h 02m
+function fmtElapsed(secs) {
+  const pad = n => String(n).padStart(2, '0');
+  if (secs < 60) return `${secs}s`;
+  if (secs < 3600) return `${Math.floor(secs / 60)}m ${pad(secs % 60)}s`;
+  return `${Math.floor(secs / 3600)}h ${pad(Math.floor(secs / 60) % 60)}m`;
+}
+
 function messageEl(m) {
   switch (m.kind) {
     case 'tool_use': {
@@ -768,6 +776,10 @@ function sessionComponent(session, messages) {
   const body = h('div', { class: 'session-body' });
   const head = h('div', { class: 'session-head' });
   const limits = h('div', { class: 'session-limits' });
+  // Below the transcript while a turn runs, from the moment it starts, so a
+  // turn shows it is under way before the agent's first message or tool call.
+  const working = h('div', { class: 'working' });
+  let turnStart = 0; // when the prompt of the latest turn was sent
   const input = h('textarea', { rows: 2, placeholder: 'Reply to continue this session… (⌘↵ to send)' });
   const send = h('button', {}, 'Send', hint('⌘↵'));
   // Task sessions can change where the task goes when the agent finishes, even mid-run.
@@ -783,8 +795,7 @@ function sessionComponent(session, messages) {
       e.target.value = '';
       if (!skillId) return;
       await api('POST', `/api/sessions/${c.session.id}/skill`, { skill_id: skillId });
-      c.session.status = 'running';
-      drawHead();
+      await refresh();
     },
   }) : null;
   const foot = h('div', { class: 'session-foot' }, input,
@@ -792,21 +803,25 @@ function sessionComponent(session, messages) {
   // What tasks building on this one get instead of the transcript; collapsed
   // until opened, and the open state survives redraws.
   const summary = h('details', { class: 'session-summary' });
-  const el = h('div', { class: 'session' }, head, summary, body, limits, foot);
+  const el = h('div', { class: 'session' }, head, summary, body, working, limits, foot);
   const c = { el, session, lastId: () => last };
+
+  // Shows a turn that just started (status and prompt) without waiting for the next poll.
+  const refresh = async () => {
+    const upd = await api('GET', `/api/sessions/${c.session.id}?after=${last}`);
+    c.update(upd.session, upd.messages);
+  };
 
   const doResume = async () => {
     await api('POST', `/api/sessions/${c.session.id}/resume`);
-    c.session.status = 'running';
-    drawHead();
+    await refresh();
   };
 
   const doSend = async () => {
     if (!input.value.trim()) return;
     await api('POST', `/api/sessions/${c.session.id}/messages`, { text: input.value });
     input.value = '';
-    c.session.status = 'running';
-    drawHead();
+    await refresh();
   };
   send.addEventListener('click', doSend);
   input.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) doSend(); });
@@ -849,7 +864,7 @@ function sessionComponent(session, messages) {
       }, 'Update memory') : null,
       !running && s.claude_session_id ? h('button', {
         class: 'ghost small', title: 'Have the agent write a brief and continue in a new session with a fresh context',
-        onclick: () => handoffDialog(s, () => { c.session.status = 'running'; drawHead(); }),
+        onclick: () => handoffDialog(s, refresh),
       }, 'Hand off') : null,
       h('button', { class: 'ghost small', onclick: () => el.classList.toggle('collapsed') }, '▾'),
     ].filter(Boolean));
@@ -890,16 +905,27 @@ function sessionComponent(session, messages) {
     const known = s.limits && (s.limits.five_hour || s.limits.seven_day);
     limits.replaceChildren(...(s.status === 'running' || known ? [limitsEl(s.limits)] : []));
   }
-  c.drawLimits = drawLimits; // the countdowns tick even when nothing else changes
+
+  function drawWorking() {
+    if (c.session.status !== 'running') { working.replaceChildren(); return; }
+    const secs = Math.max(0, Math.round((Date.now() - (turnStart || Date.now())) / 1000));
+    working.replaceChildren(h('span', { class: 'pulse' }), 'Working…', h('span', { class: 'muted small' }, fmtElapsed(secs)));
+  }
+
+  // The countdowns and the turn's elapsed time tick even when nothing else changes.
+  c.drawLimits = () => { drawLimits(); drawWorking(); };
 
   c.update = (s, msgs) => {
     c.session = s;
     if (doneLane && document.activeElement !== doneLane) doneLane.value = s.done_lane_id ?? '';
     for (const m of msgs) {
+      if (m.id <= last) continue; // a refresh and the poll may both fetch it
       appendMessage(body, m);
-      last = Math.max(last, m.id);
+      last = m.id;
+      if (m.role === 'user') turnStart = Date.parse(m.created_at);
     }
     drawHead();
+    drawWorking();
   };
   c.update(session, messages);
   return c;

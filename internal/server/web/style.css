@@ -183,6 +183,8 @@ tr.clickable:hover td { background: var(--surface-2); }
 .msg { margin: 8px 0; white-space: pre-wrap; word-break: break-word; }
 .msg.user { background: var(--user-bg); padding: 8px 10px; border-radius: 6px; }
 .msg.assistant { padding: 2px 0; }
+.working { display: flex; align-items: center; gap: 6px; padding: 0 14px 10px; color: var(--muted); font-size: 13px; }
+.working:empty { display: none; }
 .msg.result { color: var(--muted); font-size: 12px; border-top: 1px dashed var(--border); padding-top: 6px; white-space: normal; }
 .msg.error { color: var(--danger); font-family: var(--mono); font-size: 12px; }
 .msg pre, .msg code { font-family: var(--mono); font-size: 12.5px; }
