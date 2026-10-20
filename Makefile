@@ -1,4 +1,4 @@
-.PHONY: build test run start stop reset
+.PHONY: build test run start stop restart reset
 
 build:
 	go build -o assistant ./cmd/assistant
@@ -17,6 +17,12 @@ start: build
 stop:
 	scripts/stop.sh
 
+# Rebuild and restart; the database is kept.
+restart: build
+	scripts/stop.sh
+	scripts/start.sh
+
+# Wipes all data (after a backup); asks for confirmation first.
 reset: build
 	scripts/reset.sh
 	scripts/start.sh
