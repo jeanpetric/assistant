@@ -323,6 +323,13 @@ INSERT INTO memories_new (id, name, description, body, revision, created_at, upd
 DROP TABLE memories;
 ALTER TABLE memories_new RENAME TO memories;
 `,
+	// seen: the user has taken in how the session's last turn ended. Sessions
+	// that ended before this existed count as seen, so the board does not light
+	// up with old outcomes; ones waiting for the user keep showing.
+	`
+ALTER TABLE sessions ADD COLUMN seen INTEGER NOT NULL DEFAULT 0;
+UPDATE sessions SET seen = 1 WHERE status != 'running' AND needs_input = '';
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

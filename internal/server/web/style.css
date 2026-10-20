@@ -140,6 +140,12 @@ main { padding: 20px; }
 .badge.due.overdue { color: var(--danger); border-color: var(--danger); }
 .badge.running { color: var(--ok); border-color: var(--ok); }
 .badge.needs-input { color: var(--warn); border-color: var(--warn); font-weight: 600; }
+a.badge { text-decoration: none; }
+.badge.outcome-finished { color: var(--accent); border-color: var(--accent); }
+.badge.outcome-done { color: var(--ok); border-color: var(--ok); }
+.badge.outcome-failed { color: var(--danger); border-color: var(--danger); }
+.badge.outcome-cancelled { color: var(--warn); border-color: var(--warn); }
+.agent-status:empty { display: none; }
 .badge.status-running { color: var(--ok); border-color: var(--ok); }
 .badge.status-error { color: var(--danger); border-color: var(--danger); }
 .badge.status-cancelled, .badge.status-interrupted { color: var(--warn); border-color: var(--warn); }

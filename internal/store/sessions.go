@@ -36,6 +36,9 @@ type Session struct {
 	// NeedsInput says why the agent is waiting for the user, e.g. it asked a
 	// question; empty when it is not. Cleared when the user continues the session.
 	NeedsInput string `json:"needs_input"`
+	// Seen: the user has taken in how the last turn ended (dismissed it or
+	// moved the task). A new turn starts unseen.
+	Seen bool `json:"seen"`
 	// Summary of the session for agents that build on its task; empty until one
 	// is written. It covers messages up to SummaryUpto; later ones make it stale.
 	Summary      string     `json:"summary"`
@@ -58,7 +61,7 @@ type Message struct {
 const sessionCols = `s.id, COALESCE(s.task_id, 0), COALESCE(t.title, ''), COALESCE(t.project_id, 0), s.title, s.status, s.mode, s.model, s.workdir, s.trigger, s.done_lane_id, s.parent_id,
 	(SELECT MAX(c.id) FROM sessions c WHERE c.parent_id = s.id), s.claude_session_id, s.cost_usd, s.error, s.created_at, s.updated_at,
 	COALESCE((SELECT content FROM messages m WHERE m.session_id = s.id AND m.kind IN ('text', 'result', 'error') ORDER BY m.id DESC LIMIT 1), ''),
-	s.summary, s.summary_upto, s.summary_at, COALESCE((SELECT MAX(m.id) FROM messages m WHERE m.session_id = s.id), 0), s.needs_input`
+	s.summary, s.summary_upto, s.summary_at, COALESCE((SELECT MAX(m.id) FROM messages m WHERE m.session_id = s.id), 0), s.needs_input, s.seen`
 
 func scanSession(sc interface{ Scan(...any) error }) (Session, error) {
 	var x Session
@@ -67,7 +70,7 @@ func scanSession(sc interface{ Scan(...any) error }) (Session, error) {
 	var lastID int64
 	err := sc.Scan(&x.ID, &x.TaskID, &x.TaskTitle, &x.TaskProjectID, &x.Title, &x.Status, &x.Mode, &x.Model, &x.Workdir, &x.Trigger,
 		&doneLane, &parent, &child, &x.ClaudeSessionID, &x.CostUSD, &x.Error, &created, &updated, &x.LastMessage,
-		&x.Summary, &x.SummaryUpto, &summaryAt, &lastID, &x.NeedsInput)
+		&x.Summary, &x.SummaryUpto, &summaryAt, &lastID, &x.NeedsInput, &x.Seen)
 	x.DoneLaneID, x.ParentID, x.ChildID = fromNullID(doneLane), fromNullID(parent), fromNullID(child)
 	x.SummaryAt = fromNullMillis(summaryAt)
 	x.SummaryStale = x.Summary != "" && lastID > x.SummaryUpto
@@ -121,7 +124,7 @@ func (s *Store) Sessions(ctx context.Context, taskID int64, status string) ([]Se
 
 func (s *Store) SetSessionStatus(ctx context.Context, id int64, status, errMsg string) error {
 	return affected(s.db.ExecContext(ctx,
-		`UPDATE sessions SET status = ?, error = ?, updated_at = ? WHERE id = ?`, status, errMsg, s.ts(), id))
+		`UPDATE sessions SET status = ?, error = ?, seen = 0, updated_at = ? WHERE id = ?`, status, errMsg, s.ts(), id))
 }
 
 // SetSessionNeedsInput records why the session's agent waits for the user;
@@ -149,6 +152,111 @@ func (s *Store) NeedsInputByTask(ctx context.Context) (map[int64]int, error) {
 		out[task] = n
 	}
 	return out, rows.Err()
+}
+
+// DismissSession clears the session's wait for the user and marks how its
+// last turn ended as seen.
+func (s *Store) DismissSession(ctx context.Context, id int64) error {
+	return affected(s.db.ExecContext(ctx, `UPDATE sessions SET needs_input = '', seen = 1 WHERE id = ?`, id))
+}
+
+// SeeTaskSessions marks how the task's finished sessions ended as seen.
+func (s *Store) SeeTaskSessions(ctx context.Context, taskID int64) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE sessions SET seen = 1 WHERE task_id = ? AND status != ?`, taskID, StatusRunning)
+	return err
+}
+
+// Agent statuses of a task: what its agents are up to, i.e. what the user's
+// next step is.
+const (
+	AgentRunning   = "running"   // an agent works on it
+	AgentNeedsYou  = "needs_you" // an agent waits for the user
+	AgentDone      = "done"      // the last turn ended well and the task is in its done lane
+	AgentFinished  = "finished"  // the last turn ended; look at what it did
+	AgentFailed    = "failed"    // the last turn failed or was interrupted
+	AgentCancelled = "cancelled" // the last turn was stopped
+)
+
+// AgentStatus is a task's agent status and the session it comes from.
+type AgentStatus struct {
+	Status    string `json:"status"`
+	SessionID int64  `json:"session_id"`
+	Reason    string `json:"reason,omitempty"` // why it needs the user, or the error
+}
+
+// agentSession is what of a session goes into its task's agent status.
+type agentSession struct {
+	ID, TaskID, LaneID int64
+	DoneLaneID         *int64
+	Status, NeedsInput string
+	Error              string
+	Seen               bool
+}
+
+// AgentStatuses gives the agent status of every task that has one: running
+// over needs you over how its latest session's last turn ended, which shows
+// until it is seen.
+func (s *Store) AgentStatuses(ctx context.Context) (map[int64]AgentStatus, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT s.id, s.task_id, t.lane_id, s.done_lane_id, s.status, s.needs_input, s.error, s.seen
+		FROM sessions s JOIN tasks t ON t.id = s.task_id
+		ORDER BY s.updated_at DESC, s.id DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	byTask := map[int64][]agentSession{}
+	for rows.Next() {
+		var x agentSession
+		var doneLane sql.NullInt64
+		if err := rows.Scan(&x.ID, &x.TaskID, &x.LaneID, &doneLane, &x.Status, &x.NeedsInput, &x.Error, &x.Seen); err != nil {
+			return nil, err
+		}
+		x.DoneLaneID = fromNullID(doneLane)
+		byTask[x.TaskID] = append(byTask[x.TaskID], x)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := map[int64]AgentStatus{}
+	for task, xs := range byTask {
+		if st, ok := agentStatus(xs); ok {
+			out[task] = st
+		}
+	}
+	return out, nil
+}
+
+// agentStatus derives a task's agent status from its sessions, latest first.
+func agentStatus(xs []agentSession) (AgentStatus, bool) {
+	for _, x := range xs {
+		if x.Status == StatusRunning {
+			return AgentStatus{Status: AgentRunning, SessionID: x.ID}, true
+		}
+	}
+	for _, x := range xs {
+		if x.NeedsInput != "" {
+			return AgentStatus{Status: AgentNeedsYou, SessionID: x.ID, Reason: x.NeedsInput}, true
+		}
+	}
+	if len(xs) == 0 || xs[0].Seen {
+		return AgentStatus{}, false
+	}
+	x := xs[0]
+	st := AgentStatus{SessionID: x.ID}
+	switch x.Status {
+	case StatusIdle:
+		st.Status = AgentFinished
+		if x.DoneLaneID != nil && *x.DoneLaneID == x.LaneID {
+			st.Status = AgentDone
+		}
+	case StatusCancelled:
+		st.Status = AgentCancelled
+	case StatusInterrupted:
+		st.Status, st.Reason = AgentFailed, "interrupted by a restart"
+	default:
+		st.Status, st.Reason = AgentFailed, x.Error
+	}
+	return st, true
 }
 
 // SetSessionDoneLane changes where the session's task moves when a turn
@@ -192,7 +300,7 @@ func (s *Store) LastMessageID(ctx context.Context, sessionID int64) (int64, erro
 
 // MarkInterrupted flags sessions left running by a previous process.
 func (s *Store) MarkInterrupted(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE sessions SET status = ?, updated_at = ? WHERE status = ?`,
+	_, err := s.db.ExecContext(ctx, `UPDATE sessions SET status = ?, seen = 0, updated_at = ? WHERE status = ?`,
 		StatusInterrupted, s.ts(), StatusRunning)
 	return err
 }

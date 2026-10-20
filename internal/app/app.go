@@ -586,9 +586,10 @@ func (a *App) answered(ctx context.Context, sess store.Session) {
 	}
 }
 
-// DismissNeedsInput clears the session's wait for the user without continuing it.
+// DismissNeedsInput clears the session's wait for the user without continuing
+// it, and marks how its last turn ended as seen.
 func (a *App) DismissNeedsInput(ctx context.Context, sessionID int64) error {
-	return a.Store.SetSessionNeedsInput(ctx, sessionID, "")
+	return a.Store.DismissSession(ctx, sessionID)
 }
 
 // notifySession notifies about a session, on its task if it has one.

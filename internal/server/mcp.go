@@ -163,14 +163,14 @@ func (s *Server) mcpTools() []mcpTool {
 	return []mcpTool{
 		{
 			Name:        "get_board",
-			Description: "The kanban board of one project (the first if project_id is left out): every project, the lanes (in order), the project's tasks on the board, custom field definitions and how many agent sessions run per task. Start here to find project, lane and task ids.",
+			Description: "The kanban board of one project (the first if project_id is left out): every project, the lanes (in order), the project's tasks on the board, custom field definitions, how many agent sessions run per task and, per task id, agent_status: what its agents are up to (" + agentStatusDoc + "). Start here to find project, lane and task ids.",
 			InputSchema: schema(nil, map[string]any{"project_id": pProjectID}),
 			call:        list("/api/board", "project_id"),
 			post:        boardSummary,
 		},
 		{
 			Name:        "get_task",
-			Description: "One task with its schedules and agent sessions (without transcripts; use get_session for those), the tasks it builds on (builds_on), the tasks that build on it (used_by) and its memories.",
+			Description: "One task with its schedules and agent sessions (without transcripts; use get_session for those), the tasks it builds on (builds_on), the tasks that build on it (used_by), its memories and agent_status (null if none; " + agentStatusDoc + ").",
 			InputSchema: schema([]string{"task_id"}, map[string]any{"task_id": pTaskID}),
 			call:        byID("GET", "/api/tasks/%d", "task_id", false),
 			post:        taskWithoutTranscripts,
@@ -412,7 +412,7 @@ func (s *Server) mcpTools() []mcpTool {
 		},
 		{
 			Name:        "dismiss_needs_input",
-			Description: "Clear a session's needs_input without continuing it (sending a message clears it too).",
+			Description: "Dismiss a session: clear its needs_input and mark how its last turn ended as seen, so its task's agent_status (finished, done, failed, cancelled) goes away; sending a message clears needs_input too.",
 			InputSchema: schema([]string{"session_id"}, map[string]any{"session_id": prop("integer", "Session id")}),
 			call:        byID("DELETE", "/api/sessions/%d/needs-input", "session_id", false),
 		},
@@ -554,6 +554,9 @@ func (r *recorder) Header() http.Header         { return r.header }
 func (r *recorder) Write(b []byte) (int, error) { return r.body.Write(b) }
 func (r *recorder) WriteHeader(status int)      { r.status = status }
 
+// agentStatusDoc explains a task's agent_status to agents using the tools.
+const agentStatusDoc = `{status, session_id, reason}; status is running, needs_you (reason says why), finished (the last turn ended; its result wants a look), done (it ended well and the task reached the session's done lane), failed (reason has the error) or cancelled. Outcomes show until the user dismisses the session, moves the task or a new turn starts`
+
 // boardSummary drops UI-only data (usage limits) from the board.
 func boardSummary(raw []byte) ([]byte, error) {
 	var b map[string]json.RawMessage
@@ -586,6 +589,7 @@ func taskWithoutTranscripts(raw []byte) ([]byte, error) {
 		UsedBy    json.RawMessage              `json:"used_by"`
 		Artifacts json.RawMessage              `json:"artifacts"`
 		Memories  json.RawMessage              `json:"memories"`
+		Status    json.RawMessage              `json:"agent_status"`
 	}
 	if err := json.Unmarshal(raw, &t); err != nil {
 		return nil, err

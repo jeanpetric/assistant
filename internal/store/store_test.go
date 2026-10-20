@@ -743,3 +743,178 @@ func TestNeedsInputMigrationKeepsData(t *testing.T) {
 		t.Fatalf("after deleting the session: %+v", ns)
 	}
 }
+
+func TestAgentStatusDerivation(t *testing.T) {
+	lane := func(id int64) *int64 { return &id }
+	cases := []struct {
+		name string
+		xs   []agentSession // latest first
+		want AgentStatus
+		ok   bool
+	}{
+		{"no sessions", nil, AgentStatus{}, false},
+		{"running wins", []agentSession{
+			{ID: 3, Status: StatusIdle, NeedsInput: "asked a question"},
+			{ID: 2, Status: StatusRunning},
+		}, AgentStatus{Status: AgentRunning, SessionID: 2}, true},
+		{"needs you over a newer outcome", []agentSession{
+			{ID: 3, Status: StatusError, Error: "boom"},
+			{ID: 2, Status: StatusIdle, NeedsInput: "asked a question", Seen: true},
+		}, AgentStatus{Status: AgentNeedsYou, SessionID: 2, Reason: "asked a question"}, true},
+		{"turn finished", []agentSession{{ID: 1, Status: StatusIdle, LaneID: 5}},
+			AgentStatus{Status: AgentFinished, SessionID: 1}, true},
+		{"finished, task not in its done lane", []agentSession{{ID: 1, Status: StatusIdle, LaneID: 5, DoneLaneID: lane(6)}},
+			AgentStatus{Status: AgentFinished, SessionID: 1}, true},
+		{"done", []agentSession{{ID: 1, Status: StatusIdle, LaneID: 6, DoneLaneID: lane(6)}},
+			AgentStatus{Status: AgentDone, SessionID: 1}, true},
+		{"failed", []agentSession{{ID: 1, Status: StatusError, Error: "exit 1"}},
+			AgentStatus{Status: AgentFailed, SessionID: 1, Reason: "exit 1"}, true},
+		{"interrupted", []agentSession{{ID: 1, Status: StatusInterrupted}},
+			AgentStatus{Status: AgentFailed, SessionID: 1, Reason: "interrupted by a restart"}, true},
+		{"cancelled", []agentSession{{ID: 1, Status: StatusCancelled}},
+			AgentStatus{Status: AgentCancelled, SessionID: 1}, true},
+		{"latest seen hides older outcomes", []agentSession{
+			{ID: 2, Status: StatusIdle, Seen: true},
+			{ID: 1, Status: StatusError},
+		}, AgentStatus{}, false},
+		{"only the latest counts", []agentSession{
+			{ID: 2, Status: StatusCancelled},
+			{ID: 1, Status: StatusError},
+		}, AgentStatus{Status: AgentCancelled, SessionID: 2}, true},
+	}
+	for _, c := range cases {
+		got, ok := agentStatus(c.xs)
+		if ok != c.ok || got != c.want {
+			t.Errorf("%s: got %+v, %v; want %+v, %v", c.name, got, ok, c.want, c.ok)
+		}
+	}
+}
+
+func TestAgentStatuses(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	lanes, _ := s.Lanes(ctx)
+	task, _ := s.CreateTask(ctx, Task{Title: "t", LaneID: lanes[0].ID})
+	other, _ := s.CreateTask(ctx, Task{Title: "untouched"})
+	s.CreateSession(ctx, Session{Mode: "default"}) // standalone: no task
+	status := func() (AgentStatus, bool) {
+		t.Helper()
+		all, err := s.AgentStatuses(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := all[other.ID]; ok {
+			t.Fatalf("a task without sessions has a status: %v", all)
+		}
+		st, ok := all[task.ID]
+		return st, ok
+	}
+
+	done := lanes[1].ID
+	a, _ := s.CreateSession(ctx, Session{TaskID: task.ID, Mode: "default", DoneLaneID: &done})
+	if st, _ := status(); st.Status != AgentRunning || st.SessionID != a.ID {
+		t.Fatalf("running: %+v", st)
+	}
+	s.SetSessionStatus(ctx, a.ID, StatusIdle, "")
+	if st, _ := status(); st.Status != AgentFinished {
+		t.Fatalf("finished: %+v", st)
+	}
+	s.MoveTask(ctx, task.ID, done, -1)
+	if st, _ := status(); st.Status != AgentDone {
+		t.Fatalf("done: %+v", st)
+	}
+	if err := s.DismissSession(ctx, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	if st, ok := status(); ok {
+		t.Fatalf("dismissed: %+v", st)
+	}
+	if err := s.DismissSession(ctx, 999); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("dismiss unknown: %v", err)
+	}
+
+	// A new turn starts unseen; a failure shows until the task is moved.
+	s.SetSessionStatus(ctx, a.ID, StatusRunning, "")
+	s.SetSessionStatus(ctx, a.ID, StatusError, "boom")
+	if st, _ := status(); st.Status != AgentFailed || st.Reason != "boom" {
+		t.Fatalf("failed: %+v", st)
+	}
+	b, _ := s.CreateSession(ctx, Session{TaskID: task.ID, Mode: "default"})
+	if err := s.SeeTaskSessions(ctx, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := status(); st.Status != AgentRunning || st.SessionID != b.ID {
+		t.Fatalf("seeing keeps the running one: %+v", st)
+	}
+	if got, _ := s.Session(ctx, a.ID); !got.Seen {
+		t.Fatalf("not seen: %+v", got)
+	}
+	if got, _ := s.Session(ctx, b.ID); got.Seen {
+		t.Fatalf("running session marked seen: %+v", got)
+	}
+
+	// Waiting for the user wins over how the latest turn ended.
+	s.SetSessionStatus(ctx, b.ID, StatusIdle, "")
+	s.SetSessionNeedsInput(ctx, b.ID, "asked a question")
+	if st, _ := status(); st.Status != AgentNeedsYou || st.Reason != "asked a question" {
+		t.Fatalf("needs you: %+v", st)
+	}
+
+	// Restarting the app marks interrupted sessions unseen.
+	s.SetSessionStatus(ctx, b.ID, StatusRunning, "")
+	s.DismissSession(ctx, b.ID)
+	s.MarkInterrupted(ctx)
+	if st, _ := status(); st.Status != AgentFailed || st.SessionID != b.ID {
+		t.Fatalf("interrupted: %+v", st)
+	}
+}
+
+func TestSeenMigrationKeepsData(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := len(migrations) - 1 // migrations before seen
+	for _, m := range migrations[:n] {
+		if _, err := db.Exec(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, q := range []string{
+		fmt.Sprintf(`PRAGMA user_version = %d`, n),
+		`INSERT INTO tasks (id, title, kind, lane_id, position, created_at, updated_at) VALUES (1, 'old', 'task', 1, 0, 0, 0)`,
+		`INSERT INTO sessions (id, task_id, title, status, mode, created_at, updated_at) VALUES (7, 1, 'ended', 'error', 'default', 0, 0)`,
+		`INSERT INTO sessions (id, task_id, title, status, mode, needs_input, created_at, updated_at) VALUES (8, 1, 'asks', 'idle', 'default', 'asked a question', 0, 1)`,
+		`INSERT INTO sessions (id, task_id, title, status, mode, created_at, updated_at) VALUES (9, 1, 'busy', 'running', 'default', 0, 2)`,
+		`INSERT INTO messages (session_id, role, kind, content, created_at) VALUES (7, 'assistant', 'text', 'hello', 0)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(q, err)
+		}
+	}
+	db.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	want := map[int64]bool{7: true, 8: false, 9: false}
+	for id, seen := range want {
+		x, err := s.Session(ctx, id)
+		if err != nil || x.Seen != seen || x.TaskID != 1 {
+			t.Fatalf("session %d = %+v, %v", id, x, err)
+		}
+	}
+	if x, _ := s.Session(ctx, 7); x.Title != "ended" || x.Status != StatusError || x.LastMessage != "hello" {
+		t.Fatalf("session 7 = %+v", x)
+	}
+	if x, _ := s.Session(ctx, 8); x.NeedsInput != "asked a question" {
+		t.Fatalf("session 8 = %+v", x)
+	}
+	if st, err := s.AgentStatuses(ctx); err != nil || st[1].Status != AgentRunning {
+		t.Fatalf("statuses = %+v, %v", st, err)
+	}
+}

@@ -222,6 +222,33 @@ function runningBadge(n) {
   return n ? h('span', { class: 'badge running' }, h('span', { class: 'pulse' }), n > 1 ? `${n} agents` : 'agent') : null;
 }
 
+// How a task's latest agent turn ended, shown until the user dismisses the
+// session, moves the task or a new turn starts.
+const outcomes = {
+  finished: ['◐ turn finished', 'The agent finished its turn: look at what it did'],
+  done: ['✓ done', 'The agent finished and the task reached its done lane'],
+  failed: ['✕ failed', 'The agent\'s turn failed'],
+  cancelled: ['■ cancelled', 'The agent\'s turn was stopped'],
+};
+
+function outcomeBadge(taskId, st) {
+  const o = st && outcomes[st.status];
+  if (!o) return null;
+  return h('a', {
+    class: 'badge outcome-' + st.status, href: sessionHref({ task_id: taskId, id: st.session_id }),
+    title: (st.reason ? `${o[1]}: ${st.reason}` : o[1]) + ' — open the session',
+    onclick: e => { e.stopPropagation(); closeTaskDialog(); },
+  }, o[0]);
+}
+
+// A task's whole agent status, for its own page.
+function agentStatusEl(taskId, st) {
+  if (!st) return null;
+  if (st.status === 'running') return runningBadge(1);
+  if (st.status === 'needs_you') return needsInputBadge(1, 'The agent ' + st.reason);
+  return outcomeBadge(taskId, st);
+}
+
 // Short countdown: 45m, 2h10m, 3d5h.
 function untilShort(ts) {
   const m = Math.max(0, Math.floor((new Date(ts) - Date.now()) / 60000));
@@ -296,7 +323,7 @@ function card(t) {
     onclick: e => { if (e.metaKey || e.ctrlKey) location.hash = `#/task/${t.id}`; else openTaskDialog(t.id); },
   },
     h('div', { class: 'card-title' }, t.title),
-    h('div', { class: 'card-meta' }, kindBadge(t.kind), dueBadge(t), buildsOnBadge(t), needsInputBadge(state.board.needs_input[t.id]), runningBadge(state.board.running[t.id]), fieldLinks(t)),
+    h('div', { class: 'card-meta' }, kindBadge(t.kind), dueBadge(t), buildsOnBadge(t), needsInputBadge(state.board.needs_input[t.id]), runningBadge(state.board.running[t.id]), outcomeBadge(t.id, state.board.agent_status[t.id]), fieldLinks(t)),
     state.board.running_limits[t.id] ? h('div', { class: 'card-meta' }, limitsEl(state.board.running_limits[t.id])) : null);
   el.dataset.id = t.id;
   el.addEventListener('dragstart', e => {
@@ -372,7 +399,7 @@ async function renderList() {
       h('td', {}, laneName(t.lane_id)),
       h('td', {}, kindBadge(t.kind) || 'task'),
       h('td', { class: 'small', title: fmtTime(t.due_at) }, dueBadge(t)),
-      h('td', {}, needsInputBadge(b.needs_input[t.id]), runningBadge(b.running[t.id]), fieldLinks(t)),
+      h('td', {}, needsInputBadge(b.needs_input[t.id]), runningBadge(b.running[t.id]), outcomeBadge(t.id, b.agent_status[t.id]), fieldLinks(t)),
       h('td', { class: 'muted small' }, ago(t.updated_at)))));
   }
   draw();
@@ -515,9 +542,15 @@ async function taskView(id, { every, leave, reload }) {
     ? h('div', { class: 'row archived-note' }, h('span', { class: 'grow' }, 'Archived ' + ago(t.archived_at)),
       h('button', { class: 'small', onclick: async () => { await api('POST', `/api/tasks/${id}/unarchive`); reload(); } }, 'Restore'))
     : null;
+  // The agent status, redrawn when a session's state or the lane changes.
+  const agentStatus = h('div', { class: 'card-meta agent-status' });
+  const drawStatus = st => agentStatus.replaceChildren(...[agentStatusEl(id, st)].filter(Boolean));
+  const reloadStatus = () => api('GET', `/api/tasks/${id}`).then(d => drawStatus(d.agent_status));
+  drawStatus(data.agent_status);
   side.append(h('div', { class: 'panel' },
     archived,
     h('input', { class: 'title-input', value: t.title, onchange: e => save({ title: e.target.value }) }),
+    agentStatus,
     h('label', {}, 'Project'),
     select(state.board.projects.map(p => [p.id, p.name]), t.project_id, {
       onchange: async e => { await save({ project_id: Number(e.target.value) }); toast('Moved to ' + projectName(t.project_id)); },
@@ -527,6 +560,7 @@ async function taskView(id, { every, leave, reload }) {
       onchange: async e => {
         const res = await api('POST', `/api/tasks/${id}/move`, { lane_id: Number(e.target.value), index: -1 });
         if (res.started.length) toast(`Started ${res.started.map(s => s.title).join(', ')}`);
+        reloadStatus();
       },
     }),
     h('label', {}, 'Kind'),
@@ -569,9 +603,12 @@ async function taskView(id, { every, leave, reload }) {
   const artifacts = artifactsPanel(id, data.artifacts);
   const main = h('div', {}, sessionPanel.el, artifacts.el, sessionsEl,
     data.sessions.length ? null : h('p', { class: 'muted' }, 'No agent sessions yet.'));
+  let sessionsState = JSON.stringify(data.sessions.map(s => [s.id, s.status, s.needs_input, s.seen]));
   every(2000, async () => {
     components.forEach(c => c.drawLimits());
     const list = await api('GET', `/api/sessions?task_id=${id}`);
+    const now = JSON.stringify(list.map(s => [s.id, s.status, s.needs_input, s.seen]).reverse());
+    if (now !== sessionsState) { sessionsState = now; reloadStatus(); }
     let finished = false; // a turn ended: a skill may have left an artifact
     for (const s of list) {
       const c = components.get(s.id);
@@ -863,9 +900,13 @@ function sessionComponent(session, messages, task) {
       h('span', { class: 'title' }, s.title || `Session ${s.id}`),
       h('span', { class: 'badge status-' + s.status }, running ? h('span', { class: 'pulse' }) : null, s.status),
       needsInputBadge(s.needs_input ? 1 : 0, 'The agent ' + s.needs_input),
-      s.needs_input ? h('button', {
-        class: 'ghost small', title: 'No answer needed: clear the tag',
-        onclick: async () => { await api('DELETE', `/api/sessions/${s.id}/needs-input`); c.session.needs_input = ''; drawHead(); },
+      s.needs_input || (!running && !s.seen && s.task_id) ? h('button', {
+        class: 'ghost small', title: s.needs_input ? 'No answer needed: clear the tag' : 'Seen how the turn ended: clear the task\'s status',
+        onclick: async () => {
+          await api('DELETE', `/api/sessions/${s.id}/needs-input`);
+          Object.assign(c.session, { needs_input: '', seen: true });
+          drawHead();
+        },
       }, 'Dismiss') : null,
       h('span', { class: 'badge' }, s.mode),
       s.model ? h('span', { class: 'badge' }, s.model) : null,

@@ -68,6 +68,17 @@ func (s *Server) board(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	statuses, err := s.app.Store.AgentStatuses(ctx)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	agentStatus := map[int64]store.AgentStatus{}
+	for _, t := range tasks {
+		if st, ok := statuses[t.ID]; ok {
+			agentStatus[t.ID] = st
+		}
+	}
 	// Per task: how many agents run, and the usage limits last reported by the
 	// most recently active of them.
 	runningByTask := map[int64]int{}
@@ -85,7 +96,8 @@ func (s *Server) board(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, 200, map[string]any{"projects": projects, "project_id": projectID, "lanes": lanes, "tasks": tasks, "fields": fields,
-		"running": runningByTask, "running_limits": limitsByTask, "needs_input": needsInput})
+		"running": runningByTask, "running_limits": limitsByTask, "needs_input": needsInput,
+		"agent_status": agentStatus})
 }
 
 func (s *Server) meta(w http.ResponseWriter, r *http.Request) {
@@ -464,8 +476,17 @@ func (s *Server) getTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	statuses, err := s.app.Store.AgentStatuses(ctx)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	var agentStatus *store.AgentStatus
+	if st, ok := statuses[id]; ok {
+		agentStatus = &st
+	}
 	writeJSON(w, 200, map[string]any{"task": t, "sessions": out, "schedules": schedules, "builds_on": builds, "used_by": usedBy,
-		"artifacts": artifacts, "memories": memories})
+		"artifacts": artifacts, "memories": memories, "agent_status": agentStatus})
 }
 
 // taskRef names a related task for the task page.
@@ -599,6 +620,12 @@ func (s *Server) moveTask(w http.ResponseWriter, r *http.Request) {
 		Index  int   `json:"index"`
 	}
 	if err := decode(r, &in); err != nil {
+		writeErr(w, err)
+		return
+	}
+	// Moving a task by hand is the user's next step after its agents' turns:
+	// how they ended has been seen. Sessions the move starts are not touched.
+	if err := s.app.Store.SeeTaskSessions(r.Context(), id); err != nil {
 		writeErr(w, err)
 		return
 	}

@@ -892,3 +892,73 @@ func TestNeedsInputOnBoardAndNotification(t *testing.T) {
 		t.Fatalf("session = %+v", got)
 	}
 }
+
+func TestAgentStatusOnBoardAndTask(t *testing.T) {
+	c := newClient(t)
+	var b board
+	c.do("GET", "/api/board", nil, 200, &b)
+	lane := map[string]int64{}
+	for _, l := range b.Lanes {
+		lane[l.Name] = l.ID
+	}
+	var task store.Task
+	c.do("POST", "/api/tasks", map[string]any{"title": "T", "lane_id": lane["In progress"]}, 201, &task)
+	path := "/api/tasks/" + itoa(task.ID)
+	status := func() *store.AgentStatus {
+		t.Helper()
+		var bs struct {
+			AgentStatus map[string]store.AgentStatus `json:"agent_status"`
+		}
+		c.do("GET", "/api/board", nil, 200, &bs)
+		var ts struct {
+			AgentStatus *store.AgentStatus `json:"agent_status"`
+		}
+		c.do("GET", path, nil, 200, &ts)
+		st, ok := bs.AgentStatus[itoa(task.ID)]
+		if ok != (ts.AgentStatus != nil) || ok && st != *ts.AgentStatus {
+			t.Fatalf("board %+v and task %+v disagree", bs.AgentStatus, ts.AgentStatus)
+		}
+		return ts.AgentStatus
+	}
+	if st := status(); st != nil {
+		t.Fatalf("no sessions yet: %+v", st)
+	}
+
+	// A turn that moves the task to its done lane is done.
+	var sess store.Session
+	c.do("POST", path+"/sessions", map[string]any{"prompt": "p", "done_lane_id": lane["Review"]}, 201, &sess)
+	c.app.Wait()
+	if st := status(); st == nil || st.Status != store.AgentDone || st.SessionID != sess.ID {
+		t.Fatalf("after the turn: %+v", st)
+	}
+	// Moving the task by hand: seen.
+	c.do("POST", path+"/move", map[string]any{"lane_id": lane["Done"], "index": 0}, 200, nil)
+	if st := status(); st != nil {
+		t.Fatalf("after moving: %+v", st)
+	}
+
+	// Another turn without a done lane only finished; dismissing it: seen.
+	c.do("PATCH", "/api/sessions/"+itoa(sess.ID), map[string]any{"done_lane_id": nil}, 200, nil)
+	c.do("POST", "/api/sessions/"+itoa(sess.ID)+"/messages", map[string]any{"text": "more"}, 202, nil)
+	c.app.Wait()
+	if st := status(); st == nil || st.Status != store.AgentFinished {
+		t.Fatalf("after the second turn: %+v", st)
+	}
+	if text, _ := c.tool("get_task", map[string]any{"task_id": task.ID}); !strings.Contains(text, `"agent_status":{"status":"finished"`) {
+		t.Fatalf("get_task = %s", text)
+	}
+	if text, _ := c.tool("get_board", map[string]any{}); !strings.Contains(text, `"agent_status":{"`+itoa(task.ID)+`":{"status":"finished"`) {
+		t.Fatalf("get_board = %s", text)
+	}
+	c.do("DELETE", "/api/sessions/"+itoa(sess.ID)+"/needs-input", nil, 204, nil)
+	if st := status(); st != nil {
+		t.Fatalf("after dismissing: %+v", st)
+	}
+
+	// A question needs the user; answering it runs a new turn.
+	c.do("POST", "/api/sessions/"+itoa(sess.ID)+"/messages", map[string]any{"text": "ask"}, 202, nil)
+	c.app.Wait()
+	if st := status(); st == nil || st.Status != store.AgentNeedsYou || st.Reason != "asked a question" {
+		t.Fatalf("after asking: %+v", st)
+	}
+}
