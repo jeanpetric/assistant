@@ -19,7 +19,7 @@ import (
 // Event is one transcript item produced by an agent turn.
 type Event struct {
 	Role    string // user | assistant | system
-	Kind    string // text | tool_use | tool_result | result | error | rate_limit
+	Kind    string // text | context | tool_use | tool_result | result | error | rate_limit
 	Content string
 
 	// Set on the init and result events.
@@ -231,13 +231,20 @@ func rateLimitEvents(l streamLine) []Event {
 	return []Event{{Role: "system", Kind: "rate_limit", Limits: &lim}}
 }
 
+// contentEvents maps a message's content blocks. User text in the stream never is
+// the user's own prompt (the app records that); it is what the CLI injects mid-turn,
+// such as an expanded skill, so it becomes "context" rather than "text".
 func contentEvents(role string, raw json.RawMessage) []Event {
 	if len(raw) == 0 {
 		return nil
 	}
+	textKind := "text"
+	if role == "user" {
+		textKind = "context"
+	}
 	var s string
 	if json.Unmarshal(raw, &s) == nil {
-		return []Event{{Role: role, Kind: "text", Content: s}}
+		return []Event{{Role: role, Kind: textKind, Content: s}}
 	}
 	var blocks []block
 	if json.Unmarshal(raw, &blocks) != nil {
@@ -248,7 +255,7 @@ func contentEvents(role string, raw json.RawMessage) []Event {
 		switch b.Type {
 		case "text":
 			if strings.TrimSpace(b.Text) != "" {
-				out = append(out, Event{Role: role, Kind: "text", Content: b.Text})
+				out = append(out, Event{Role: role, Kind: textKind, Content: b.Text})
 			}
 		case "tool_use":
 			out = append(out, Event{Role: role, Kind: "tool_use", Content: b.Name + " " + compactJSON(b.Input)})

@@ -14,6 +14,7 @@ const transcript = `{"type":"system","subtype":"init","session_id":"abc-123","to
 {"type":"assistant","message":{"content":[{"type":"text","text":"Let me check."},{"type":"tool_use","id":"t1","name":"Bash","input":{"command": "echo hi"}}]}}
 {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"hi"}]}}
 {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t2","is_error":true,"content":[{"type":"text","text":"boom"}]}]}}
+{"type":"user","message":{"content":[{"type":"text","text":"Base directory for this skill: /x"}]}}
 not json
 {"type":"assistant","message":{"content":[{"type":"thinking","thinking":"hmm"},{"type":"text","text":"Done."}]}}
 {"type":"result","subtype":"success","is_error":false,"result":"Done.","session_id":"abc-123","total_cost_usd":0.0125}
@@ -35,6 +36,7 @@ func TestParseTranscript(t *testing.T) {
 		{Role: "assistant", Kind: "tool_use", Content: `Bash {"command":"echo hi"}`},
 		{Role: "tool", Kind: "tool_result", Content: "hi"},
 		{Role: "tool", Kind: "tool_result", Content: "[error] boom"},
+		{Role: "user", Kind: "context", Content: "Base directory for this skill: /x"},
 		{Role: "assistant", Kind: "text", Content: "Done."},
 		{Role: "system", Kind: "result", Content: "Done.", ClaudeSessionID: "abc-123", CostUSD: 0.0125},
 	}
@@ -106,7 +108,7 @@ func TestClaudeRunnerWithFakeCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 7 || events[6].CostUSD != 0.0125 {
+	if len(events) != 8 || events[7].CostUSD != 0.0125 {
 		t.Fatalf("unexpected events: %+v", events)
 	}
 	cwd, _ := os.ReadFile(filepath.Join(dir, "cwd"))

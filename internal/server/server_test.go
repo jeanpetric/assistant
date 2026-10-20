@@ -283,7 +283,9 @@ func TestStaticUI(t *testing.T) {
 	}
 	js, _ := io.ReadAll(res.Body)
 	res.Body.Close()
-	for _, want := range []string{"getElementById('task-dialog')", "onclick: e => { if (e.metaKey || e.ctrlKey) location.hash = `#/task/${t.id}`; else openTaskDialog(t.id); }"} {
+	for _, want := range []string{"getElementById('task-dialog')",
+		// Tool calls fold into one collapsed group per run instead of one row each.
+		"appendMessage(body, m)", "h('details', { class: 'tools' }", "onclick: e => { if (e.metaKey || e.ctrlKey) location.hash = `#/task/${t.id}`; else openTaskDialog(t.id); }"} {
 		if !bytes.Contains(js, []byte(want)) {
 			t.Fatalf("app.js lacks %q", want)
 		}

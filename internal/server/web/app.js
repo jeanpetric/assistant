@@ -542,8 +542,10 @@ function messageEl(m) {
       const input = sp > 0 ? m.content.slice(sp + 1) : '';
       let pretty = input;
       try { pretty = JSON.stringify(JSON.parse(input), null, 2); } catch (_) { /* keep raw */ }
-      return h('details', { class: 'tool' }, h('summary', {}, `🔧 ${name} ${trunc(input, 120)}`), h('pre', {}, pretty));
+      return h('details', { class: 'tool tool-use' }, h('summary', {}, `🔧 ${name} ${trunc(input, 120)}`), h('pre', {}, pretty));
     }
+    case 'context':
+      return h('details', { class: 'tool' }, h('summary', {}, `📄 ${trunc(m.content, 120)}`), h('pre', {}, m.content));
     case 'tool_result':
       return h('details', { class: 'tool' }, h('summary', {}, `↳ ${trunc(m.content, 120) || '(empty)'}`), h('pre', {}, m.content));
     case 'result':
@@ -553,6 +555,22 @@ function messageEl(m) {
     default:
       return h('div', { class: 'msg ' + m.role }, richText(m.content));
   }
+}
+
+const isToolMsg = m => m.kind === 'tool_use' || m.kind === 'tool_result' || m.kind === 'context';
+
+// Tool calls, their output and CLI-injected context between two messages fold into one collapsed group,
+// so a session reads as the conversation; the group keeps growing while the agent works.
+function appendMessage(body, m) {
+  if (!isToolMsg(m)) { body.append(messageEl(m)); return; }
+  let group = body.lastElementChild;
+  if (!group || !group.classList.contains('tools')) {
+    group = h('details', { class: 'tools' }, h('summary', {}), h('div', { class: 'tools-body' }));
+    body.append(group);
+  }
+  group.lastElementChild.append(messageEl(m));
+  const n = group.querySelectorAll('.tools-body > .tool-use').length;
+  group.firstElementChild.textContent = n === 1 ? '1 tool call' : `${n} tool calls`;
 }
 
 function sessionComponent(session, messages) {
@@ -615,7 +633,7 @@ function sessionComponent(session, messages) {
     c.session = s;
     if (doneLane && document.activeElement !== doneLane) doneLane.value = s.done_lane_id ?? '';
     for (const m of msgs) {
-      body.append(messageEl(m));
+      appendMessage(body, m);
       last = Math.max(last, m.id);
     }
     drawHead();
