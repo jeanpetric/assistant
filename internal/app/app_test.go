@@ -164,11 +164,7 @@ func TestStartSessionValidation(t *testing.T) {
 func TestRateLimits(t *testing.T) {
 	a, r := newApp(t)
 	ctx := context.Background()
-	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
-	a.Now = func() time.Time { return now }
-	if got := a.Limits(); got.FiveHour != nil || got.SevenDay != nil {
-		t.Fatalf("nothing reported yet: %+v", got)
-	}
+	now := time.Now().Truncate(time.Millisecond)
 
 	week := &agent.LimitWindow{UsedPercent: 17, ResetsAt: now.Add(72 * time.Hour)}
 	r.limits = &agent.RateLimits{FiveHour: &agent.LimitWindow{UsedPercent: 10, ResetsAt: now.Add(time.Hour)}, SevenDay: week}
@@ -185,9 +181,10 @@ func TestRateLimits(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.Wait()
-	got := a.Limits()
-	if got.FiveHour == nil || got.FiveHour.UsedPercent != 30 || got.SevenDay == nil || *got.SevenDay != *week {
-		t.Fatalf("limits = %+v", got)
+	got, _ := a.Store.Session(ctx, sess.ID)
+	if l := got.Limits; l.FiveHour == nil || l.FiveHour.UsedPercent != 30 || l.SevenDay == nil ||
+		l.SevenDay.UsedPercent != 17 || !l.SevenDay.ResetsAt.Equal(week.ResetsAt) {
+		t.Fatalf("limits = %+v", got.Limits)
 	}
 	msgs, _ := a.Store.Messages(ctx, sess.ID, 0)
 	for _, m := range msgs {
@@ -196,9 +193,14 @@ func TestRateLimits(t *testing.T) {
 		}
 	}
 
-	now = now.Add(2 * time.Hour) // the 5h window has reset
-	if got := a.Limits(); got.FiveHour != nil || got.SevenDay == nil {
-		t.Fatalf("after 5h reset: %+v", got)
+	// Limits belong to the session that reported them.
+	r.mu.Lock()
+	r.limits = nil
+	r.mu.Unlock()
+	other, _ := a.StartSession(ctx, StartOpts{Prompt: "other"})
+	a.Wait()
+	if got, _ := a.Store.Session(ctx, other.ID); got.Limits.FiveHour != nil || got.Limits.SevenDay != nil {
+		t.Fatalf("other session limits = %+v", got.Limits)
 	}
 }
 

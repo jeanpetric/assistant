@@ -36,7 +36,6 @@ func (s *Server) routes() {
 	m := s.mux
 	m.HandleFunc("GET /api/board", s.board)
 	m.HandleFunc("GET /api/meta", s.meta)
-	m.HandleFunc("GET /api/limits", s.limits)
 	m.HandleFunc("GET /api/settings", s.getSettings)
 	m.HandleFunc("PUT /api/settings", s.saveSettings)
 	m.HandleFunc("GET /api/archive", s.archivedTasks)

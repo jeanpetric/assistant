@@ -404,3 +404,56 @@ func TestDoneLaneMigrationAndLaneDelete(t *testing.T) {
 		t.Fatalf("after lane delete: session %+v, rule %+v %v, schedule %+v %v", x, r, rerr, sc, serr)
 	}
 }
+
+func TestLimitsMigrationKeepsSessions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range migrations[:5] {
+		if _, err := db.Exec(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, q := range []string{
+		`PRAGMA user_version = 5`,
+		`INSERT INTO tasks (id, title, lane_id, position, created_at, updated_at) VALUES (1, 'old', 1, 0, 0, 0)`,
+		`INSERT INTO sessions (id, task_id, status, mode, cost_usd, claude_session_id, created_at, updated_at) VALUES (7, 1, 'idle', 'plan', 1.5, 'c-7', 0, 0)`,
+		`INSERT INTO messages (session_id, role, kind, content, created_at) VALUES (7, 'user', 'text', 'hi', 0)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(q, err)
+		}
+	}
+	db.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	x, err := s.Session(ctx, 7)
+	if err != nil || x.TaskTitle != "old" || x.CostUSD != 1.5 || x.ClaudeSessionID != "c-7" || x.Limits.FiveHour != nil || x.Limits.SevenDay != nil {
+		t.Fatalf("session = %+v, %v", x, err)
+	}
+	if msgs, _ := s.Messages(ctx, 7, 0); len(msgs) != 1 {
+		t.Fatalf("messages = %d", len(msgs))
+	}
+
+	resets := time.UnixMilli(time.Now().Add(time.Hour).UnixMilli())
+	if err := s.SetSessionLimits(ctx, 7, Limits{FiveHour: &LimitWindow{UsedPercent: 40, ResetsAt: resets}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetSessionLimits(ctx, 7, Limits{SevenDay: &LimitWindow{UsedPercent: 9, ResetsAt: resets}}); err != nil {
+		t.Fatal(err)
+	}
+	x, _ = s.Session(ctx, 7)
+	if l := x.Limits; l.FiveHour == nil || l.FiveHour.UsedPercent != 40 || !l.FiveHour.ResetsAt.Equal(resets) || l.SevenDay == nil || l.SevenDay.UsedPercent != 9 {
+		t.Fatalf("limits = %+v", x.Limits)
+	}
+	if err := s.SetSessionLimits(ctx, 99, Limits{}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown session: %v", err)
+	}
+}

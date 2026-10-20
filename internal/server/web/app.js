@@ -185,6 +185,28 @@ function runningBadge(n) {
   return n ? h('span', { class: 'badge running' }, h('span', { class: 'pulse' }), n > 1 ? `${n} agents` : 'agent') : null;
 }
 
+// Short countdown: 45m, 2h10m, 3d5h.
+function untilShort(ts) {
+  const m = Math.max(0, Math.floor((new Date(ts) - Date.now()) / 60000));
+  if (m < 60) return m + 'm';
+  if (m < 1440) return Math.floor(m / 60) + 'h' + (m % 60) + 'm';
+  return Math.floor(m / 1440) + 'd' + Math.floor((m % 1440) / 60) + 'h';
+}
+
+// Usage left in the 5h and 7d windows, as last reported by a session's turns:
+// "5h 72% (2h10m) · 7d 83% (3d5h)". A window that is unknown or has reset since is "?".
+function limitsEl(lim) {
+  const part = (label, w) => {
+    if (!w || new Date(w.resets_at) <= Date.now()) return h('span', {}, label + ' ?');
+    const left = Math.max(0, 100 - w.used_percent);
+    const cls = left <= 5 ? 'danger' : left <= 20 ? 'warn' : null;
+    return h('span', { class: cls, title: 'Resets ' + fmtTime(w.resets_at) },
+      `${label} ${Math.round(left)}% (${untilShort(w.resets_at)})`);
+  };
+  return h('span', { class: 'limits small muted', title: 'Claude usage left in the 5-hour and weekly windows' },
+    part('5h', lim && lim.five_hour), ' · ', part('7d', lim && lim.seven_day));
+}
+
 // ---------- board ----------
 
 let dragId = null;
@@ -237,7 +259,8 @@ function card(t) {
     onclick: e => { if (e.metaKey || e.ctrlKey) location.hash = `#/task/${t.id}`; else openTaskDialog(t.id); },
   },
     h('div', { class: 'card-title' }, t.title),
-    h('div', { class: 'card-meta' }, kindBadge(t.kind), dueBadge(t), runningBadge(state.board.running[t.id]), fieldLinks(t)));
+    h('div', { class: 'card-meta' }, kindBadge(t.kind), dueBadge(t), runningBadge(state.board.running[t.id]), fieldLinks(t)),
+    state.board.running_limits[t.id] ? h('div', { class: 'card-meta' }, limitsEl(state.board.running_limits[t.id])) : null);
   el.dataset.id = t.id;
   el.addEventListener('dragstart', e => {
     dragId = t.id;
@@ -485,6 +508,7 @@ async function taskView(id, { every, leave, reload }) {
   const main = h('div', {}, newSessionPanel(t, addSession), sessionsEl,
     data.sessions.length ? null : h('p', { class: 'muted' }, 'No agent sessions yet.'));
   every(2000, async () => {
+    components.forEach(c => c.drawLimits());
     const list = await api('GET', `/api/sessions?task_id=${id}`);
     for (const s of list) {
       const c = components.get(s.id);
@@ -577,6 +601,7 @@ function sessionComponent(session, messages) {
   let last = 0;
   const body = h('div', { class: 'session-body' });
   const head = h('div', { class: 'session-head' });
+  const limits = h('div', { class: 'session-limits' });
   const input = h('textarea', { rows: 2, placeholder: 'Reply to continue this session… (⌘↵ to send)' });
   const send = h('button', {}, 'Send');
   // Task sessions can change where the task goes when the agent finishes, even mid-run.
@@ -586,7 +611,7 @@ function sessionComponent(session, messages) {
   }) : null;
   const foot = h('div', { class: 'session-foot' }, input,
     h('div', { class: 'row', style: 'margin-top:6px; justify-content:flex-end' }, doneLane, send));
-  const el = h('div', { class: 'session' }, head, body, foot);
+  const el = h('div', { class: 'session' }, head, body, limits, foot);
   const c = { el, session, lastId: () => last };
 
   const doResume = async () => {
@@ -627,7 +652,16 @@ function sessionComponent(session, messages) {
       h('button', { class: 'ghost small', onclick: () => el.classList.toggle('collapsed') }, '▾'),
     ].filter(Boolean));
     send.disabled = running || !s.claude_session_id;
+    drawLimits();
   }
+
+  // Shown while the session runs and kept after the turn as the last known value.
+  function drawLimits() {
+    const s = c.session;
+    const known = s.limits && (s.limits.five_hour || s.limits.seven_day);
+    limits.replaceChildren(...(s.status === 'running' || known ? [limitsEl(s.limits)] : []));
+  }
+  c.drawLimits = drawLimits; // the countdowns tick even when nothing else changes
 
   c.update = (s, msgs) => {
     c.session = s;
@@ -721,6 +755,7 @@ async function renderSession(id) {
       h('button', { onclick: sessionDialog }, '▶ New session')),
     c.el));
   every(2000, async () => {
+    c.drawLimits();
     const upd = await api('GET', `/api/sessions/${id}?after=${c.lastId()}`);
     if (upd.messages.length || upd.session.status !== c.session.status || upd.session.updated_at !== c.session.updated_at) {
       c.update(upd.session, upd.messages);
@@ -979,28 +1014,6 @@ async function refreshGlobal() {
   } catch (_) { /* server restarting */ }
 }
 
-// Short countdown: 45m, 2h10m, 3d5h.
-function untilShort(ts) {
-  const m = Math.max(0, Math.floor((new Date(ts) - Date.now()) / 60000));
-  if (m < 60) return m + 'm';
-  if (m < 1440) return Math.floor(m / 60) + 'h' + (m % 60) + 'm';
-  return Math.floor(m / 1440) + 'd' + Math.floor((m % 1440) / 60) + 'h';
-}
-
-// Footer: usage left in the 5h and 7d windows, e.g. "5h 72% (2h10m) · 7d 83% (3d5h)".
-async function refreshLimits() {
-  let lim = {};
-  try { lim = await api('GET', '/api/limits'); } catch (_) { /* show unknown */ }
-  const part = (label, w) => {
-    if (!w || typeof w.used_percent !== 'number') return h('span', {}, label + ' ?');
-    const left = Math.max(0, 100 - w.used_percent);
-    const cls = left <= 5 ? 'danger' : left <= 20 ? 'warn' : null;
-    return h('span', { class: cls, title: 'Resets ' + fmtTime(w.resets_at) },
-      `${label} ${Math.round(left)}% (${untilShort(w.resets_at)})`);
-  };
-  document.getElementById('limits').replaceChildren(part('5h', lim && lim.five_hour), ' · ', part('7d', lim && lim.seven_day));
-}
-
 async function toggleNotifications() {
   const panel = document.getElementById('notif-panel');
   if (!panel.classList.contains('hidden')) { panel.classList.add('hidden'); return; }
@@ -1038,6 +1051,4 @@ async function toggleNotifications() {
   route();
   refreshGlobal();
   setInterval(refreshGlobal, 3000);
-  refreshLimits();
-  setInterval(refreshLimits, 15000);
 })();

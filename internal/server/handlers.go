@@ -40,13 +40,21 @@ func (s *Server) board(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	// Per task: how many agents run, and the usage limits last reported by the
+	// most recently active of them.
 	runningByTask := map[int64]int{}
+	limitsByTask := map[int64]store.Limits{}
 	for _, x := range running {
-		if x.TaskID != 0 {
-			runningByTask[x.TaskID]++
+		if x.TaskID == 0 {
+			continue
+		}
+		runningByTask[x.TaskID]++
+		if _, ok := limitsByTask[x.TaskID]; !ok && (x.Limits.FiveHour != nil || x.Limits.SevenDay != nil) {
+			limitsByTask[x.TaskID] = x.Limits
 		}
 	}
-	writeJSON(w, 200, map[string]any{"lanes": lanes, "tasks": tasks, "fields": fields, "running": runningByTask})
+	writeJSON(w, 200, map[string]any{"lanes": lanes, "tasks": tasks, "fields": fields,
+		"running": runningByTask, "running_limits": limitsByTask})
 }
 
 func (s *Server) meta(w http.ResponseWriter, r *http.Request) {
@@ -57,11 +65,6 @@ func (s *Server) meta(w http.ResponseWriter, r *http.Request) {
 		"workdir":      s.app.DefaultWorkdir,
 		"kinds":        []string{"task", "coding", "research", "discussion", "reminder"},
 	})
-}
-
-// limits reports the last known Claude usage windows; null when unknown.
-func (s *Server) limits(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, s.app.Limits())
 }
 
 // ---- settings ----

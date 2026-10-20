@@ -37,7 +37,6 @@ type App struct {
 	running  map[int64]context.CancelFunc
 	stopping bool // set by Shutdown: cancelled turns end as interrupted, not cancelled
 	wg       sync.WaitGroup
-	limits   agent.RateLimits // last reported by any turn; in memory only
 }
 
 func New(s *store.Store, r agent.Runner, workdir, mode string) *App {
@@ -217,7 +216,7 @@ func (a *App) launch(sess store.Session, prompt, resumeID string) error {
 				failed = true
 			}
 			if ev.Kind == "rate_limit" {
-				a.recordLimits(ev.Limits)
+				a.Store.SetSessionLimits(bg, sess.ID, sessionLimits(ev.Limits))
 				return
 			}
 			if ev.Kind == "init" {
@@ -248,31 +247,14 @@ func (a *App) launch(sess store.Session, prompt, resumeID string) error {
 	return nil
 }
 
-func (a *App) recordLimits(l *agent.RateLimits) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if l.FiveHour != nil {
-		a.limits.FiveHour = l.FiveHour
-	}
-	if l.SevenDay != nil {
-		a.limits.SevenDay = l.SevenDay
-	}
-}
-
-// Limits returns the last reported usage windows. A window whose reset time
-// has passed is dropped: its usage since then is unknown.
-func (a *App) Limits() agent.RateLimits {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	now := a.Now()
-	fresh := func(w *agent.LimitWindow) *agent.LimitWindow {
-		if w == nil || !w.ResetsAt.After(now) {
+func sessionLimits(l *agent.RateLimits) store.Limits {
+	conv := func(w *agent.LimitWindow) *store.LimitWindow {
+		if w == nil {
 			return nil
 		}
-		c := *w
-		return &c
+		return &store.LimitWindow{UsedPercent: w.UsedPercent, ResetsAt: w.ResetsAt}
 	}
-	return agent.RateLimits{FiveHour: fresh(a.limits.FiveHour), SevenDay: fresh(a.limits.SevenDay)}
+	return store.Limits{FiveHour: conv(l.FiveHour), SevenDay: conv(l.SevenDay)}
 }
 
 // moveWhenDone moves the session's task to its done lane after a successful

@@ -23,6 +23,10 @@ func (echoRunner) Run(ctx context.Context, req agent.Request, emit func(agent.Ev
 	emit(agent.Event{Kind: "init", ClaudeSessionID: "c-1"})
 	emit(agent.Event{Kind: "rate_limit", Limits: &agent.RateLimits{
 		FiveHour: &agent.LimitWindow{UsedPercent: 28, ResetsAt: time.Now().Add(2 * time.Hour)}}})
+	if req.Prompt == "block" { // runs until cancelled
+		<-ctx.Done()
+		return ctx.Err()
+	}
 	emit(agent.Event{Role: "assistant", Kind: "text", Content: "did: " + req.Prompt})
 	emit(agent.Event{Role: "system", Kind: "result", Content: "ok"})
 	return nil
@@ -244,22 +248,45 @@ func TestGuard(t *testing.T) {
 	}
 }
 
-func TestLimits(t *testing.T) {
+func TestSessionLimits(t *testing.T) {
 	c := newClient(t)
-	var got map[string]*struct {
-		UsedPercent float64   `json:"used_percent"`
-		ResetsAt    time.Time `json:"resets_at"`
+	var task store.Task
+	c.do("POST", "/api/tasks", map[string]any{"title": "t"}, 201, &task)
+	var sess store.Session
+	c.do("POST", "/api/tasks/"+itoa(task.ID)+"/sessions", map[string]any{"prompt": "block"}, 201, &sess)
+
+	// While it runs, the board shows the session's limits on its task's card.
+	var b struct {
+		RunningLimits map[string]store.Limits `json:"running_limits"`
 	}
-	c.do("GET", "/api/limits", nil, 200, &got)
-	if len(got) != 2 || got["five_hour"] != nil || got["seven_day"] != nil {
-		t.Fatalf("before any turn: %+v", got)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		c.do("GET", "/api/board", nil, 200, &b)
+		if b.RunningLimits[itoa(task.ID)].FiveHour != nil || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	c.do("POST", "/api/sessions", map[string]any{"prompt": "hi"}, 201, nil)
+	if w := b.RunningLimits[itoa(task.ID)].FiveHour; w == nil || w.UsedPercent != 28 || b.RunningLimits[itoa(task.ID)].SevenDay != nil {
+		t.Fatalf("running limits = %+v", b.RunningLimits)
+	}
+
+	// After the turn the session keeps its last known limits; the board no longer shows them.
+	c.do("POST", "/api/sessions/"+itoa(sess.ID)+"/cancel", nil, 202, nil)
 	c.app.Wait()
-	c.do("GET", "/api/limits", nil, 200, &got)
-	if w := got["five_hour"]; w == nil || w.UsedPercent != 28 || w.ResetsAt.Before(time.Now()) || got["seven_day"] != nil {
-		t.Fatalf("after a turn: %+v", got)
+	var got struct {
+		Session store.Session `json:"session"`
 	}
+	c.do("GET", "/api/sessions/"+itoa(sess.ID), nil, 200, &got)
+	if w := got.Session.Limits.FiveHour; got.Session.Status != store.StatusCancelled || w == nil || w.UsedPercent != 28 || w.ResetsAt.Before(time.Now()) {
+		t.Fatalf("session = %+v", got.Session)
+	}
+	b.RunningLimits = nil
+	c.do("GET", "/api/board", nil, 200, &b)
+	if len(b.RunningLimits) != 0 {
+		t.Fatalf("running limits after the turn = %+v", b.RunningLimits)
+	}
+	c.do("GET", "/api/limits", nil, 404, nil)
 }
 
 func TestStaticUI(t *testing.T) {
@@ -288,6 +315,18 @@ func TestStaticUI(t *testing.T) {
 		"appendMessage(body, m)", "h('details', { class: 'tools' }", "onclick: e => { if (e.metaKey || e.ctrlKey) location.hash = `#/task/${t.id}`; else openTaskDialog(t.id); }"} {
 		if !bytes.Contains(js, []byte(want)) {
 			t.Fatalf("app.js lacks %q", want)
+		}
+	}
+	// The dialog's columns shrink and stack by its own width, so it never scrolls sideways.
+	res, err = http.Get(c.srv.URL + "/style.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	css, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	for _, want := range []string{"container-type: inline-size", "@container (max-width: 860px)", ".task-dialog .task-page { grid-template-columns: minmax(0, 380px) minmax(0, 1fr); }"} {
+		if !bytes.Contains(css, []byte(want)) {
+			t.Fatalf("style.css lacks %q", want)
 		}
 	}
 }
