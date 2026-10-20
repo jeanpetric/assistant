@@ -307,7 +307,6 @@ textarea.mono { font-family: var(--mono); font-size: 13px; }
 .artifact > summary { cursor: pointer; margin-bottom: 6px; }
 
 /* memory */
-.mono { font-family: var(--mono); font-size: 12.5px; }
 .memory-preview { min-height: 300px; }
 .memory-suggestions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 4px 0; }
 .revision { padding: 4px 0; border-bottom: 1px solid var(--border); }

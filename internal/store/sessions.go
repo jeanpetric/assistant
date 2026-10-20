@@ -52,8 +52,8 @@ type Session struct {
 type Message struct {
 	ID        int64     `json:"id"`
 	SessionID int64     `json:"session_id"`
-	Role      string    `json:"role"` // user | assistant | system
-	Kind      string    `json:"kind"` // text | tool_use | tool_result | result | error
+	Role      string    `json:"role"` // user | assistant | tool | system
+	Kind      string    `json:"kind"` // text | context | tool_use | tool_result | result | error
 	Content   string    `json:"content"`
 	CreatedAt time.Time `json:"created_at"`
 }

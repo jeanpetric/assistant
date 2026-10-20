@@ -640,7 +640,6 @@ func (s *Server) moveTask(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"started": started})
 }
 
-// archivedTasks lists one project's archived tasks (?project_id=), or all of them.
 // searchTasks finds tasks of every project, archived ones included, by
 // words of their title or description or by id (q); at most limit (default 20).
 func (s *Server) searchTasks(w http.ResponseWriter, r *http.Request) {
@@ -660,6 +659,7 @@ func (s *Server) searchTasks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, tasks)
 }
 
+// archivedTasks lists one project's archived tasks (?project_id=), or all of them.
 func (s *Server) archivedTasks(w http.ResponseWriter, r *http.Request) {
 	projectID, err := queryID(r, "project_id")
 	if err != nil {

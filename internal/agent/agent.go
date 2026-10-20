@@ -18,8 +18,8 @@ import (
 
 // Event is one transcript item produced by an agent turn.
 type Event struct {
-	Role    string // user | assistant | system
-	Kind    string // text | context | tool_use | tool_result | result | error | rate_limit
+	Role    string // user | assistant | tool | system
+	Kind    string // text | context | tool_use | tool_result | result | error | init | rate_limit
 	Content string
 
 	// Set on the init and result events.
@@ -192,13 +192,12 @@ func (w streamWindow) window() *LimitWindow {
 }
 
 type block struct {
-	Type      string          `json:"type"`
-	Text      string          `json:"text"`
-	Name      string          `json:"name"`
-	Input     json.RawMessage `json:"input"`
-	Content   json.RawMessage `json:"content"`
-	IsError   bool            `json:"is_error"`
-	ToolUseID string          `json:"tool_use_id"`
+	Type    string          `json:"type"`
+	Text    string          `json:"text"`
+	Name    string          `json:"name"`
+	Input   json.RawMessage `json:"input"`
+	Content json.RawMessage `json:"content"`
+	IsError bool            `json:"is_error"`
 }
 
 // ParseLine converts one stream-json line into transcript events.

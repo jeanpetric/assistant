@@ -182,7 +182,7 @@ func (a *App) ask(ctx context.Context, req agent.Request) (string, float64, erro
 		result = text
 	}
 	if result = strings.TrimSpace(result); result == "" {
-		return "", cost, errors.New("the agent wrote no summary")
+		return "", cost, errors.New("the agent wrote no reply")
 	}
 	return result, cost, nil
 }

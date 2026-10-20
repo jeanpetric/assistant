@@ -35,7 +35,7 @@ async function api(method, path, body) {
   const data = await res.json().catch(() => null);
   if (!res.ok) {
     const msg = (data && data.error) || res.statusText;
-    toast(msg, true);
+    toast(msg);
     throw new Error(msg);
   }
   return data;
@@ -114,7 +114,6 @@ function recall(key) {
   try { return localStorage.getItem(key) || ''; } catch (_) { return ''; }
 }
 
-// Minimal rendering: fenced code blocks become <pre>, the rest stays plain text.
 function trunc(s, n) {
   s = (s || '').replace(/\s+/g, ' ').trim();
   return s.length > n ? s.slice(0, n) + '…' : s;
@@ -1554,7 +1553,7 @@ function workdirsPanel(dirs, rerender) {
     save(next);
   };
   return h('div', { class: 'panel' }, h('h2', {}, 'Working directories'),
-    h('p', { class: 'muted small' }, `Where agents can run, offered as a dropdown wherever you start one. Unset means the app default (${state.meta.workdir}).`),
+    h('p', { class: 'muted small' }, `Where agents can run, offered as a dropdown on tasks, task sessions, projects and rules. Unset means the app default (${state.meta.workdir}).`),
     dirs.map((d, i) => h('div', { class: 'row', style: 'margin-bottom:6px' },
       h('code', { class: 'grow' }, d),
       h('button', { class: 'ghost', disabled: i === 0, onclick: () => move(i, -1) }, '↑'),
