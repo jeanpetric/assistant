@@ -222,8 +222,27 @@ func (s *Server) reorderLanes(w http.ResponseWriter, r *http.Request) {
 
 // ---- projects ----
 
+type projectInput struct {
+	Name    string  `json:"name"`
+	Color   string  `json:"color"`
+	Workdir *string `json:"workdir"` // nil keeps the saved one
+}
+
+func (in *projectInput) validate() error {
+	in.Name = strings.TrimSpace(in.Name)
+	if in.Name == "" {
+		return badRequest{"name is required"}
+	}
+	if in.Workdir == nil {
+		return nil
+	}
+	dir, err := resolveWorkdir(*in.Workdir)
+	in.Workdir = &dir
+	return err
+}
+
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
-	var in laneInput
+	var in projectInput
 	if err := decode(r, &in); err != nil {
 		writeErr(w, err)
 		return
@@ -232,7 +251,11 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	p, err := s.app.Store.CreateProject(r.Context(), strings.TrimSpace(in.Name), in.Color)
+	p := store.Project{Name: in.Name, Color: in.Color}
+	if in.Workdir != nil {
+		p.Workdir = *in.Workdir
+	}
+	p, err := s.app.Store.CreateProject(r.Context(), p)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -246,7 +269,7 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	var in laneInput
+	var in projectInput
 	if err := decode(r, &in); err != nil {
 		writeErr(w, err)
 		return
@@ -255,7 +278,16 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	if err := s.app.Store.UpdateProject(r.Context(), id, strings.TrimSpace(in.Name), in.Color); err != nil {
+	p, err := s.app.Store.Project(r.Context(), id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	p.Name, p.Color = in.Name, in.Color
+	if in.Workdir != nil {
+		p.Workdir = *in.Workdir
+	}
+	if err := s.app.Store.UpdateProject(r.Context(), p); err != nil {
 		writeErr(w, err)
 		return
 	}

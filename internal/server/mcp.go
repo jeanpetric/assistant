@@ -104,13 +104,14 @@ func schema(required []string, props map[string]any) map[string]any {
 func prop(typ, desc string) map[string]any { return map[string]any{"type": typ, "description": desc} }
 
 var (
-	pTaskID    = prop("integer", "Task id")
-	pLaneID    = prop("integer", "Lane id (see get_board)")
-	pProjectID = prop("integer", "Project id (see get_board); every project has its own board on the shared lanes")
-	pFields    = map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}, "description": "Custom fields by key, e.g. {\"pull_request\": \"https://…\"}; see get_board for the keys. An empty value removes a field."}
-	pDueAt     = prop("string", "Due time, RFC 3339 (e.g. 2026-10-21T09:00:00+02:00); a notification fires when it's reached")
-	pKind      = map[string]any{"type": "string", "enum": []string{"task", "coding", "research", "discussion", "reminder"}}
-	pWorkdir   = prop("string", "Absolute working directory for agent sessions")
+	pTaskID         = prop("integer", "Task id")
+	pLaneID         = prop("integer", "Lane id (see get_board)")
+	pProjectID      = prop("integer", "Project id (see get_board); every project has its own board on the shared lanes")
+	pFields         = map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}, "description": "Custom fields by key, e.g. {\"pull_request\": \"https://…\"}; see get_board for the keys. An empty value removes a field."}
+	pDueAt          = prop("string", "Due time, RFC 3339 (e.g. 2026-10-21T09:00:00+02:00); a notification fires when it's reached")
+	pKind           = map[string]any{"type": "string", "enum": []string{"task", "coding", "research", "discussion", "reminder"}}
+	pWorkdir        = prop("string", "Absolute working directory for agent sessions")
+	pProjectWorkdir = prop("string", "Default working directory for agent sessions on the project's tasks; empty means the app default")
 )
 
 func (s *Server) mcpTools() []mcpTool {
@@ -210,14 +211,16 @@ func (s *Server) mcpTools() []mcpTool {
 		{
 			Name:        "create_project",
 			Description: "Add a project: a separate board on the shared lanes.",
-			InputSchema: schema([]string{"name"}, map[string]any{"name": prop("string", "Project name"), "color": prop("string", "CSS colour, e.g. #3b82f6")}),
-			call:        fixed("POST", "/api/projects", true),
+			InputSchema: schema([]string{"name"}, map[string]any{"name": prop("string", "Project name"), "color": prop("string", "CSS colour, e.g. #3b82f6"),
+				"workdir": pProjectWorkdir}),
+			call: fixed("POST", "/api/projects", true),
 		},
 		{
 			Name:        "update_project",
-			Description: "Rename or recolour a project.",
-			InputSchema: schema([]string{"project_id", "name"}, map[string]any{"project_id": pProjectID, "name": prop("string", "Project name"), "color": prop("string", "CSS colour")}),
-			call:        byID("PATCH", "/api/projects/%d", "project_id", true),
+			Description: "Rename or recolour a project, or change its default workdir (left out keeps it).",
+			InputSchema: schema([]string{"project_id", "name"}, map[string]any{"project_id": pProjectID, "name": prop("string", "Project name"), "color": prop("string", "CSS colour"),
+				"workdir": pProjectWorkdir}),
+			call: byID("PATCH", "/api/projects/%d", "project_id", true),
 		},
 		{
 			Name:        "delete_project",

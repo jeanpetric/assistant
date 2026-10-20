@@ -190,6 +190,10 @@ CREATE INDEX tasks_project ON tasks(project_id, lane_id, position);
 ALTER TABLE sessions ADD COLUMN parent_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL;
 CREATE INDEX sessions_parent ON sessions(parent_id);
 `,
+	// A project's default working directory for agents on its tasks.
+	`
+ALTER TABLE projects ADD COLUMN workdir TEXT NOT NULL DEFAULT '';
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

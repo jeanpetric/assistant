@@ -79,7 +79,7 @@ func TestProjectsScopeTheBoard(t *testing.T) {
 	l0, l1 := lanes[0].ID, lanes[1].ID
 	projects, _ := s.Projects(ctx)
 	work := projects[0].ID
-	private, err := s.CreateProject(ctx, "Private", "#0a0")
+	private, err := s.CreateProject(ctx, Project{Name: "Private", Color: "#0a0"})
 	if err != nil || private.Position != 1 {
 		t.Fatalf("project %+v, %v", private, err)
 	}
@@ -152,18 +152,21 @@ func TestProjectsCRUD(t *testing.T) {
 	ctx := context.Background()
 	projects, _ := s.Projects(ctx)
 	first := projects[0].ID
-	p, _ := s.CreateProject(ctx, "Productive", "")
-	if err := s.UpdateProject(ctx, p.ID, "Productive — AI", "#00f"); err != nil {
+	p, _ := s.CreateProject(ctx, Project{Name: "Productive", Workdir: "/tmp"})
+	if p.Workdir != "/tmp" {
+		t.Fatalf("created %+v", p)
+	}
+	if err := s.UpdateProject(ctx, Project{ID: p.ID, Name: "Productive — AI", Color: "#00f", Workdir: "/srv"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.UpdateProject(ctx, 999, "x", ""); !errors.Is(err, ErrNotFound) {
+	if err := s.UpdateProject(ctx, Project{ID: 999, Name: "x"}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("update unknown: %v", err)
 	}
 	if err := s.ReorderProjects(ctx, []int64{p.ID, first}); err != nil {
 		t.Fatal(err)
 	}
 	projects, _ = s.Projects(ctx)
-	if projects[0].Name != "Productive — AI" || projects[0].Color != "#00f" {
+	if projects[0].Name != "Productive — AI" || projects[0].Color != "#00f" || projects[0].Workdir != "/srv" {
 		t.Fatalf("projects = %+v", projects)
 	}
 
@@ -181,5 +184,43 @@ func TestProjectsCRUD(t *testing.T) {
 	}
 	if err := s.DeleteProject(ctx, 999); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("delete unknown: %v", err)
+	}
+}
+
+func TestProjectWorkdirMigrationKeepsProjects(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := len(migrations) - 1
+	for _, m := range migrations[:old] {
+		if _, err := db.Exec(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, q := range []string{
+		fmt.Sprintf(`PRAGMA user_version = %d`, old),
+		`INSERT INTO projects (id, name, color, position) VALUES (2, 'Work', '#f00', 1)`,
+		`INSERT INTO tasks (title, lane_id, position, project_id, workdir, created_at, updated_at) VALUES ('t', 1, 0, 2, '/x', 0, 0)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(q, err)
+		}
+	}
+	db.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	p, err := s.Project(ctx, 2)
+	if err != nil || p.Name != "Work" || p.Color != "#f00" || p.Workdir != "" {
+		t.Fatalf("project = %+v, %v", p, err)
+	}
+	if tasks, _ := s.Tasks(ctx, 2); len(tasks) != 1 || tasks[0].Workdir != "/x" {
+		t.Fatalf("tasks = %+v", tasks)
 	}
 }

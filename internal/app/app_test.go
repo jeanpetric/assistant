@@ -158,6 +158,20 @@ func TestStartSessionValidation(t *testing.T) {
 	if got, _ := a.StartSession(ctx, StartOpts{TaskID: task.ID, Prompt: "x"}); got.Workdir != "/default/dir" {
 		t.Fatalf("expected default workdir, got %q", got.Workdir)
 	}
+
+	// The project's workdir comes between the task's and the app default.
+	p, _ := a.Store.CreateProject(ctx, store.Project{Name: "P", Workdir: "/project/dir"})
+	inProject, _ := a.Store.CreateTask(ctx, store.Task{Title: "In P", ProjectID: p.ID})
+	if got, _ := a.StartSession(ctx, StartOpts{TaskID: inProject.ID, Prompt: "x"}); got.Workdir != "/project/dir" {
+		t.Fatalf("expected project workdir, got %q", got.Workdir)
+	}
+	own, _ := a.Store.CreateTask(ctx, store.Task{Title: "Own", ProjectID: p.ID, Workdir: "/task/dir"})
+	if got, _ := a.StartSession(ctx, StartOpts{TaskID: own.ID, Prompt: "x"}); got.Workdir != "/task/dir" {
+		t.Fatalf("expected task workdir, got %q", got.Workdir)
+	}
+	if got, _ := a.StartSession(ctx, StartOpts{TaskID: inProject.ID, Prompt: "x", Workdir: "/picked"}); got.Workdir != "/picked" {
+		t.Fatalf("expected picked workdir, got %q", got.Workdir)
+	}
 	a.Wait()
 }
 

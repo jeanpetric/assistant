@@ -12,6 +12,7 @@ type Project struct {
 	Name     string `json:"name"`
 	Color    string `json:"color"`
 	Position int    `json:"position"`
+	Workdir  string `json:"workdir"` // agents on its tasks run here unless the task or session says otherwise
 }
 
 var (
@@ -20,7 +21,7 @@ var (
 )
 
 func (s *Store) Projects(ctx context.Context) ([]Project, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, name, color, position FROM projects ORDER BY position, id`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, name, color, position, workdir FROM projects ORDER BY position, id`)
 	if err != nil {
 		return nil, err
 	}
@@ -28,7 +29,7 @@ func (s *Store) Projects(ctx context.Context) ([]Project, error) {
 	out := []Project{}
 	for rows.Next() {
 		var p Project
-		if err := rows.Scan(&p.ID, &p.Name, &p.Color, &p.Position); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.Color, &p.Position, &p.Workdir); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -38,18 +39,18 @@ func (s *Store) Projects(ctx context.Context) ([]Project, error) {
 
 func (s *Store) Project(ctx context.Context, id int64) (Project, error) {
 	var p Project
-	err := s.db.QueryRowContext(ctx, `SELECT id, name, color, position FROM projects WHERE id = ?`, id).
-		Scan(&p.ID, &p.Name, &p.Color, &p.Position)
+	err := s.db.QueryRowContext(ctx, `SELECT id, name, color, position, workdir FROM projects WHERE id = ?`, id).
+		Scan(&p.ID, &p.Name, &p.Color, &p.Position, &p.Workdir)
 	if errors.Is(err, sql.ErrNoRows) {
 		return p, ErrNotFound
 	}
 	return p, err
 }
 
-func (s *Store) CreateProject(ctx context.Context, name, color string) (Project, error) {
+func (s *Store) CreateProject(ctx context.Context, p Project) (Project, error) {
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO projects (name, color, position) VALUES (?, ?, (SELECT COALESCE(MAX(position), -1) + 1 FROM projects))`,
-		name, color)
+		`INSERT INTO projects (name, color, workdir, position) VALUES (?, ?, ?, (SELECT COALESCE(MAX(position), -1) + 1 FROM projects))`,
+		p.Name, p.Color, p.Workdir)
 	if err != nil {
 		return Project{}, err
 	}
@@ -57,8 +58,9 @@ func (s *Store) CreateProject(ctx context.Context, name, color string) (Project,
 	return s.Project(ctx, id)
 }
 
-func (s *Store) UpdateProject(ctx context.Context, id int64, name, color string) error {
-	return affected(s.db.ExecContext(ctx, `UPDATE projects SET name = ?, color = ? WHERE id = ?`, name, color, id))
+// UpdateProject saves name, colour and workdir; the position stays.
+func (s *Store) UpdateProject(ctx context.Context, p Project) error {
+	return affected(s.db.ExecContext(ctx, `UPDATE projects SET name = ?, color = ?, workdir = ? WHERE id = ?`, p.Name, p.Color, p.Workdir, p.ID))
 }
 
 // DeleteProject deletes a project without tasks, archived ones included,

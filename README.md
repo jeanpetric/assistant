@@ -13,7 +13,8 @@ One Go binary, one SQLite file, no JavaScript build step.
   the card) opens its full task page.
 - **Projects**: separate boards (e.g. private, one per area of work) sharing the same lanes. Pick
   one at the top; the board, list and archive show only its tasks. Create, rename and reorder
-  them in *Settings → Projects*; a task moves to another project from its page.
+  them in *Settings → Projects*, where each can also get a default working directory for its
+  tasks' agents; a task moves to another project from its page.
 - **Flexible tasks**: title, description, kind (task / coding / research / discussion / reminder),
   working directory, and **custom fields** (Productive task, pull request, Slack thread out of
   the box — add more in Settings).
@@ -23,7 +24,7 @@ One Go binary, one SQLite file, no JavaScript build step.
 - **Sessions overview**: every session across all tasks with status and latest message.
 - **Working directories**: list the directories agents may run in under *Settings → Working
   directories*; the task, new session, standalone session and rule forms pick from that list
-  (empty means the task's directory, else the app default `workdir`). Upgrading seeds the list
+  (empty means the task's directory, else its project's, else the app default `workdir`). Upgrading seeds the list
   with every directory already used.
 - **Transition rules**: when a task moves from lane A (or any lane) to lane B, start an agent
   session with a prompt template — e.g. run a skill like `/p-dev:code` when a task enters

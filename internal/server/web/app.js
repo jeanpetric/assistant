@@ -187,6 +187,12 @@ function projectName(id) {
   return p ? p.name : '?';
 }
 
+// Where a task's agents run when no directory is picked: the task's own, else its project's, else the app's.
+function taskWorkdir(t) {
+  const p = state.board && state.board.projects.find(p => p.id === t.project_id);
+  return t.workdir || (p && p.workdir) || state.meta.workdir;
+}
+
 function laneName(id) {
   const l = state.board && state.board.lanes.find(l => l.id === id);
   return l ? l.name : '?';
@@ -511,7 +517,7 @@ async function taskView(id, { every, leave, reload }) {
     h('label', {}, 'Description'),
     h('textarea', { rows: 6, onchange: e => save({ description: e.target.value }) }, t.description),
     h('label', {}, 'Working directory for agents'),
-    workdirSelect(t.workdir, `App default (${state.meta.workdir})`, { onchange: e => save({ workdir: e.target.value }) }),
+    workdirSelect(t.workdir, `Project default (${taskWorkdir({ ...t, workdir: '' })})`, { onchange: e => save({ workdir: e.target.value }) }),
     fields,
     h('div', { class: 'row', style: 'margin-top:14px' },
       h('span', { class: 'muted small grow' }, 'Created ' + fmtTime(t.created_at)),
@@ -567,7 +573,7 @@ function newSessionPanel(task, onStarted) {
   const mode = select(modeOptions(false), state.meta.default_mode);
   const [model, modelList] = modelInput('');
   const ctx = h('input', { type: 'checkbox', checked: true });
-  const workdir = workdirSelect('', `Default (${task.workdir || state.meta.workdir})`);
+  const workdir = workdirSelect('', `Default (${taskWorkdir(task)})`);
   const doneLane = doneLaneSelect(state.board.lanes, '');
   const start = async () => {
     if (!prompt.value.trim()) return;
@@ -884,20 +890,26 @@ async function renderSettings() {
     }));
 
   const projects = h('div', { class: 'panel' }, h('h2', {}, 'Projects'),
-    h('p', { class: 'muted small' }, 'Each project is a board of its own on the same lanes; pick one at the top. Rules and auto-archive apply to all of them.'),
+    h('p', { class: 'muted small' }, 'Each project is a board of its own on the same lanes; pick one at the top. Rules and auto-archive apply to all of them. ' +
+      "Agents on a project's tasks run in its directory unless the task or session picks another."),
     b.projects.map((p, i) => {
       const name = h('input', { value: p.name });
       const color = h('input', { type: 'color', value: p.color || '#888888', style: 'width:42px;padding:2px' });
-      const saveProject = async () => { await api('PATCH', `/api/projects/${p.id}`, { name: name.value, color: color.value }); loadBoard(); };
+      const workdir = workdirSelect(p.workdir, `App default (${state.meta.workdir})`, { title: 'Default working directory for agents' });
+      const saveProject = async () => {
+        await api('PATCH', `/api/projects/${p.id}`, { name: name.value, color: color.value, workdir: workdir.value });
+        loadBoard();
+      };
       name.addEventListener('change', saveProject);
       color.addEventListener('change', saveProject);
+      workdir.addEventListener('change', saveProject);
       const move = async d => {
         const ids = b.projects.map(x => x.id);
         [ids[i], ids[i + d]] = [ids[i + d], ids[i]];
         await api('POST', '/api/projects/reorder', { ids });
         rerender();
       };
-      return h('div', { class: 'row', style: 'margin-bottom:6px' }, color, h('div', { class: 'grow' }, name),
+      return h('div', { class: 'row', style: 'margin-bottom:6px' }, color, h('div', { class: 'grow' }, name), h('div', { class: 'grow' }, workdir),
         h('button', { class: 'ghost', disabled: i === 0, onclick: () => move(-1) }, '↑'),
         h('button', { class: 'ghost', disabled: i === b.projects.length - 1, onclick: () => move(1) }, '↓'),
         h('button', {
@@ -1005,7 +1017,7 @@ function ruleDialog(rule, lanes, done) {
   const to = select(lanes.map(l => [l.id, l.name]), rule.to_lane_id);
   const prompt = h('textarea', { rows: 6 }, rule.prompt);
   const mode = select(modeOptions(true), rule.mode);
-  const workdir = workdirSelect(rule.workdir, 'Task directory, else app default');
+  const workdir = workdirSelect(rule.workdir, "Task directory, else the project's, else app default");
   const doneLane = doneLaneSelect(lanes, rule.done_lane_id);
   dlg.replaceChildren(h('h2', {}, rule.id ? 'Edit rule' : 'New rule'),
     h('label', {}, 'Name'), name,

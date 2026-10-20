@@ -93,6 +93,13 @@ func (a *App) StartSession(ctx context.Context, o StartOpts) (store.Session, err
 	if o.Workdir == "" {
 		o.Workdir = task.Workdir
 	}
+	if o.Workdir == "" && task.ProjectID != 0 {
+		p, err := a.Store.Project(ctx, task.ProjectID)
+		if err != nil {
+			return store.Session{}, err
+		}
+		o.Workdir = p.Workdir
+	}
 	if o.Workdir == "" {
 		o.Workdir = a.DefaultWorkdir
 	}

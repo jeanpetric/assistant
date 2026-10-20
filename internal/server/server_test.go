@@ -324,7 +324,9 @@ func TestStaticUI(t *testing.T) {
 		"{ keys: 'g b', label: 'Go to Board'", "{ keys: '?', label: 'Show these shortcuts', run: shortcutsDialog }",
 		// Shortcut hints are drawn greyed next to the controls they trigger.
 		"function hint(keys)", "drawHeaderHints();", "'Cancel', hint('Esc')", "'Create', hint('↵')", "filter, hint('/')",
-		"addEventListener('click', shortcutsDialog)"} {
+		"addEventListener('click', shortcutsDialog)",
+		// A project's directory is picked in Settings and shown as the default for its tasks.
+		"function taskWorkdir(t)", "workdir.addEventListener('change', saveProject)", "`Default (${taskWorkdir(task)})`"} {
 		if !bytes.Contains(js, []byte(want)) {
 			t.Fatalf("app.js lacks %q", want)
 		}
@@ -563,6 +565,16 @@ func TestProjects(t *testing.T) {
 	c.do("POST", "/api/projects", map[string]any{"name": ""}, 400, nil)
 	c.do("PATCH", "/api/projects/"+itoa(private.ID), map[string]any{"name": "Home", "color": "#0a0"}, 204, nil)
 	c.do("PATCH", "/api/projects/999", map[string]any{"name": "x"}, 404, nil)
+
+	// The workdir is resolved like any other and kept when a save leaves it out.
+	dir := t.TempDir()
+	c.do("PATCH", "/api/projects/"+itoa(private.ID), map[string]any{"name": "Home", "workdir": dir + "/"}, 204, nil)
+	c.do("PATCH", "/api/projects/"+itoa(private.ID), map[string]any{"name": "Home", "color": "#0a0"}, 204, nil)
+	c.do("PATCH", "/api/projects/"+itoa(private.ID), map[string]any{"name": "Home", "workdir": "relative"}, 400, nil)
+	c.do("POST", "/api/projects", map[string]any{"name": "Bad", "workdir": dir + "/missing"}, 400, nil)
+	if p, _ := c.app.Store.Project(context.Background(), private.ID); p.Workdir != dir || p.Color != "#0a0" {
+		t.Fatalf("project = %+v", p)
+	}
 
 	var a, x store.Task
 	c.do("POST", "/api/tasks", map[string]any{"title": "a"}, 201, &a)
