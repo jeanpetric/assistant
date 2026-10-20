@@ -71,6 +71,7 @@ type StartOpts struct {
 	// DoneLaneID moves the task to this lane when a turn finishes successfully
 	// (see moveWhenDone). Nil leaves the task where it is.
 	DoneLaneID *int64
+	ParentID   *int64 // the session this one continues (see Handoff)
 }
 
 // StartSession creates a session, for the task if one is given, and runs its
@@ -106,12 +107,12 @@ func (a *App) StartSession(ctx context.Context, o StartOpts) (store.Session, err
 	}
 	sess, err := a.Store.CreateSession(ctx, store.Session{
 		TaskID: o.TaskID, Title: o.Title, Mode: o.Mode, Model: o.Model, Workdir: o.Workdir, Trigger: o.Trigger,
-		DoneLaneID: o.DoneLaneID,
+		DoneLaneID: o.DoneLaneID, ParentID: o.ParentID,
 	})
 	if err != nil {
 		return sess, err
 	}
-	return sess, a.launch(sess, o.Prompt, "")
+	return sess, a.launch(sess, o.Prompt, "", nil)
 }
 
 // SendMessage continues an idle session with a follow-up prompt.
@@ -129,7 +130,7 @@ func (a *App) SendMessage(ctx context.Context, sessionID int64, text string) err
 	if sess.ClaudeSessionID == "" {
 		return ErrNoResume
 	}
-	return a.launch(sess, text, sess.ClaudeSessionID)
+	return a.launch(sess, text, sess.ClaudeSessionID, nil)
 }
 
 // ResumePrompt is sent to an agent whose turn was cut short.
@@ -144,7 +145,7 @@ func (a *App) Resume(ctx context.Context, sessionID int64) error {
 		return err
 	}
 	if sess.ClaudeSessionID != "" {
-		return a.launch(sess, ResumePrompt, sess.ClaudeSessionID)
+		return a.launch(sess, ResumePrompt, sess.ClaudeSessionID, nil)
 	}
 	msgs, err := a.Store.Messages(ctx, sessionID, 0)
 	if err != nil {
@@ -152,10 +153,99 @@ func (a *App) Resume(ctx context.Context, sessionID int64) error {
 	}
 	for _, m := range msgs {
 		if m.Role == "user" {
-			return a.launch(sess, m.Content, "")
+			return a.launch(sess, m.Content, "", nil)
 		}
 	}
 	return ErrNoResume
+}
+
+// HandoffPrompt asks a session's agent to brief the agent that takes over from it.
+const HandoffPrompt = `Your context is getting full, so this work continues in a new agent session that starts with an empty context. ` +
+	`Write the handoff brief for that agent: it is the only thing it will know about this session. Make it self-contained and include:
+- the goal and what "done" looks like;
+- what has been done so far and the current state (branch, files changed, commands that matter);
+- decisions made and why, and approaches that were tried and failed;
+- open questions, known problems and anything the user asked for that is still pending;
+- the exact next steps.
+Reply with the brief only; do not change anything now.`
+
+// HandoffIntro opens the first prompt of the session that takes over.
+const HandoffIntro = "You are taking over from a previous agent session whose context filled up. Its handoff brief follows."
+
+// Handoff continues an idle session in a fresh one: the session's agent writes
+// a brief of its work, and a new session (same task, settings and done lane)
+// starts from that brief. note, if given, is added as the user's instruction
+// for the new session. The brief is written in the background; the new
+// session appears once it is done, or a notification tells why not.
+func (a *App) Handoff(ctx context.Context, sessionID int64, note string) error {
+	sess, err := a.Store.Session(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if sess.ClaudeSessionID == "" {
+		return ErrNoResume
+	}
+	return a.launch(sess, HandoffPrompt, sess.ClaudeSessionID, func(bg context.Context, status string) {
+		var taskID *int64
+		if sess.TaskID != 0 {
+			taskID = &sess.TaskID
+		}
+		var brief string
+		err := fmt.Errorf("the brief turn ended %s", status)
+		if status == store.StatusIdle {
+			brief, err = a.lastReply(bg, sess.ID)
+		}
+		if err == nil {
+			_, err = a.StartSession(bg, StartOpts{
+				TaskID: sess.TaskID, Prompt: a.handoffPrompt(bg, sess, brief, note), Title: sess.Title,
+				Mode: sess.Mode, Model: sess.Model, Workdir: sess.Workdir, Trigger: "handoff",
+				DoneLaneID: sess.DoneLaneID, ParentID: &sess.ID,
+			})
+		}
+		if err != nil {
+			a.Store.Notify(bg, taskID, fmt.Sprintf("Could not hand off session %q: %v", sess.Title, err))
+		}
+	})
+}
+
+// handoffPrompt is the new session's first prompt: the task as it is now,
+// the brief, then the user's note or a nudge to go on.
+func (a *App) handoffPrompt(ctx context.Context, sess store.Session, brief, note string) string {
+	parts := []string{HandoffIntro}
+	if sess.TaskID != 0 {
+		if t, err := a.Store.Task(ctx, sess.TaskID); err == nil {
+			parts = append(parts, TaskContext(t))
+		}
+	}
+	parts = append(parts, strings.TrimSpace(brief))
+	if note = strings.TrimSpace(note); note != "" {
+		parts = append(parts, note)
+	} else {
+		parts = append(parts, "Continue with the next steps.")
+	}
+	return strings.Join(parts, "\n\n---\n\n")
+}
+
+// lastReply is the agent's final answer in the session's latest turn.
+func (a *App) lastReply(ctx context.Context, sessionID int64) (string, error) {
+	msgs, err := a.Store.Messages(ctx, sessionID, 0)
+	if err != nil {
+		return "", err
+	}
+	text := ""
+	for i := len(msgs) - 1; i >= 0 && msgs[i].Role != "user"; i-- {
+		m := msgs[i]
+		if m.Kind == "result" && strings.TrimSpace(m.Content) != "" {
+			return m.Content, nil
+		}
+		if text == "" && m.Role == "assistant" && m.Kind == "text" && strings.TrimSpace(m.Content) != "" {
+			text = m.Content
+		}
+	}
+	if text == "" {
+		return "", errors.New("the agent wrote no brief")
+	}
+	return text, nil
 }
 
 // Cancel stops a running turn. It is a no-op for sessions that are not running.
@@ -167,7 +257,9 @@ func (a *App) Cancel(sessionID int64) {
 	}
 }
 
-func (a *App) launch(sess store.Session, prompt, resumeID string) error {
+// launch runs one turn in the background. done, if set, runs after the turn
+// with its final status instead of the usual move to the done lane.
+func (a *App) launch(sess store.Session, prompt, resumeID string, done func(ctx context.Context, status string)) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	a.mu.Lock()
 	if _, busy := a.running[sess.ID]; busy {
@@ -241,7 +333,10 @@ func (a *App) launch(sess store.Session, prompt, resumeID string) error {
 			status = store.StatusError
 		}
 		a.Store.SetSessionStatus(bg, sess.ID, status, msg)
-		if status == store.StatusIdle {
+		switch {
+		case done != nil:
+			done(bg, status)
+		case status == store.StatusIdle:
 			a.moveWhenDone(bg, sess.ID, startLane)
 		}
 	}()

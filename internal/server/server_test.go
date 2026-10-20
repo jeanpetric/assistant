@@ -374,6 +374,21 @@ func TestStandaloneSession(t *testing.T) {
 	}
 	c.do("POST", "/api/sessions/999/resume", nil, 404, nil)
 
+	c.do("POST", "/api/sessions/"+itoa(sess.ID)+"/handoff", map[string]any{"note": "next"}, 202, nil)
+	c.app.Wait()
+	c.do("GET", "/api/sessions/"+itoa(sess.ID), nil, 200, &got)
+	if got.Session.ChildID == nil {
+		t.Fatalf("no new session after handoff: %+v", got.Session)
+	}
+	var child struct {
+		Session store.Session `json:"session"`
+	}
+	c.do("GET", "/api/sessions/"+itoa(*got.Session.ChildID), nil, 200, &child)
+	if child.Session.ParentID == nil || *child.Session.ParentID != sess.ID || child.Session.Workdir != dir || child.Session.Model != "sonnet" {
+		t.Fatalf("child = %+v", child.Session)
+	}
+	c.do("POST", "/api/sessions/999/handoff", map[string]any{}, 404, nil)
+
 	c.do("POST", "/api/sessions", map[string]any{"prompt": " "}, 400, nil)
 	c.do("POST", "/api/sessions", map[string]any{"prompt": "x", "workdir": dir + "/missing"}, 400, nil)
 	c.do("POST", "/api/sessions", map[string]any{"prompt": "x", "workdir": "relative/dir"}, 400, nil)

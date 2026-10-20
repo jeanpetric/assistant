@@ -185,6 +185,11 @@ INSERT INTO projects (id, name, position) VALUES (1, 'Assistant', 0);
 ALTER TABLE tasks ADD COLUMN project_id INTEGER NOT NULL DEFAULT 1 REFERENCES projects(id);
 CREATE INDEX tasks_project ON tasks(project_id, lane_id, position);
 `,
+	// A session handed off to a fresh one points back at it.
+	`
+ALTER TABLE sessions ADD COLUMN parent_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL;
+CREATE INDEX sessions_parent ON sessions(parent_id);
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

@@ -825,6 +825,28 @@ func (s *Server) resumeSession(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(202)
 }
 
+// handoffSession continues the session in a fresh one, started from a brief
+// the session's agent writes; note is the user's instruction for the new one.
+func (s *Server) handoffSession(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	var in struct {
+		Note string `json:"note"`
+	}
+	if err := decode(r, &in); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.app.Handoff(r.Context(), id, in.Note); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(202)
+}
+
 // ---- rules ----
 
 func (s *Server) listRules(w http.ResponseWriter, r *http.Request) {

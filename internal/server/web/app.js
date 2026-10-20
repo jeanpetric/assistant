@@ -670,6 +670,8 @@ function sessionComponent(session, messages) {
       h('span', { class: 'badge' }, s.mode),
       s.model ? h('span', { class: 'badge' }, s.model) : null,
       s.trigger !== 'manual' ? h('span', { class: 'badge' }, s.trigger) : null,
+      s.parent_id ? h('a', { class: 'small', href: sessionHref({ task_id: s.task_id, id: s.parent_id }) }, `← from #${s.parent_id}`) : null,
+      s.child_id ? h('a', { class: 'small', href: sessionHref({ task_id: s.task_id, id: s.child_id }) }, `continued in #${s.child_id} →`) : null,
       s.cost_usd ? h('span', { class: 'muted small' }, '$' + s.cost_usd.toFixed(2)) : null,
       h('span', { class: 'muted small' }, fmtTime(s.created_at)),
       resumeCmd ? h('button', {
@@ -678,6 +680,10 @@ function sessionComponent(session, messages) {
       }, 'Copy resume cmd') : null,
       running ? h('button', { class: 'danger small', onclick: () => api('POST', `/api/sessions/${s.id}/cancel`) }, 'Stop') : null,
       resumable ? h('button', { class: 'small', title: 'Continue this session where it stopped', onclick: doResume }, 'Resume') : null,
+      !running && s.claude_session_id ? h('button', {
+        class: 'ghost small', title: 'Have the agent write a brief and continue in a new session with a fresh context',
+        onclick: () => handoffDialog(s, () => { c.session.status = 'running'; drawHead(); }),
+      }, 'Hand off') : null,
       h('button', { class: 'ghost small', onclick: () => el.classList.toggle('collapsed') }, '▾'),
     ].filter(Boolean));
     send.disabled = running || !s.claude_session_id;
@@ -703,6 +709,26 @@ function sessionComponent(session, messages) {
   };
   c.update(session, messages);
   return c;
+}
+
+// Hand a session off to a fresh one: its agent writes a brief, and a new
+// session starts from it. The new one shows up once the brief is written.
+function handoffDialog(session, onStarted) {
+  const dlg = document.getElementById('dialog');
+  const note = h('textarea', { rows: 4, placeholder: 'Optional: what the new session should do next' });
+  const start = async () => {
+    await api('POST', `/api/sessions/${session.id}/handoff`, { note: note.value });
+    dlg.close();
+    toast('Writing the handoff brief…');
+    onStarted();
+  };
+  note.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) start(); });
+  dlg.replaceChildren(h('h2', {}, 'Continue in a new session'),
+    h('p', { class: 'muted small' }, 'The agent writes a brief of its work in this session; a new session with the same settings starts from that brief and a fresh context.'),
+    h('label', {}, 'Next'), note,
+    h('div', { class: 'dialog-actions' }, h('button', { class: 'ghost', onclick: () => dlg.close() }, 'Cancel'), h('button', { onclick: start }, 'Hand off ⌘↵')));
+  dlg.showModal();
+  note.focus();
 }
 
 function schedulesPanel(taskId, schedules) {

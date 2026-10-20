@@ -570,3 +570,102 @@ func TestAutoArchive(t *testing.T) {
 }
 
 func ptr(id int64) *int64 { return &id }
+
+func TestHandoff(t *testing.T) {
+	a, r := newApp(t)
+	ctx := context.Background()
+	lanes := lanesByName(t, a)
+	wip, review := lanes["In progress"], lanes["Review"]
+	task, _ := a.Store.CreateTask(ctx, store.Task{Title: "Big refactor", LaneID: wip, Workdir: "/repo"})
+
+	old, _ := a.StartSession(ctx, StartOpts{TaskID: task.ID, Prompt: "start", Title: "Refactor", Mode: "plan", Model: "sonnet"})
+	a.Wait()
+	a.Store.SetSessionDoneLane(ctx, old.ID, &review)
+
+	if err := a.Handoff(ctx, old.ID, "then open a PR"); err != nil {
+		t.Fatal(err)
+	}
+	a.Wait()
+
+	reqs := r.requests()
+	if len(reqs) != 3 || reqs[1].Prompt != HandoffPrompt || reqs[1].ResumeID != "claude-1" {
+		t.Fatalf("the brief should be asked of the old session: %+v", reqs)
+	}
+	next := reqs[2]
+	if next.ResumeID != "" || next.Workdir != "/repo" || next.Mode != "plan" || next.Model != "sonnet" {
+		t.Fatalf("the new session should start fresh with the same settings: %+v", next)
+	}
+	for _, want := range []string{HandoffIntro, "Task #", "Big refactor", "\n\nok\n\n", "then open a PR"} {
+		if !strings.Contains(next.Prompt, want) {
+			t.Fatalf("new prompt lacks %q:\n%s", want, next.Prompt)
+		}
+	}
+
+	got, _ := a.Store.Session(ctx, old.ID)
+	if got.ChildID == nil || got.Status != store.StatusIdle {
+		t.Fatalf("old session = %+v", got)
+	}
+	child, _ := a.Store.Session(ctx, *got.ChildID)
+	if child.ParentID == nil || *child.ParentID != old.ID || child.TaskID != task.ID || child.Title != "Refactor" ||
+		child.Trigger != "handoff" || child.DoneLaneID == nil || *child.DoneLaneID != review {
+		t.Fatalf("new session = %+v", child)
+	}
+	// Only the new session's turn finishes the work; writing the brief does not.
+	if tk, _ := a.Store.Task(ctx, task.ID); tk.LaneID != review {
+		t.Fatalf("task in lane %d, want review %d", tk.LaneID, review)
+	}
+	if n, _ := a.Store.Notifications(ctx, true); len(n) != 1 {
+		t.Fatalf("notifications = %+v", n)
+	}
+}
+
+func TestHandoffWithoutNoteAndFailures(t *testing.T) {
+	a, r := newApp(t)
+	ctx := context.Background()
+
+	if err := a.Handoff(ctx, 999, ""); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("missing session: %v", err)
+	}
+	r.err = errors.New("no claude")
+	broken, _ := a.StartSession(ctx, StartOpts{Prompt: "p"})
+	a.Wait()
+	a.Store.SetClaudeSessionID(ctx, broken.ID, "")
+	if err := a.Handoff(ctx, broken.ID, ""); !errors.Is(err, ErrNoResume) {
+		t.Fatalf("no agent session: %v", err)
+	}
+
+	// The brief turn fails: no new session, a notification instead.
+	sess, _ := a.StartSession(ctx, StartOpts{Prompt: "p"})
+	a.Wait()
+	a.Handoff(ctx, sess.ID, "")
+	a.Wait()
+	if got, _ := a.Store.Session(ctx, sess.ID); got.ChildID != nil {
+		t.Fatalf("failed brief must not start a session: %+v", got)
+	}
+	n, _ := a.Store.Notifications(ctx, true)
+	if len(n) != 1 || !strings.Contains(n[0].Message, "Could not hand off") {
+		t.Fatalf("notifications = %+v", n)
+	}
+
+	r.err = nil
+	r.block = make(chan struct{})
+	busy, _ := a.StartSession(ctx, StartOpts{Prompt: "p"})
+	for len(r.requests()) < 4 {
+		time.Sleep(time.Millisecond)
+	}
+	if err := a.Handoff(ctx, busy.ID, ""); !errors.Is(err, ErrBusy) {
+		t.Fatalf("running session: %v", err)
+	}
+	close(r.block)
+	a.Wait()
+	r.block = nil
+
+	if err := a.Handoff(ctx, busy.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	a.Wait()
+	reqs := r.requests()
+	if last := reqs[len(reqs)-1].Prompt; !strings.HasSuffix(last, "Continue with the next steps.") {
+		t.Fatalf("without a note the new session goes on: %q", last)
+	}
+}

@@ -442,3 +442,47 @@ func TestEarlierBuildDBReadsSessions(t *testing.T) {
 		t.Fatalf("sessions = %+v, %v", xs, err)
 	}
 }
+
+func TestHandoffMigrationKeepsSessions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const n = 8 // migrations before parent_id
+	for _, m := range migrations[:n] {
+		if _, err := db.Exec(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, q := range []string{
+		`PRAGMA user_version = 8`,
+		`INSERT INTO tasks (id, title, lane_id, position, created_at, updated_at) VALUES (1, 'old', 1, 0, 0, 0)`,
+		`INSERT INTO sessions (id, task_id, title, status, mode, claude_session_id, created_at, updated_at) VALUES (7, 1, 'work', 'idle', 'plan', 'c-7', 0, 0)`,
+		`INSERT INTO messages (session_id, role, kind, content, created_at) VALUES (7, 'user', 'text', 'hi', 0)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(q, err)
+		}
+	}
+	db.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	x, err := s.Session(ctx, 7)
+	if err != nil || x.Title != "work" || x.ClaudeSessionID != "c-7" || x.LastMessage != "hi" || x.ParentID != nil || x.ChildID != nil {
+		t.Fatalf("session = %+v, %v", x, err)
+	}
+
+	child, err := s.CreateSession(ctx, Session{TaskID: 1, Title: "work", Mode: "plan", ParentID: &x.ID})
+	if err != nil || child.ParentID == nil || *child.ParentID != 7 {
+		t.Fatalf("child = %+v, %v", child, err)
+	}
+	if x, _ = s.Session(ctx, 7); x.ChildID == nil || *x.ChildID != child.ID {
+		t.Fatalf("parent should point at its child: %+v", x)
+	}
+}
