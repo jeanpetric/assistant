@@ -19,6 +19,11 @@ function h(tag, attrs, ...children) {
   return el;
 }
 
+// A greyed key hint next to a control, e.g. hint('g b') or hint('⌘↵'); keys are space-separated.
+function hint(keys) {
+  return h('span', { class: 'kbd-hint' }, keys.split(' ').map(k => h('kbd', {}, k)));
+}
+
 async function api(method, path, body) {
   const opts = { method, headers: {} };
   if (body !== undefined) {
@@ -364,7 +369,7 @@ async function renderList() {
   }
   draw();
   view.replaceChildren(h('div', { class: 'panel' },
-    h('div', { class: 'toolbar' }, filter, laneSel),
+    h('div', { class: 'toolbar' }, filter, hint('/'), laneSel),
     h('table', {}, h('thead', {}, h('tr', {}, ['Task', 'Lane', 'Kind', 'Due', 'Links', 'Updated'].map(x => h('th', {}, x)))), tbody)));
   filter.focus();
 }
@@ -398,7 +403,7 @@ async function renderArchive() {
   }
   draw();
   view.replaceChildren(h('div', { class: 'panel' },
-    h('div', { class: 'toolbar' }, h('h2', { class: 'grow', style: 'flex:1' }, 'Archive'), filter),
+    h('div', { class: 'toolbar' }, h('h2', { class: 'grow', style: 'flex:1' }, 'Archive'), filter, hint('/')),
     tasks.length
       ? h('table', {}, h('thead', {}, h('tr', {}, ['Task', 'Lane', 'Kind', 'Links', 'Archived', ''].map(x => h('th', {}, x)))), tbody)
       : h('p', { class: 'muted' }, 'Nothing archived yet.')));
@@ -584,7 +589,7 @@ function newSessionPanel(task, onStarted) {
       h('div', { class: 'grow', style: 'min-width:200px' }, workdir),
       h('div', { class: 'grow', style: 'min-width:200px' }, doneLane),
       h('label', { class: 'row', style: 'margin:0' }, ctx, 'Include task context'),
-      h('button', { onclick: start }, 'Start ⌘↵')));
+      h('button', { onclick: start }, 'Start', hint('⌘↵'))));
 }
 
 function messageEl(m) {
@@ -632,7 +637,7 @@ function sessionComponent(session, messages) {
   const head = h('div', { class: 'session-head' });
   const limits = h('div', { class: 'session-limits' });
   const input = h('textarea', { rows: 2, placeholder: 'Reply to continue this session… (⌘↵ to send)' });
-  const send = h('button', {}, 'Send');
+  const send = h('button', {}, 'Send', hint('⌘↵'));
   // Task sessions can change where the task goes when the agent finishes, even mid-run.
   const doneLane = session.task_id && state.board ? doneLaneSelect(state.board.lanes, session.done_lane_id, {
     class: 'small', style: 'width:auto',
@@ -726,7 +731,7 @@ function handoffDialog(session, onStarted) {
   dlg.replaceChildren(h('h2', {}, 'Continue in a new session'),
     h('p', { class: 'muted small' }, 'The agent writes a brief of its work in this session; a new session with the same settings starts from that brief and a fresh context.'),
     h('label', {}, 'Next'), note,
-    h('div', { class: 'dialog-actions' }, h('button', { class: 'ghost', onclick: () => dlg.close() }, 'Cancel'), h('button', { onclick: start }, 'Hand off ⌘↵')));
+    h('div', { class: 'dialog-actions' }, cancelButton(dlg), h('button', { onclick: start }, 'Hand off', hint('⌘↵'))));
   dlg.showModal();
   note.focus();
 }
@@ -841,7 +846,7 @@ function sessionDialog() {
     h('div', { class: 'row' },
       h('div', { class: 'grow' }, h('label', {}, 'Model'), model, modelList),
       h('div', { class: 'grow' }, h('label', {}, 'Mode'), mode)),
-    h('div', { class: 'dialog-actions' }, h('button', { class: 'ghost', onclick: () => dlg.close() }, 'Cancel'), h('button', { onclick: start }, 'Start ⌘↵')));
+    h('div', { class: 'dialog-actions' }, cancelButton(dlg), h('button', { onclick: start }, 'Start', hint('⌘↵'))));
   dlg.showModal();
   prompt.focus();
 }
@@ -1011,7 +1016,7 @@ function ruleDialog(rule, lanes, done) {
     h('label', {}, 'Working directory'), workdir,
     h('label', {}, 'After the agent finishes (skipped if the task was moved meanwhile)'), doneLane,
     h('div', { class: 'dialog-actions' },
-      h('button', { class: 'ghost', onclick: () => dlg.close() }, 'Cancel'),
+      cancelButton(dlg),
       h('button', {
         onclick: async () => {
           const body = {
@@ -1061,7 +1066,7 @@ async function reminderDialog() {
     h('div', { class: 'presets' }, reminderPresets().map(([label, d]) => h('button', {
       class: 'ghost small', onclick: () => { when.value = toLocalInput(d); title.focus(); },
     }, label))),
-    h('div', { class: 'dialog-actions' }, h('button', { class: 'ghost', onclick: () => dlg.close() }, 'Cancel'), h('button', { onclick: create }, 'Set reminder')));
+    h('div', { class: 'dialog-actions' }, cancelButton(dlg), h('button', { onclick: create }, 'Set reminder', hint('↵'))));
   dlg.showModal();
   title.focus();
 }
@@ -1092,7 +1097,7 @@ async function newTaskDialog() {
     h('label', {}, 'Project'), project,
     h('div', { class: 'row' }, h('div', { class: 'grow' }, h('label', {}, 'Kind'), kind), h('div', { class: 'grow' }, h('label', {}, 'Lane'), lane)),
     h('label', {}, 'Due (optional) — you get a notification at this time'), due,
-    h('div', { class: 'dialog-actions' }, h('button', { class: 'ghost', onclick: () => dlg.close() }, 'Cancel'), h('button', { onclick: create }, 'Create')));
+    h('div', { class: 'dialog-actions' }, cancelButton(dlg), h('button', { onclick: create }, 'Create', hint('↵'))));
   dlg.showModal();
   title.focus();
 }
@@ -1153,6 +1158,7 @@ const shortcuts = [
   { keys: 'r', label: 'Quick reminder', run: reminderDialog },
   { keys: 's', label: 'Agent session without a task', run: sessionDialog },
   { keys: '/', label: 'Filter the list or archive', run: focusFilter },
+  { keys: 'i', label: 'Notifications', run: toggleNotifications },
   { keys: '[', label: 'Previous project', run: () => stepProject(-1) },
   { keys: ']', label: 'Next project', run: () => stepProject(1) },
   { keys: 'g b', label: 'Go to Board', run: () => { location.hash = '#/board'; } },
@@ -1198,9 +1204,23 @@ function shortcutsDialog() {
   dlg.replaceChildren(h('h2', {}, 'Keyboard shortcuts'),
     h('table', { class: 'shortcuts' }, shortcuts.map(s => h('tr', {},
       h('td', {}, s.keys.split(' ').map(k => h('kbd', {}, k))), h('td', {}, s.label)))),
-    h('p', { class: 'muted small' }, '⌘/Ctrl+Enter sends a prompt or reply. Esc closes a dialog or the notifications.'),
-    h('div', { class: 'dialog-actions' }, h('button', { onclick: () => dlg.close() }, 'Close')));
+    h('p', { class: 'muted small' }, '⌘/Ctrl+Enter sends a prompt or reply. Esc closes a dialog or the notifications. ',
+      'Greyed keys next to buttons and links show their shortcut.'),
+    h('div', { class: 'dialog-actions' }, h('button', { onclick: () => dlg.close() }, 'Close', hint('Esc'))));
   dlg.showModal();
+}
+
+function cancelButton(dlg) {
+  return h('button', { class: 'ghost', onclick: () => dlg.close() }, 'Cancel', hint('Esc'));
+}
+
+// Header controls carry data-shortcut; their hint is drawn from it so markup and table stay in step.
+function drawHeaderHints() {
+  document.querySelectorAll('[data-shortcut]').forEach(el => {
+    const keys = hint(el.dataset.shortcut);
+    if (el.classList.contains('kbd-hint')) el.replaceChildren(...keys.childNodes);
+    else el.append(keys);
+  });
 }
 
 // ---------- boot ----------
@@ -1210,7 +1230,9 @@ function shortcutsDialog() {
   document.getElementById('new-task-btn').addEventListener('click', newTaskDialog);
   document.getElementById('reminder-btn').addEventListener('click', reminderDialog);
   document.getElementById('new-session-btn').addEventListener('click', sessionDialog);
+  document.getElementById('shortcuts-btn').addEventListener('click', shortcutsDialog);
   document.addEventListener('keydown', onShortcut);
+  drawHeaderHints();
   document.getElementById('notif-btn').addEventListener('click', toggleNotifications);
   document.getElementById('project-select').addEventListener('change', e => switchProject(Number(e.target.value)));
   window.addEventListener('hashchange', route);

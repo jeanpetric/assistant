@@ -9,19 +9,21 @@
 <body>
   <header class="topbar">
     <a class="brand" href="#/board">Assistant</a>
-    <select id="project-select" class="project-select" title="Project — the board, list and archive show its tasks"></select>
+    <select id="project-select" class="project-select" title="Project — the board, list and archive show its tasks ([ / ] to switch)"></select>
+    <span class="kbd-hint" data-shortcut="[ ]"></span>
     <nav>
-      <a href="#/board" data-nav="board">Board</a>
-      <a href="#/list" data-nav="list">List</a>
-      <a href="#/sessions" data-nav="sessions">Sessions <span id="running-count" class="pill hidden"></span></a>
-      <a href="#/archive" data-nav="archive">Archive</a>
-      <a href="#/settings" data-nav="settings">Settings</a>
+      <a href="#/board" data-nav="board" data-shortcut="g b">Board</a>
+      <a href="#/list" data-nav="list" data-shortcut="g l">List</a>
+      <a href="#/sessions" data-nav="sessions" data-shortcut="g s">Sessions <span id="running-count" class="pill hidden"></span></a>
+      <a href="#/archive" data-nav="archive" data-shortcut="g a">Archive</a>
+      <a href="#/settings" data-nav="settings" data-shortcut="g ,">Settings</a>
     </nav>
     <div class="spacer"></div>
-    <button id="notif-btn" class="ghost" title="Notifications">🔔 <span id="notif-count" class="pill hidden"></span></button>
-    <button id="reminder-btn" class="ghost" title="Quick reminder (r)">⏰ Reminder</button>
-    <button id="new-session-btn" class="ghost" title="Agent session without a task (s)">▶ Session</button>
-    <button id="new-task-btn" title="New task (n) — press ? for all shortcuts">+ New task</button>
+    <button id="notif-btn" class="ghost" title="Notifications (i)" data-shortcut="i">🔔 <span id="notif-count" class="pill hidden"></span></button>
+    <button id="reminder-btn" class="ghost" title="Quick reminder (r)" data-shortcut="r">⏰ Reminder</button>
+    <button id="new-session-btn" class="ghost" title="Agent session without a task (s)" data-shortcut="s">▶ Session</button>
+    <button id="new-task-btn" title="New task (n)" data-shortcut="n">+ New task</button>
+    <button id="shortcuts-btn" class="ghost" title="Keyboard shortcuts (?)"><kbd>?</kbd></button>
   </header>
   <div id="notif-panel" class="notif-panel hidden"></div>
   <main id="view"></main>

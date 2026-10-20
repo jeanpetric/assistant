@@ -246,3 +246,14 @@ kbd {
   font: 12px ui-monospace, monospace; border: 1px solid var(--border); border-bottom-width: 2px;
   border-radius: 4px; background: var(--bg);
 }
+
+/* Greyed shortcut hints next to buttons, links and fields; they take the colour of their host. */
+.kbd-hint { display: inline-flex; gap: 2px; margin-left: 6px; vertical-align: 1px; opacity: .55; pointer-events: none; }
+.kbd-hint kbd, #shortcuts-btn kbd {
+  min-width: 0; margin: 0; padding: 0 4px; font-size: 10px; line-height: 15px;
+  color: inherit; background: transparent; border-color: currentColor; border-bottom-width: 1px;
+}
+.toolbar .kbd-hint { margin-left: -2px; color: var(--muted); }
+.topbar nav a.active .kbd-hint { opacity: .4; }
+@media (max-width: 1200px) { .topbar .kbd-hint { display: none; } }
+.topbar > .kbd-hint { margin-left: -12px; color: var(--muted); }

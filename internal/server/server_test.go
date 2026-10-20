@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -320,9 +321,28 @@ func TestStaticUI(t *testing.T) {
 		"appendMessage(body, m)", "h('details', { class: 'tools' }", "onclick: e => { if (e.metaKey || e.ctrlKey) location.hash = `#/task/${t.id}`; else openTaskDialog(t.id); }",
 		// Keyboard shortcuts come from one table, which the "?" dialog lists.
 		"document.addEventListener('keydown', onShortcut)", "{ keys: 'n', label: 'New task', run: newTaskDialog }",
-		"{ keys: 'g b', label: 'Go to Board'", "{ keys: '?', label: 'Show these shortcuts', run: shortcutsDialog }"} {
+		"{ keys: 'g b', label: 'Go to Board'", "{ keys: '?', label: 'Show these shortcuts', run: shortcutsDialog }",
+		// Shortcut hints are drawn greyed next to the controls they trigger.
+		"function hint(keys)", "drawHeaderHints();", "'Cancel', hint('Esc')", "'Create', hint('↵')", "filter, hint('/')",
+		"addEventListener('click', shortcutsDialog)"} {
 		if !bytes.Contains(js, []byte(want)) {
 			t.Fatalf("app.js lacks %q", want)
+		}
+	}
+	// Every header hint names a real shortcut (or, like "[ ]", each key of one), so a hint never lies.
+	hints := regexp.MustCompile(`data-shortcut="([^"]+)"`).FindAllSubmatch(body, -1)
+	if len(hints) < 9 {
+		t.Fatalf("index has %d shortcut hints, want the nav links and header buttons", len(hints))
+	}
+	for _, m := range hints {
+		keys := string(m[1])
+		if bytes.Contains(js, []byte("{ keys: '"+keys+"'")) {
+			continue
+		}
+		for _, k := range strings.Fields(keys) {
+			if !bytes.Contains(js, []byte("{ keys: '"+k+"'")) {
+				t.Fatalf("hint %q names no shortcut", keys)
+			}
 		}
 	}
 	// The dialog's columns shrink and stack by its own width, so it never scrolls sideways.
