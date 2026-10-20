@@ -1202,8 +1202,12 @@ func (s *Server) saveRule(w http.ResponseWriter, r *http.Request) {
 		}
 		rule.ID = id
 	}
-	if strings.TrimSpace(rule.Name) == "" || strings.TrimSpace(rule.Prompt) == "" || rule.ToLaneID == 0 {
-		writeErr(w, badRequest{"name, prompt and to_lane_id are required"})
+	if strings.TrimSpace(rule.Name) == "" || rule.ToLaneID == 0 {
+		writeErr(w, badRequest{"name and to_lane_id are required"})
+		return
+	}
+	if (strings.TrimSpace(rule.Prompt) == "") == (rule.SkillID == nil) {
+		writeErr(w, badRequest{"a rule needs either a prompt or a skill_id"})
 		return
 	}
 	if !validMode(rule.Mode) {
@@ -1213,6 +1217,24 @@ func (s *Server) saveRule(w http.ResponseWriter, r *http.Request) {
 	if err := s.checkLane(r.Context(), rule.DoneLaneID, "done_lane_id"); err != nil {
 		writeErr(w, err)
 		return
+	}
+	if rule.ProjectID != nil && *rule.ProjectID == 0 {
+		rule.ProjectID = nil // any project
+	}
+	if rule.ProjectID != nil {
+		if err := s.checkProject(r.Context(), *rule.ProjectID); err != nil {
+			writeErr(w, err)
+			return
+		}
+	}
+	if rule.SkillID != nil {
+		if _, err := s.app.Store.Skill(r.Context(), *rule.SkillID); errors.Is(err, store.ErrNotFound) {
+			writeErr(w, badRequest{"unknown skill_id"})
+			return
+		} else if err != nil {
+			writeErr(w, err)
+			return
+		}
 	}
 	if _, err := app.RenderPrompt(rule.Prompt, store.Task{}); err != nil {
 		writeErr(w, badRequest{"prompt template: " + err.Error()})

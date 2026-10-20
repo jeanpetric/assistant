@@ -1468,17 +1468,18 @@ async function renderSettings() {
 
   const laneLabel = id => id == null ? 'Any lane' : (b.lanes.find(l => l.id === id) || {}).name || '?';
   const rulesPanel = h('div', { class: 'panel' },
-    h('div', { class: 'row' }, h('h2', { class: 'grow' }, 'Transition rules'), h('button', { onclick: () => ruleDialog(null, b.lanes, rerender) }, '+ Add rule')),
-    h('p', { class: 'muted small' }, 'Start an agent session automatically when a task moves between lanes.'),
-    rules.length ? h('table', {}, h('thead', {}, h('tr', {}, ['', 'Rule', 'Transition', 'Prompt', 'Mode', 'When done', ''].map(x => h('th', {}, x)))),
+    h('div', { class: 'row' }, h('h2', { class: 'grow' }, 'Transition rules'), h('button', { onclick: () => ruleDialog(null, b, skills, rerender) }, '+ Add rule')),
+    h('p', { class: 'muted small' }, 'When a task moves between lanes, start an agent session automatically, or run a skill in the task\'s latest session.'),
+    rules.length ? h('table', {}, h('thead', {}, h('tr', {}, ['', 'Rule', 'Project', 'Transition', 'Action', 'Mode', 'When done', ''].map(x => h('th', {}, x)))),
       h('tbody', {}, rules.map(r => h('tr', {},
         h('td', {}, h('input', { type: 'checkbox', checked: r.enabled, onchange: async e => { await api('PUT', `/api/rules/${r.id}`, { ...r, enabled: e.target.checked }); } })),
         h('td', {}, r.name),
+        h('td', { class: 'small' }, r.project_id ? projectName(r.project_id) : 'Any'),
         h('td', {}, `${laneLabel(r.from_lane_id)} → ${laneLabel(r.to_lane_id)}`),
-        h('td', { class: 'small' }, h('code', {}, trunc(r.prompt, 80))),
-        h('td', { class: 'muted small' }, r.mode || 'app default'),
+        h('td', { class: 'small' }, r.skill_id ? 'Skill: ' + ((skills.find(sk => sk.id === r.skill_id) || {}).name || '?') : h('code', {}, trunc(r.prompt, 80))),
+        h('td', { class: 'muted small' }, r.skill_id ? '—' : r.mode || 'app default'),
         h('td', { class: 'muted small' }, r.done_lane_id ? '→ ' + laneLabel(r.done_lane_id) : 'stay'),
-        h('td', {}, h('button', { class: 'ghost small', onclick: () => ruleDialog(r, b.lanes, rerender) }, 'Edit'), ' ',
+        h('td', {}, h('button', { class: 'ghost small', onclick: () => ruleDialog(r, b, skills, rerender) }, 'Edit'), ' ',
           h('button', { class: 'danger small', onclick: async () => { await api('DELETE', `/api/rules/${r.id}`); rerender(); } }, 'Delete'))))))
       : h('p', { class: 'muted' }, 'No rules yet.'));
 
@@ -1512,7 +1513,7 @@ function skillsPanel(skills, b, rerender) {
         h('td', {}, h('button', { class: 'ghost small', onclick: () => skillDialog(sk, b, rerender) }, 'Edit'), ' ',
           h('button', {
             class: 'danger small', onclick: async () => {
-              if (confirm(`Delete skill ${sk.name}? Artifacts it made stay.`)) { await api('DELETE', `/api/skills/${sk.id}`); rerender(); }
+              if (confirm(`Delete skill ${sk.name} and the transition rules that run it? Artifacts it made stay.`)) { await api('DELETE', `/api/skills/${sk.id}`); rerender(); }
             },
           }, 'Delete'))))))
       : h('p', { class: 'muted' }, 'No skills yet.'));
@@ -1685,33 +1686,47 @@ function trelloPanel(b, trello, rerender) {
     }, 'Sync now')));
 }
 
-function ruleDialog(rule, lanes, done) {
+function ruleDialog(rule, b, skills, done) {
+  const lanes = b.lanes;
   // Automated sessions usually end in review, so new rules default to a Review lane if there is one.
   const review = lanes.find(l => /review/i.test(l.name));
-  rule = rule || { name: '', from_lane_id: null, to_lane_id: lanes[0].id, prompt: '{{.Context}}\n\n', mode: '', workdir: '',
-    done_lane_id: review ? review.id : null, enabled: true };
+  rule = rule || { name: '', project_id: null, from_lane_id: null, to_lane_id: lanes[0].id, prompt: '{{.Context}}\n\n', skill_id: null,
+    mode: '', workdir: '', done_lane_id: review ? review.id : null, enabled: true };
   const dlg = document.getElementById('dialog');
   const name = h('input', { value: rule.name, placeholder: 'e.g. Start coding' });
+  const project = select([['', 'Any project'], ...b.projects.map(p => [p.id, p.name])], rule.project_id ?? '');
   const from = select([['', 'Any lane'], ...lanes.map(l => [l.id, l.name])], rule.from_lane_id ?? '');
   const to = select(lanes.map(l => [l.id, l.name]), rule.to_lane_id);
+  const action = select([['', 'Start a new agent session with a prompt'],
+    ...skills.map(sk => [sk.id, `Run skill "${sk.name}" in the task's latest session`])], rule.skill_id ?? '');
   const prompt = h('textarea', { rows: 6 }, rule.prompt);
   const mode = select(modeOptions(true), rule.mode);
   const workdir = workdirSelect(rule.workdir, "Task directory, else the project's, else app default");
   const doneLane = doneLaneSelect(lanes, rule.done_lane_id);
-  dlg.replaceChildren(h('h2', {}, rule.id ? 'Edit rule' : 'New rule'),
-    h('label', {}, 'Name'), name,
-    h('div', { class: 'row' }, h('div', { class: 'grow' }, h('label', {}, 'From'), from), h('div', { class: 'grow' }, h('label', {}, 'To'), to)),
+  // A skill continues an existing session: prompt, mode and directory are the session's.
+  const sessionOpts = h('div', {},
     h('label', {}, 'Prompt template — use a skill like /p-dev:code, and {{.Context}} (the task plus results of tasks it builds on), {{.Task.Title}}, {{.Task.Description}}, {{.Fields.pull_request}}'),
     prompt,
     h('label', {}, 'Agent mode'), mode,
-    h('label', {}, 'Working directory'), workdir,
+    h('label', {}, 'Working directory'), workdir);
+  const showOpts = () => sessionOpts.classList.toggle('hidden', !!action.value);
+  action.onchange = showOpts;
+  showOpts();
+  dlg.replaceChildren(h('h2', {}, rule.id ? 'Edit rule' : 'New rule'),
+    h('label', {}, 'Name'), name,
+    h('label', {}, 'Tasks in project'), project,
+    h('div', { class: 'row' }, h('div', { class: 'grow' }, h('label', {}, 'From'), from), h('div', { class: 'grow' }, h('label', {}, 'To'), to)),
+    h('label', {}, 'Then'), action,
+    sessionOpts,
     h('label', {}, 'After the agent finishes (skipped if the task was moved meanwhile)'), doneLane,
     h('div', { class: 'dialog-actions' },
       cancelButton(dlg),
       h('button', {
         onclick: async () => {
+          const skill = action.value ? Number(action.value) : null;
           const body = {
-            ...rule, name: name.value, prompt: prompt.value, mode: mode.value, workdir: workdir.value,
+            ...rule, name: name.value, prompt: skill ? '' : prompt.value, skill_id: skill, mode: skill ? '' : mode.value,
+            workdir: skill ? '' : workdir.value, project_id: project.value ? Number(project.value) : null,
             from_lane_id: from.value ? Number(from.value) : null, to_lane_id: Number(to.value), done_lane_id: doneLaneValue(doneLane),
           };
           await api(rule.id ? 'PUT' : 'POST', rule.id ? `/api/rules/${rule.id}` : '/api/rules', body);

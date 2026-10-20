@@ -7,14 +7,18 @@ import (
 	"time"
 )
 
-// Rule starts an agent session when a task moves into ToLaneID
-// (from FromLaneID, or from any lane when FromLaneID is nil).
+// Rule acts when a task of ProjectID (any project when nil) moves into
+// ToLaneID (from FromLaneID, or from any lane when FromLaneID is nil): it
+// starts an agent session with Prompt, or runs SkillID in the task's latest
+// session.
 type Rule struct {
 	ID         int64  `json:"id"`
 	Name       string `json:"name"`
+	ProjectID  *int64 `json:"project_id"`
 	FromLaneID *int64 `json:"from_lane_id"`
 	ToLaneID   int64  `json:"to_lane_id"`
 	Prompt     string `json:"prompt"`
+	SkillID    *int64 `json:"skill_id"`
 	Mode       string `json:"mode"`
 	Workdir    string `json:"workdir"`
 	DoneLaneID *int64 `json:"done_lane_id"` // copied to the sessions the rule starts
@@ -51,17 +55,14 @@ type Notification struct {
 
 // ---- rules ----
 
-const ruleCols = `id, name, from_lane_id, to_lane_id, prompt, mode, workdir, done_lane_id, enabled`
+const ruleCols = `id, name, project_id, from_lane_id, to_lane_id, prompt, skill_id, mode, workdir, done_lane_id, enabled`
 
 func scanRule(sc interface{ Scan(...any) error }) (Rule, error) {
 	var r Rule
-	var from, doneLane sql.NullInt64
+	var project, from, skill, doneLane sql.NullInt64
 	var enabled int
-	err := sc.Scan(&r.ID, &r.Name, &from, &r.ToLaneID, &r.Prompt, &r.Mode, &r.Workdir, &doneLane, &enabled)
-	if from.Valid {
-		r.FromLaneID = &from.Int64
-	}
-	r.DoneLaneID = fromNullID(doneLane)
+	err := sc.Scan(&r.ID, &r.Name, &project, &from, &r.ToLaneID, &r.Prompt, &skill, &r.Mode, &r.Workdir, &doneLane, &enabled)
+	r.ProjectID, r.FromLaneID, r.SkillID, r.DoneLaneID = fromNullID(project), fromNullID(from), fromNullID(skill), fromNullID(doneLane)
 	r.Enabled = enabled == 1
 	return r, err
 }
@@ -87,10 +88,11 @@ func (s *Store) Rules(ctx context.Context) ([]Rule, error) {
 	return s.queryRules(ctx, `SELECT `+ruleCols+` FROM transition_rules ORDER BY id`)
 }
 
-// MatchingRules returns enabled rules for a move from -> to.
-func (s *Store) MatchingRules(ctx context.Context, from, to int64) ([]Rule, error) {
+// MatchingRules returns enabled rules for a move from -> to of a task in the project.
+func (s *Store) MatchingRules(ctx context.Context, projectID, from, to int64) ([]Rule, error) {
 	return s.queryRules(ctx, `SELECT `+ruleCols+` FROM transition_rules
-		WHERE enabled = 1 AND to_lane_id = ? AND (from_lane_id IS NULL OR from_lane_id = ?) ORDER BY id`, to, from)
+		WHERE enabled = 1 AND to_lane_id = ? AND (from_lane_id IS NULL OR from_lane_id = ?)
+			AND (project_id IS NULL OR project_id = ?) ORDER BY id`, to, from, projectID)
 }
 
 func (s *Store) Rule(ctx context.Context, id int64) (Rule, error) {
@@ -103,16 +105,17 @@ func (s *Store) Rule(ctx context.Context, id int64) (Rule, error) {
 
 func (s *Store) SaveRule(ctx context.Context, r Rule) (Rule, error) {
 	if r.ID == 0 {
-		res, err := s.db.ExecContext(ctx, `INSERT INTO transition_rules (name, from_lane_id, to_lane_id, prompt, mode, workdir, done_lane_id, enabled)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, r.Name, r.FromLaneID, r.ToLaneID, r.Prompt, r.Mode, r.Workdir, r.DoneLaneID, boolInt(r.Enabled))
+		res, err := s.db.ExecContext(ctx, `INSERT INTO transition_rules (name, project_id, from_lane_id, to_lane_id, prompt, skill_id, mode, workdir,
+			done_lane_id, enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, r.Name, r.ProjectID, r.FromLaneID, r.ToLaneID, r.Prompt, r.SkillID,
+			r.Mode, r.Workdir, r.DoneLaneID, boolInt(r.Enabled))
 		if err != nil {
 			return r, err
 		}
 		r.ID, _ = res.LastInsertId()
 	} else {
-		err := affected(s.db.ExecContext(ctx, `UPDATE transition_rules SET name = ?, from_lane_id = ?, to_lane_id = ?,
-			prompt = ?, mode = ?, workdir = ?, done_lane_id = ?, enabled = ? WHERE id = ?`,
-			r.Name, r.FromLaneID, r.ToLaneID, r.Prompt, r.Mode, r.Workdir, r.DoneLaneID, boolInt(r.Enabled), r.ID))
+		err := affected(s.db.ExecContext(ctx, `UPDATE transition_rules SET name = ?, project_id = ?, from_lane_id = ?, to_lane_id = ?,
+			prompt = ?, skill_id = ?, mode = ?, workdir = ?, done_lane_id = ?, enabled = ? WHERE id = ?`,
+			r.Name, r.ProjectID, r.FromLaneID, r.ToLaneID, r.Prompt, r.SkillID, r.Mode, r.Workdir, r.DoneLaneID, boolInt(r.Enabled), r.ID))
 		if err != nil {
 			return r, err
 		}

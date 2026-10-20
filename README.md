@@ -64,8 +64,10 @@ One Go binary, one SQLite file, no JavaScript build step.
 
 ### Automation
 
-- **Transition rules**: when a task moves from lane A (or any lane) to lane B, start an agent
-  session with a prompt template — e.g. run `/p-dev:code` when a task enters *In progress*.
+- **Transition rules**: when a task of a project (or any project) moves from lane A (or any
+  lane) to lane B, start an agent session with a prompt template — e.g. run `/p-dev:code` when a
+  task enters *In progress* — or run a skill in the task's latest session, e.g. a self-review when
+  it enters *Review*. A rule's done lane follows the session it starts, or its skill's turn.
 - **Move when done**: a session can move its task to another lane (e.g. *Review*) once the agent
   finishes a turn successfully. Pick it when starting a session or change it on the session;
   rules and schedules set it for the sessions they start. A failed turn, or a task you moved by

@@ -978,3 +978,22 @@ func TestAgentStatusOnBoardAndTask(t *testing.T) {
 		t.Fatalf("after asking: %+v", st)
 	}
 }
+
+func TestRuleProjectAndSkill(t *testing.T) {
+	c := newClient(t)
+	var sk store.Skill
+	c.do("POST", "/api/skills", map[string]any{"name": "Self-review", "body": "b"}, 200, &sk)
+	var rule store.Rule
+	c.do("POST", "/api/rules", map[string]any{"name": "r", "project_id": 1, "to_lane_id": 1, "skill_id": sk.ID, "enabled": true}, 200, &rule)
+	if rule.ProjectID == nil || *rule.ProjectID != 1 || rule.SkillID == nil || *rule.SkillID != sk.ID || rule.Prompt != "" {
+		t.Fatalf("rule = %+v", rule)
+	}
+	c.do("PUT", "/api/rules/"+itoa(rule.ID), map[string]any{"name": "r", "project_id": 0, "to_lane_id": 1, "prompt": "p"}, 200, &rule)
+	if rule.ProjectID != nil || rule.SkillID != nil {
+		t.Fatalf("any project, prompt: %+v", rule)
+	}
+	c.do("POST", "/api/rules", map[string]any{"name": "r", "to_lane_id": 1}, 400, nil)
+	c.do("POST", "/api/rules", map[string]any{"name": "r", "to_lane_id": 1, "prompt": "p", "skill_id": sk.ID}, 400, nil)
+	c.do("POST", "/api/rules", map[string]any{"name": "r", "to_lane_id": 1, "skill_id": 999}, 400, nil)
+	c.do("POST", "/api/rules", map[string]any{"name": "r", "to_lane_id": 1, "prompt": "p", "project_id": 999}, 400, nil)
+}

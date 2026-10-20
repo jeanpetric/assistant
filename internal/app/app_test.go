@@ -1294,3 +1294,89 @@ func TestEndsWithQuestion(t *testing.T) {
 		}
 	}
 }
+
+func TestRulesPerProject(t *testing.T) {
+	a, r := newApp(t)
+	ctx := context.Background()
+	lanes := lanesByName(t, a)
+	wip, review := lanes["In progress"], lanes["Review"]
+	backyard, _ := a.Store.CreateProject(ctx, store.Project{Name: "Backyard"})
+	mine, _ := a.Store.CreateTask(ctx, store.Task{Title: "Assistant task", LaneID: wip, ProjectID: 1})
+	theirs, _ := a.Store.CreateTask(ctx, store.Task{Title: "Backyard task", LaneID: wip, ProjectID: backyard.ID})
+	assistant := int64(1)
+	a.Store.SaveRule(ctx, store.Rule{Name: "Assistant review", ProjectID: &assistant, FromLaneID: &wip, ToLaneID: review, Enabled: true, Prompt: "assistant"})
+	a.Store.SaveRule(ctx, store.Rule{Name: "Backyard review", ProjectID: &backyard.ID, FromLaneID: &wip, ToLaneID: review, Enabled: true, Prompt: "backyard"})
+
+	if started, err := a.MoveTask(ctx, mine.ID, review, 0); err != nil || len(started) != 1 || started[0].Title != "Assistant review" {
+		t.Fatalf("assistant: %+v, %v", started, err)
+	}
+	if started, err := a.MoveTask(ctx, theirs.ID, review, 0); err != nil || len(started) != 1 || started[0].Title != "Backyard review" {
+		t.Fatalf("backyard: %+v, %v", started, err)
+	}
+	a.Wait()
+	if reqs := r.requests(); len(reqs) != 2 || reqs[0].Prompt != "assistant" || reqs[1].Prompt != "backyard" {
+		t.Fatalf("requests = %+v", reqs)
+	}
+}
+
+func TestRuleRunsSkillInLatestSession(t *testing.T) {
+	a, r := newApp(t)
+	ctx := context.Background()
+	lanes := lanesByName(t, a)
+	wip, review, done := lanes["In progress"], lanes["Review"], lanes["Done"]
+	task, _ := a.Store.CreateTask(ctx, store.Task{Title: "Ship it", LaneID: wip})
+	sk, _ := a.Store.SaveSkill(ctx, store.Skill{Name: "Self-review", Body: "Review {{.Task.Title}}.", Artifact: true})
+	a.Store.SaveRule(ctx, store.Rule{Name: "Review it", FromLaneID: &wip, ToLaneID: review, SkillID: &sk.ID, DoneLaneID: &done, Enabled: true})
+	// A prompt rule on the same move starts a new session; the skill still goes to the one that did the work.
+	a.Store.SaveRule(ctx, store.Rule{Name: "Also", ToLaneID: review, Prompt: "also", Enabled: true})
+
+	// The session's turn ends by moving the task to Review, which fires the rule in that same session.
+	sess, err := a.StartSession(ctx, StartOpts{TaskID: task.ID, Prompt: "code", DoneLaneID: &review})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Wait()
+	reqs := r.requests()
+	if len(reqs) != 3 {
+		t.Fatalf("requests = %+v", reqs)
+	}
+	var skillReq agent.Request
+	for _, q := range reqs[1:] {
+		if strings.HasPrefix(q.Prompt, `Apply the skill "Self-review"`) {
+			skillReq = q
+		}
+	}
+	if !strings.HasSuffix(skillReq.Prompt, "Review Ship it.") || skillReq.ResumeID != "claude-1" {
+		t.Fatalf("skill request = %+v", skillReq)
+	}
+	arts, _ := a.Store.Artifacts(ctx, task.ID)
+	if len(arts) != 1 || arts[0].Skill != "Self-review" || *arts[0].SessionID != sess.ID {
+		t.Fatalf("artifacts = %+v", arts)
+	}
+	// The skill went fine, so the task moves on to the rule's done lane.
+	if got, _ := a.Store.Task(ctx, task.ID); got.LaneID != done {
+		t.Fatalf("task in lane %d, want done %d", got.LaneID, done)
+	}
+}
+
+func TestRuleSkillWithoutSessionNotifies(t *testing.T) {
+	a, r := newApp(t)
+	ctx := context.Background()
+	lanes := lanesByName(t, a)
+	task, _ := a.Store.CreateTask(ctx, store.Task{Title: "Fresh", LaneID: lanes["Todo"]})
+	sk, _ := a.Store.SaveSkill(ctx, store.Skill{Name: "Self-review", Body: "b"})
+	a.Store.SaveRule(ctx, store.Rule{Name: "Review it", ToLaneID: lanes["Review"], SkillID: &sk.ID, Enabled: true})
+
+	started, err := a.MoveTask(ctx, task.ID, lanes["Review"], 0)
+	if err != nil || len(started) != 0 {
+		t.Fatalf("started = %+v, %v", started, err)
+	}
+	a.Wait()
+	if len(r.requests()) != 0 {
+		t.Fatal("ran without a session")
+	}
+	n, _ := a.Store.Notifications(ctx, true)
+	if len(n) != 1 || !strings.Contains(n[0].Message, ErrNoSession.Error()) {
+		t.Fatalf("notifications = %+v", n)
+	}
+}

@@ -1109,3 +1109,75 @@ func TestNotificationArchiveMigrationKeepsData(t *testing.T) {
 		t.Fatalf("notifications = %+v, %v", ns, err)
 	}
 }
+
+func TestRuleProjectAndSkillMigrationKeepsRules(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := len(migrations) - 1 // before rules had a project and a skill
+	for _, m := range migrations[:n] {
+		if _, err := db.Exec(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, q := range []string{
+		fmt.Sprintf(`PRAGMA user_version = %d`, n),
+		`INSERT INTO transition_rules (id, name, from_lane_id, to_lane_id, prompt, mode, workdir, done_lane_id, enabled)
+			VALUES (2, 'Code', 2, 3, 'p', 'plan', '/w', 4, 0)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(q, err)
+		}
+	}
+	db.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	r, err := s.Rule(ctx, 2)
+	if err != nil || r.Name != "Code" || *r.FromLaneID != 2 || r.ToLaneID != 3 || r.Prompt != "p" || r.Mode != "plan" ||
+		r.Workdir != "/w" || *r.DoneLaneID != 4 || r.Enabled || r.ProjectID != nil || r.SkillID != nil {
+		t.Fatalf("rule = %+v, %v", r, err)
+	}
+}
+
+func TestRulesPerProjectAndSkill(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	p, _ := s.CreateProject(ctx, Project{Name: "Backyard"})
+	sk, _ := s.SaveSkill(ctx, Skill{Name: "Review", Body: "b"})
+	any, _ := s.SaveRule(ctx, Rule{Name: "any", ToLaneID: 3, Prompt: "p", Enabled: true})
+	mine, err := s.SaveRule(ctx, Rule{Name: "mine", ProjectID: &p.ID, ToLaneID: 3, SkillID: &sk.ID, Enabled: true})
+	if err != nil || *mine.ProjectID != p.ID || *mine.SkillID != sk.ID {
+		t.Fatalf("rule = %+v, %v", mine, err)
+	}
+	if got, _ := s.MatchingRules(ctx, 1, 2, 3); len(got) != 1 || got[0].ID != any.ID {
+		t.Fatalf("other project matches %+v", got)
+	}
+	if got, _ := s.MatchingRules(ctx, p.ID, 2, 3); len(got) != 2 {
+		t.Fatalf("own project matches %+v", got)
+	}
+
+	// A rule goes with its skill, and with its project.
+	if err := s.DeleteSkill(ctx, sk.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Rule(ctx, mine.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("rule outlived its skill: %v", err)
+	}
+	mine, _ = s.SaveRule(ctx, Rule{Name: "mine", ProjectID: &p.ID, ToLaneID: 3, Prompt: "p", Enabled: true})
+	if err := s.DeleteProject(ctx, p.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Rule(ctx, mine.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("rule outlived its project: %v", err)
+	}
+	if _, err := s.Rule(ctx, any.ID); err != nil {
+		t.Fatal(err)
+	}
+}

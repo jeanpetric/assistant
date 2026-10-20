@@ -26,6 +26,7 @@ var (
 	ErrBadAction = errors.New("action must be agent or remind")
 	ErrBadCron   = errors.New("invalid cron expression")
 	ErrStopping  = errors.New("the app is shutting down")
+	ErrNoSession = errors.New("the task has no agent session to run the skill in")
 )
 
 type App struct {
@@ -638,37 +639,57 @@ func (a *App) moveWhenDone(ctx context.Context, sessionID, startLane int64) {
 	if err != nil || sess.TaskID == 0 || sess.DoneLaneID == nil {
 		return
 	}
+	a.moveDone(ctx, sess, startLane, *sess.DoneLaneID)
+}
+
+// moveDone moves the session's task from startLane to doneLane, unless it
+// left startLane meanwhile.
+func (a *App) moveDone(ctx context.Context, sess store.Session, startLane, doneLane int64) {
 	task, err := a.Store.Task(ctx, sess.TaskID)
-	if err != nil || task.LaneID != startLane || task.LaneID == *sess.DoneLaneID {
+	if err != nil || task.LaneID != startLane || task.LaneID == doneLane {
 		return
 	}
 	taskID := task.ID
-	if _, err := a.MoveTask(ctx, taskID, *sess.DoneLaneID, -1); err != nil {
+	if _, err := a.MoveTask(ctx, taskID, doneLane, -1); err != nil {
 		a.Store.Notify(ctx, &taskID, fmt.Sprintf("Session %q finished but the task could not be moved: %v", sess.Title, err))
 		return
 	}
-	lane, _ := a.Store.Lane(ctx, *sess.DoneLaneID)
+	lane, _ := a.Store.Lane(ctx, doneLane)
 	a.Store.Notify(ctx, &taskID, fmt.Sprintf("Agent finished %q — moved to %s", sess.Title, lane.Name))
 }
 
 // MoveTask moves a task on the board and fires matching transition rules.
-// It returns the sessions started by rules.
+// It returns the sessions rules started, or continue with a skill.
 func (a *App) MoveTask(ctx context.Context, taskID, laneID int64, index int) ([]store.Session, error) {
 	from, err := a.Store.MoveTask(ctx, taskID, laneID, index)
 	if err != nil || from == laneID {
 		return nil, err
 	}
 	a.KickTrello() // the task's card may need archiving, or bringing back
-	rules, err := a.Store.MatchingRules(ctx, from, laneID)
+	task, err := a.Store.Task(ctx, taskID)
 	if err != nil {
 		return nil, err
 	}
-	task, err := a.Store.Task(ctx, taskID)
+	rules, err := a.Store.MatchingRules(ctx, task.ProjectID, from, laneID)
+	if err != nil {
+		return nil, err
+	}
+	// Skills continue the task's latest session as it was before the move,
+	// not one started by another rule here.
+	latest, err := a.latestSession(ctx, taskID)
 	if err != nil {
 		return nil, err
 	}
 	var started []store.Session
 	for _, r := range rules {
+		if r.SkillID != nil {
+			if err := a.ruleSkill(ctx, r, latest); err != nil {
+				a.Store.Notify(ctx, &taskID, fmt.Sprintf("Rule %q: %v", r.Name, err))
+				continue
+			}
+			started = append(started, *latest)
+			continue
+		}
 		prompt, err := renderPrompt(r.Prompt, task, a.TaskBrief(ctx, task))
 		if err != nil {
 			a.Store.Notify(ctx, &taskID, fmt.Sprintf("Rule %q: %v", r.Name, err))
@@ -685,6 +706,43 @@ func (a *App) MoveTask(ctx context.Context, taskID, laneID int64, index int) ([]
 		started = append(started, sess)
 	}
 	return started, nil
+}
+
+// latestSession returns the task's most recently active session that can be
+// continued, or nil.
+func (a *App) latestSession(ctx context.Context, taskID int64) (*store.Session, error) {
+	sessions, err := a.Store.Sessions(ctx, taskID, "")
+	if err != nil {
+		return nil, err
+	}
+	for _, s := range sessions {
+		if s.ClaudeSessionID != "" {
+			return &s, nil
+		}
+	}
+	return nil, nil
+}
+
+// ruleSkill runs the rule's skill in sess. Once it finishes successfully the
+// task moves to the rule's done lane, unless it left the rule's lane meanwhile.
+func (a *App) ruleSkill(ctx context.Context, r store.Rule, sess *store.Session) error {
+	if sess == nil {
+		return ErrNoSession
+	}
+	sk, err := a.Store.Skill(ctx, *r.SkillID)
+	if err != nil {
+		return fmt.Errorf("skill: %w", err)
+	}
+	s := *sess
+	return a.runSkill(ctx, s, sk, func(ctx context.Context, status string) {
+		if status != store.StatusIdle {
+			a.notifySession(ctx, s, fmt.Sprintf("Skill %q ended %s in session %q", sk.Name, status, s.Title))
+			return
+		}
+		if r.DoneLaneID != nil {
+			a.moveDone(ctx, s, r.ToLaneID, *r.DoneLaneID)
+		}
+	})
 }
 
 // SaveSchedule validates the cron expression and computes the next run.

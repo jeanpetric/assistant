@@ -380,6 +380,12 @@ CREATE INDEX trello_cards_board ON trello_cards(board_id);
 	`
 ALTER TABLE notifications ADD COLUMN archived_at INTEGER;
 `,
+	// Transition rules per project (NULL: any project), and rules that run a
+	// skill in the task's latest session instead of starting one.
+	`
+ALTER TABLE transition_rules ADD COLUMN project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE transition_rules ADD COLUMN skill_id INTEGER REFERENCES skills(id) ON DELETE CASCADE;
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {
