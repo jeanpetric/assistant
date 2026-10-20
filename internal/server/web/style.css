@@ -189,7 +189,9 @@ tr.clickable:hover td { background: var(--surface-2); }
 .session-head { display: flex; gap: 10px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
 .session-head .title { font-weight: 600; flex: 1; min-width: 200px; }
 .session-body { padding: 10px 14px; }
-.session.collapsed .session-body, .session.collapsed .session-foot { display: none; }
+.session.collapsed > :not(.session-head) { display: none; }
+.session.collapsed .session-head { border-bottom: none; }
+.session-head .title { cursor: pointer; }
 .session-limits { display: flex; flex-wrap: wrap; gap: 4px 16px; padding: 4px 14px; border-top: 1px solid var(--border); }
 .session-limits:empty { display: none; }
 .session-foot { padding: 10px 14px; border-top: 1px solid var(--border); }

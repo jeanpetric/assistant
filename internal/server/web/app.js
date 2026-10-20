@@ -114,6 +114,18 @@ function recall(key) {
   try { return localStorage.getItem(key) || ''; } catch (_) { return ''; }
 }
 
+// A session collapsed to its head stays collapsed across redraws and reloads.
+function sessionCollapsed(id) {
+  return recall(`session.collapsed.${id}`) === '1';
+}
+
+function setSessionCollapsed(id, on) {
+  try {
+    if (on) localStorage.setItem(`session.collapsed.${id}`, '1');
+    else localStorage.removeItem(`session.collapsed.${id}`);
+  } catch (_) { /* storage unavailable */ }
+}
+
 function trunc(s, n) {
   s = (s || '').replace(/\s+/g, ' ').trim();
   return s.length > n ? s.slice(0, n) + '…' : s;
@@ -674,7 +686,12 @@ async function taskView(id, { every, leave, reload }) {
 
   return {
     el: h('div', { class: 'task-page' }, side, main),
-    focus: sessionId => { if (sessionId && components.has(sessionId)) components.get(sessionId).el.scrollIntoView(); },
+    focus: sessionId => {
+      const c = sessionId && components.get(sessionId);
+      if (!c) return;
+      if (c.el.classList.contains('collapsed')) c.setCollapsed(false); // a link to a session opens it
+      c.el.scrollIntoView();
+    },
   };
 }
 
@@ -918,6 +935,13 @@ function sessionComponent(session, messages, task) {
   const summary = h('details', { class: 'session-summary' });
   const el = h('div', { class: 'session' }, head, summary, body, working, limits, foot);
   const c = { el, session, lastId: () => last };
+  // Collapsed, only the head shows; the title toggles it too.
+  c.setCollapsed = on => {
+    el.classList.toggle('collapsed', on);
+    setSessionCollapsed(c.session.id, on);
+    drawHead();
+  };
+  el.classList.toggle('collapsed', sessionCollapsed(session.id));
 
   // Shows a turn that just started (status and prompt) without waiting for the next poll.
   const refresh = async () => {
@@ -945,7 +969,7 @@ function sessionComponent(session, messages, task) {
     const resumable = ['interrupted', 'cancelled', 'error'].includes(s.status);
     const resumeCmd = s.claude_session_id ? `cd ${JSON.stringify(s.workdir)} && claude --resume ${s.claude_session_id}` : '';
     head.replaceChildren(...[
-      h('span', { class: 'title' }, s.title || `Session ${s.id}`),
+      h('span', { class: 'title', onclick: () => c.setCollapsed(!el.classList.contains('collapsed')) }, s.title || `Session ${s.id}`),
       h('span', { class: 'badge status-' + s.status }, running ? h('span', { class: 'pulse' }) : null, s.status),
       needsInputBadge(s.needs_input ? 1 : 0, 'The agent ' + s.needs_input),
       s.needs_input || (!running && !s.seen && s.task_id) ? h('button', {
@@ -983,7 +1007,9 @@ function sessionComponent(session, messages, task) {
         class: 'ghost small', title: 'Have the agent write a brief and continue in a new session with a fresh context',
         onclick: () => handoffDialog(s, refresh),
       }, 'Hand off') : null,
-      h('button', { class: 'ghost small', onclick: () => el.classList.toggle('collapsed') }, '▾'),
+      el.classList.contains('collapsed')
+        ? h('button', { class: 'ghost small', title: 'Expand the session', onclick: () => c.setCollapsed(false) }, '▸')
+        : h('button', { class: 'ghost small', title: 'Collapse the session to its head', onclick: () => c.setCollapsed(true) }, '▾'),
     ].filter(Boolean));
     send.disabled = running || !s.claude_session_id;
     if (runSkill) runSkill.disabled = send.disabled;
