@@ -13,17 +13,33 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // Event is one transcript item produced by an agent turn.
 type Event struct {
 	Role    string // user | assistant | system
-	Kind    string // text | tool_use | tool_result | result | error
+	Kind    string // text | tool_use | tool_result | result | error | rate_limit
 	Content string
 
 	// Set on the init and result events.
 	ClaudeSessionID string
 	CostUSD         float64
+
+	// Set on rate_limit events.
+	Limits *RateLimits
+}
+
+// RateLimits is the account's usage of its subscription windows as reported
+// by the CLI. A nil window was not reported.
+type RateLimits struct {
+	FiveHour *LimitWindow `json:"five_hour"`
+	SevenDay *LimitWindow `json:"seven_day"`
+}
+
+type LimitWindow struct {
+	UsedPercent float64   `json:"used_percent"` // 0–100
+	ResetsAt    time.Time `json:"resets_at"`
 }
 
 type Request struct {
@@ -141,6 +157,24 @@ type streamLine struct {
 	Message   struct {
 		Content json.RawMessage `json:"content"`
 	} `json:"message"`
+	RateLimitInfo struct {
+		RateLimitType  string                  `json:"rateLimitType"`
+		Utilization    *float64                `json:"utilization"`
+		ResetsAt       int64                   `json:"resetsAt"`
+		UnifiedWindows map[string]streamWindow `json:"unifiedWindows"`
+	} `json:"rate_limit_info"`
+}
+
+type streamWindow struct {
+	Utilization *float64 `json:"utilization"` // 0–1
+	ResetsAt    int64    `json:"resetsAt"`    // unix seconds
+}
+
+func (w streamWindow) window() *LimitWindow {
+	if w.Utilization == nil || w.ResetsAt == 0 {
+		return nil
+	}
+	return &LimitWindow{UsedPercent: *w.Utilization * 100, ResetsAt: time.Unix(w.ResetsAt, 0)}
 }
 
 type block struct {
@@ -176,8 +210,25 @@ func ParseLine(line []byte) []Event {
 			}
 		}
 		return []Event{ev}
+	case "rate_limit_event":
+		return rateLimitEvents(l)
 	}
 	return nil
+}
+
+// rateLimitEvents reads both windows from unifiedWindows; older CLIs only
+// describe the window named by rateLimitType.
+func rateLimitEvents(l streamLine) []Event {
+	info := l.RateLimitInfo
+	windows := info.UnifiedWindows
+	if windows == nil && info.RateLimitType != "" {
+		windows = map[string]streamWindow{info.RateLimitType: {Utilization: info.Utilization, ResetsAt: info.ResetsAt}}
+	}
+	lim := RateLimits{FiveHour: windows["five_hour"].window(), SevenDay: windows["seven_day"].window()}
+	if lim.FiveHour == nil && lim.SevenDay == nil {
+		return nil
+	}
+	return []Event{{Role: "system", Kind: "rate_limit", Limits: &lim}}
 }
 
 func contentEvents(role string, raw json.RawMessage) []Event {

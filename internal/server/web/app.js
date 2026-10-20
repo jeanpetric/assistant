@@ -837,6 +837,28 @@ async function refreshGlobal() {
   } catch (_) { /* server restarting */ }
 }
 
+// Short countdown: 45m, 2h10m, 3d5h.
+function untilShort(ts) {
+  const m = Math.max(0, Math.floor((new Date(ts) - Date.now()) / 60000));
+  if (m < 60) return m + 'm';
+  if (m < 1440) return Math.floor(m / 60) + 'h' + (m % 60) + 'm';
+  return Math.floor(m / 1440) + 'd' + Math.floor((m % 1440) / 60) + 'h';
+}
+
+// Footer: usage left in the 5h and 7d windows, e.g. "5h 72% (2h10m) · 7d 83% (3d5h)".
+async function refreshLimits() {
+  let lim = {};
+  try { lim = await api('GET', '/api/limits'); } catch (_) { /* show unknown */ }
+  const part = (label, w) => {
+    if (!w || typeof w.used_percent !== 'number') return h('span', {}, label + ' ?');
+    const left = Math.max(0, 100 - w.used_percent);
+    const cls = left <= 5 ? 'danger' : left <= 20 ? 'warn' : null;
+    return h('span', { class: cls, title: 'Resets ' + fmtTime(w.resets_at) },
+      `${label} ${Math.round(left)}% (${untilShort(w.resets_at)})`);
+  };
+  document.getElementById('limits').replaceChildren(part('5h', lim && lim.five_hour), ' · ', part('7d', lim && lim.seven_day));
+}
+
 async function toggleNotifications() {
   const panel = document.getElementById('notif-panel');
   if (!panel.classList.contains('hidden')) { panel.classList.add('hidden'); return; }
@@ -874,4 +896,6 @@ async function toggleNotifications() {
   route();
   refreshGlobal();
   setInterval(refreshGlobal, 3000);
+  refreshLimits();
+  setInterval(refreshLimits, 15000);
 })();

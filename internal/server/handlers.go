@@ -59,6 +59,11 @@ func (s *Server) meta(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// limits reports the last known Claude usage windows; null when unknown.
+func (s *Server) limits(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, 200, s.app.Limits())
+}
+
 // ---- lanes ----
 
 type laneInput struct {

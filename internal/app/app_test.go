@@ -15,10 +15,11 @@ import (
 
 // fakeRunner records requests and replies with a canned transcript.
 type fakeRunner struct {
-	mu    sync.Mutex
-	reqs  []agent.Request
-	err   error
-	block chan struct{} // if set, Run waits for close or ctx cancel
+	mu     sync.Mutex
+	reqs   []agent.Request
+	err    error
+	block  chan struct{}     // if set, Run waits for close or ctx cancel
+	limits *agent.RateLimits // if set, emitted as a rate_limit event
 }
 
 func (f *fakeRunner) Run(ctx context.Context, req agent.Request, emit func(agent.Event)) error {
@@ -26,6 +27,12 @@ func (f *fakeRunner) Run(ctx context.Context, req agent.Request, emit func(agent
 	f.reqs = append(f.reqs, req)
 	f.mu.Unlock()
 	emit(agent.Event{Role: "system", Kind: "init", ClaudeSessionID: "claude-1"})
+	f.mu.Lock()
+	limits := f.limits
+	f.mu.Unlock()
+	if limits != nil {
+		emit(agent.Event{Role: "system", Kind: "rate_limit", Limits: limits})
+	}
 	if f.block != nil {
 		select {
 		case <-f.block:
@@ -152,6 +159,47 @@ func TestStartSessionValidation(t *testing.T) {
 		t.Fatalf("expected default workdir, got %q", got.Workdir)
 	}
 	a.Wait()
+}
+
+func TestRateLimits(t *testing.T) {
+	a, r := newApp(t)
+	ctx := context.Background()
+	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	a.Now = func() time.Time { return now }
+	if got := a.Limits(); got.FiveHour != nil || got.SevenDay != nil {
+		t.Fatalf("nothing reported yet: %+v", got)
+	}
+
+	week := &agent.LimitWindow{UsedPercent: 17, ResetsAt: now.Add(72 * time.Hour)}
+	r.limits = &agent.RateLimits{FiveHour: &agent.LimitWindow{UsedPercent: 10, ResetsAt: now.Add(time.Hour)}, SevenDay: week}
+	sess, err := a.StartSession(ctx, StartOpts{Prompt: "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Wait()
+	// A later report of one window keeps the other.
+	r.mu.Lock()
+	r.limits = &agent.RateLimits{FiveHour: &agent.LimitWindow{UsedPercent: 30, ResetsAt: now.Add(time.Hour)}}
+	r.mu.Unlock()
+	if err := a.SendMessage(ctx, sess.ID, "more"); err != nil {
+		t.Fatal(err)
+	}
+	a.Wait()
+	got := a.Limits()
+	if got.FiveHour == nil || got.FiveHour.UsedPercent != 30 || got.SevenDay == nil || *got.SevenDay != *week {
+		t.Fatalf("limits = %+v", got)
+	}
+	msgs, _ := a.Store.Messages(ctx, sess.ID, 0)
+	for _, m := range msgs {
+		if m.Kind == "rate_limit" {
+			t.Fatalf("rate limits should not land in the transcript: %+v", m)
+		}
+	}
+
+	now = now.Add(2 * time.Hour) // the 5h window has reset
+	if got := a.Limits(); got.FiveHour != nil || got.SevenDay == nil {
+		t.Fatalf("after 5h reset: %+v", got)
+	}
 }
 
 func TestStandaloneSession(t *testing.T) {

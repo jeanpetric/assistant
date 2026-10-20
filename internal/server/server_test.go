@@ -21,6 +21,8 @@ type echoRunner struct{}
 
 func (echoRunner) Run(ctx context.Context, req agent.Request, emit func(agent.Event)) error {
 	emit(agent.Event{Kind: "init", ClaudeSessionID: "c-1"})
+	emit(agent.Event{Kind: "rate_limit", Limits: &agent.RateLimits{
+		FiveHour: &agent.LimitWindow{UsedPercent: 28, ResetsAt: time.Now().Add(2 * time.Hour)}}})
 	emit(agent.Event{Role: "assistant", Kind: "text", Content: "did: " + req.Prompt})
 	emit(agent.Event{Role: "system", Kind: "result", Content: "ok"})
 	return nil
@@ -239,6 +241,24 @@ func TestGuard(t *testing.T) {
 	}
 	if got := post("application/json", "http://"+self, ""); got != http.StatusCreated {
 		t.Errorf("same origin: %d", got)
+	}
+}
+
+func TestLimits(t *testing.T) {
+	c := newClient(t)
+	var got map[string]*struct {
+		UsedPercent float64   `json:"used_percent"`
+		ResetsAt    time.Time `json:"resets_at"`
+	}
+	c.do("GET", "/api/limits", nil, 200, &got)
+	if len(got) != 2 || got["five_hour"] != nil || got["seven_day"] != nil {
+		t.Fatalf("before any turn: %+v", got)
+	}
+	c.do("POST", "/api/sessions", map[string]any{"prompt": "hi"}, 201, nil)
+	c.app.Wait()
+	c.do("GET", "/api/limits", nil, 200, &got)
+	if w := got["five_hour"]; w == nil || w.UsedPercent != 28 || w.ResetsAt.Before(time.Now()) || got["seven_day"] != nil {
+		t.Fatalf("after a turn: %+v", got)
 	}
 }
 

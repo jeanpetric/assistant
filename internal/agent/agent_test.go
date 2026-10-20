@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 const transcript = `{"type":"system","subtype":"init","session_id":"abc-123","tools":["Bash"]}
@@ -45,6 +46,30 @@ func TestParseTranscript(t *testing.T) {
 func TestParseErrorResult(t *testing.T) {
 	got := ParseLine([]byte(`{"type":"result","subtype":"error_max_turns","is_error":true,"session_id":"x"}`))
 	if len(got) != 1 || got[0].Kind != "error" || got[0].Content != "error_max_turns" {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestParseRateLimit(t *testing.T) {
+	// Captured from claude 2.1.304 on a Team plan.
+	line := `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":1792497600,"rateLimitType":"five_hour","overageStatus":"rejected","isUsingOverage":false,"unifiedWindows":{"five_hour":{"utilization":0.12,"resetsAt":1792497600},"seven_day":{"utilization":0.03,"resetsAt":1793001600}}},"uuid":"a4c4","session_id":"1f36"}`
+	got := ParseLine([]byte(line))
+	want := []Event{{Role: "system", Kind: "rate_limit", Limits: &RateLimits{
+		FiveHour: &LimitWindow{UsedPercent: 12, ResetsAt: time.Unix(1792497600, 0)},
+		SevenDay: &LimitWindow{UsedPercent: 3, ResetsAt: time.Unix(1793001600, 0)},
+	}}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %+v", got)
+	}
+
+	// Without unifiedWindows only the named window is known.
+	got = ParseLine([]byte(`{"type":"rate_limit_event","rate_limit_info":{"rateLimitType":"seven_day","utilization":0.5,"resetsAt":1793001600}}`))
+	if len(got) != 1 || got[0].Limits.FiveHour != nil || got[0].Limits.SevenDay.UsedPercent != 50 {
+		t.Fatalf("got %+v", got)
+	}
+
+	// No utilization: nothing to report.
+	if got := ParseLine([]byte(`{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":1792497600,"rateLimitType":"five_hour"}}`)); got != nil {
 		t.Fatalf("got %+v", got)
 	}
 }

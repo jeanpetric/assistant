@@ -37,6 +37,7 @@ type App struct {
 	running  map[int64]context.CancelFunc
 	stopping bool // set by Shutdown: cancelled turns end as interrupted, not cancelled
 	wg       sync.WaitGroup
+	limits   agent.RateLimits // last reported by any turn; in memory only
 }
 
 func New(s *store.Store, r agent.Runner, workdir, mode string) *App {
@@ -215,6 +216,10 @@ func (a *App) launch(sess store.Session, prompt, resumeID string) error {
 			if ev.Kind == "error" {
 				failed = true
 			}
+			if ev.Kind == "rate_limit" {
+				a.recordLimits(ev.Limits)
+				return
+			}
 			if ev.Kind == "init" {
 				return
 			}
@@ -241,6 +246,33 @@ func (a *App) launch(sess store.Session, prompt, resumeID string) error {
 		}
 	}()
 	return nil
+}
+
+func (a *App) recordLimits(l *agent.RateLimits) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if l.FiveHour != nil {
+		a.limits.FiveHour = l.FiveHour
+	}
+	if l.SevenDay != nil {
+		a.limits.SevenDay = l.SevenDay
+	}
+}
+
+// Limits returns the last reported usage windows. A window whose reset time
+// has passed is dropped: its usage since then is unknown.
+func (a *App) Limits() agent.RateLimits {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	now := a.Now()
+	fresh := func(w *agent.LimitWindow) *agent.LimitWindow {
+		if w == nil || !w.ResetsAt.After(now) {
+			return nil
+		}
+		c := *w
+		return &c
+	}
+	return agent.RateLimits{FiveHour: fresh(a.limits.FiveHour), SevenDay: fresh(a.limits.SevenDay)}
 }
 
 // moveWhenDone moves the session's task to its done lane after a successful
