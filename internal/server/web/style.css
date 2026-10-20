@@ -254,9 +254,6 @@ kbd {
   color: inherit; background: transparent; border-color: currentColor; border-bottom-width: 1px;
 }
 .toolbar .kbd-hint { margin-left: -2px; color: var(--muted); }
-/* A filter shows "/" to enter it and, while focused, "Esc" to leave it. */
-.toolbar input + .kbd-hint + .kbd-hint, .toolbar input:focus + .kbd-hint { display: none; }
-.toolbar input:focus + .kbd-hint + .kbd-hint { display: inline-flex; }
 .topbar nav a.active .kbd-hint { opacity: .4; }
 @media (max-width: 1200px) { .topbar .kbd-hint { display: none; } }
 .topbar > .kbd-hint { margin-left: -12px; color: var(--muted); }

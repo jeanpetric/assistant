@@ -38,16 +38,17 @@ One Go binary, one SQLite file, no JavaScript build step.
   A task can also be archived by hand from its page. Archived tasks leave the board and are
   listed under *Archive* in the top menu; *Restore* (or moving it to a lane) puts one back.
 - **Due times & quick reminders**: any task can have a due time; when it's reached you get a
-  notification. *⏰ Reminder* (or press `r`) creates a reminder task in two keystrokes, with
+  notification. *⏰ Reminder* (or press `⌥R`) creates a reminder task in two keystrokes, with
   presets like *15 min* or *Tomorrow 9:00*.
 - **Recurring schedules** per task (cron syntax): start an agent session or create a reminder.
 - **Notifications** for reminders, due tasks and failed automations — also as desktop
   notifications while the board is open in a browser tab (allow them when asked).
-- **Keyboard shortcuts** outside text fields: `n` new task, `r` reminder, `s` session, `/` filter,
-  `[` / `]` previous / next project, `g` then `b` `l` `s` `a` `,` to jump to Board, List,
-  Sessions, Archive or Settings, `i` notifications. In a text field keys type as usual; `Esc`
-  leaves the field so the shortcuts work again (List and Archive don't focus their filter on
-  open — `/` does). Each shortcut shows as a greyed key next to its button or link; press `?`
+- **Keyboard shortcuts** with ⌥ (Option/Alt), working in text fields too: `⌥T` new task, `⌥R`
+  reminder, `⌥P` session, `⌥M` notifications, `⌥[` / `⌥]` previous / next project, and `⌥B`
+  `⌥L` `⌥S` `⌥A` `⌥,` to jump to Board, List, Sessions, Archive or Settings. They go by the
+  physical key, so ⌥ never types a special character for them; other ⌥ characters type as usual.
+  Outside text fields `/` focuses the filter and `?` lists the shortcuts; `Esc` closes a dialog or
+  the notifications. Each shortcut shows as a greyed key next to its button or link; press `?`
   (or the `?` button) for the full list.
 
 ## Run

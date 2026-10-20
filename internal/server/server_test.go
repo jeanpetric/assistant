@@ -320,23 +320,25 @@ func TestStaticUI(t *testing.T) {
 		// Tool calls fold into one collapsed group per run instead of one row each.
 		"appendMessage(body, m)", "h('details', { class: 'tools' }", "onclick: e => { if (e.metaKey || e.ctrlKey) location.hash = `#/task/${t.id}`; else openTaskDialog(t.id); }",
 		// Keyboard shortcuts come from one table, which the "?" dialog lists.
-		"document.addEventListener('keydown', onShortcut)", "{ keys: 'n', label: 'New task', run: newTaskDialog }",
-		"{ keys: 'g b', label: 'Go to Board'", "{ keys: '?', label: 'Show these shortcuts', run: shortcutsDialog }",
+		"document.addEventListener('keydown', onShortcut)", "{ keys: '⌥T', code: 'KeyT', label: 'New task', run: newTaskDialog }",
+		"{ keys: '⌥B', code: 'KeyB', label: 'Go to Board'", "{ keys: '?', label: 'Show these shortcuts', run: shortcutsDialog }",
 		// Shortcut hints are drawn greyed next to the controls they trigger.
 		"function hint(keys)", "drawHeaderHints();", "'Cancel', hint('Esc')", "'Create', hint('↵')", "filter, hint('/')",
 		"addEventListener('click', shortcutsDialog)",
-		// Esc leaves a text field, so a focused filter never traps the page-jump shortcuts.
-		"if (field) { if (e.key === 'Escape') field.blur(); return; }", "{ keys: 'Esc', label: 'Leave a text field",
-		"filter, hint('/'), hint('Esc')", "if (filterOnOpen) { filterOnOpen = false; filter.focus(); }",
+		// Esc is left to the dialogs (the task dialog included) and closes the notifications.
+		"if (e.key === 'Escape' && !inField) { closeNotifications(); return; }",
 		// A project's directory is picked in Settings and shown as the default for its tasks.
 		"function taskWorkdir(t)", "workdir.addEventListener('change', saveProject)", "`Default (${taskWorkdir(task)})`"} {
 		if !bytes.Contains(js, []byte(want)) {
 			t.Fatalf("app.js lacks %q", want)
 		}
 	}
-	// List and Archive leave their filter alone on open; only "/" focuses it.
-	if n := bytes.Count(js, []byte("filter.focus()")); n != 1 {
-		t.Fatalf("app.js focuses a filter %d times, want only the one behind \"/\"", n)
+	// List and Archive focus their filter on open; ⌥ shortcuts still work from inside it.
+	if n := bytes.Count(js, []byte("filter.focus()")); n != 2 {
+		t.Fatalf("app.js focuses a filter %d times, want List and Archive", n)
+	}
+	if bytes.Contains(js, []byte("blur()")) {
+		t.Fatal("app.js blurs a field; Esc belongs to the dialogs")
 	}
 	// Every header hint names a real shortcut (or, like "[ ]", each key of one), so a hint never lies.
 	hints := regexp.MustCompile(`data-shortcut="([^"]+)"`).FindAllSubmatch(body, -1)

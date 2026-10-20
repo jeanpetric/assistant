@@ -375,9 +375,9 @@ async function renderList() {
   }
   draw();
   view.replaceChildren(h('div', { class: 'panel' },
-    h('div', { class: 'toolbar' }, filter, hint('/'), hint('Esc'), laneSel),
+    h('div', { class: 'toolbar' }, filter, hint('/'), laneSel),
     h('table', {}, h('thead', {}, h('tr', {}, ['Task', 'Lane', 'Kind', 'Due', 'Links', 'Updated'].map(x => h('th', {}, x)))), tbody)));
-  if (filterOnOpen) { filterOnOpen = false; filter.focus(); }
+  filter.focus();
 }
 
 // ---------- archive ----------
@@ -409,10 +409,11 @@ async function renderArchive() {
   }
   draw();
   view.replaceChildren(h('div', { class: 'panel' },
-    h('div', { class: 'toolbar' }, h('h2', { class: 'grow', style: 'flex:1' }, 'Archive'), filter, hint('/'), hint('Esc')),
+    h('div', { class: 'toolbar' }, h('h2', { class: 'grow', style: 'flex:1' }, 'Archive'), filter, hint('/')),
     tasks.length
       ? h('table', {}, h('thead', {}, h('tr', {}, ['Task', 'Lane', 'Kind', 'Links', 'Archived', ''].map(x => h('th', {}, x)))), tbody)
       : h('p', { class: 'muted' }, 'Nothing archived yet.')));
+  filter.focus();
 }
 
 // ---------- task page ----------
@@ -1163,47 +1164,52 @@ async function toggleNotifications() {
 
 // ---------- keyboard shortcuts ----------
 
-// Single keys work anywhere outside a text field; "g" starts a two-key jump to a page.
-// Inside a text field every key types, except Esc, which leaves the field so shortcuts work again.
+// ⌥ (Option/Alt) + key works everywhere, text fields included: it's matched by the physical key
+// (e.code), since on a Mac ⌥+letter would type a special character. ⌘ and Ctrl are left to the
+// browser and to the text fields' cursor keys; letters that start an accent (⌥E, ⌥I, ⌥N, ⌥U) are
+// avoided. "/" and "?" work alone outside a text field.
 const shortcuts = [
-  { keys: 'n', label: 'New task', run: newTaskDialog },
-  { keys: 'r', label: 'Quick reminder', run: reminderDialog },
-  { keys: 's', label: 'Agent session without a task', run: sessionDialog },
+  { keys: '⌥T', code: 'KeyT', label: 'New task', run: newTaskDialog },
+  { keys: '⌥R', code: 'KeyR', label: 'Quick reminder', run: reminderDialog },
+  { keys: '⌥P', code: 'KeyP', label: 'Agent session without a task', run: sessionDialog },
+  { keys: '⌥M', code: 'KeyM', label: 'Notifications', run: toggleNotifications },
+  { keys: '⌥[', code: 'BracketLeft', label: 'Previous project', run: () => stepProject(-1) },
+  { keys: '⌥]', code: 'BracketRight', label: 'Next project', run: () => stepProject(1) },
+  { keys: '⌥B', code: 'KeyB', label: 'Go to Board', run: () => go('#/board') },
+  { keys: '⌥L', code: 'KeyL', label: 'Go to List', run: () => go('#/list') },
+  { keys: '⌥S', code: 'KeyS', label: 'Go to Sessions', run: () => go('#/sessions') },
+  { keys: '⌥A', code: 'KeyA', label: 'Go to Archive', run: () => go('#/archive') },
+  { keys: '⌥,', code: 'Comma', label: 'Go to Settings', run: () => go('#/settings') },
   { keys: '/', label: 'Filter the list or archive', run: focusFilter },
-  { keys: 'i', label: 'Notifications', run: toggleNotifications },
-  { keys: '[', label: 'Previous project', run: () => stepProject(-1) },
-  { keys: ']', label: 'Next project', run: () => stepProject(1) },
-  { keys: 'g b', label: 'Go to Board', run: () => { location.hash = '#/board'; } },
-  { keys: 'g l', label: 'Go to List', run: () => { location.hash = '#/list'; } },
-  { keys: 'g s', label: 'Go to Sessions', run: () => { location.hash = '#/sessions'; } },
-  { keys: 'g a', label: 'Go to Archive', run: () => { location.hash = '#/archive'; } },
-  { keys: 'g ,', label: 'Go to Settings', run: () => { location.hash = '#/settings'; } },
   { keys: '?', label: 'Show these shortcuts', run: shortcutsDialog },
-  { keys: 'Esc', label: 'Leave a text field; close the notifications', run: closeNotifications },
 ];
-let pendingKey = null; // first key of a two-key shortcut, cleared after a moment
 
-function onShortcut(e) {
-  if (e.metaKey || e.ctrlKey || e.altKey || e.repeat || document.getElementById('dialog').open) return;
-  const field = e.target.closest('input, textarea, select, [contenteditable]');
-  if (field) { if (e.key === 'Escape') field.blur(); return; }
-  const key = e.key === 'Escape' ? 'Esc' : e.key;
-  const keys = pendingKey ? `${pendingKey.key} ${key}` : key;
-  if (pendingKey) { clearTimeout(pendingKey.timer); pendingKey = null; }
-  const sc = shortcuts.find(s => s.keys === keys);
-  if (sc) { e.preventDefault(); sc.run(); return; }
-  if (shortcuts.some(s => s.keys.startsWith(keys + ' '))) {
-    e.preventDefault();
-    pendingKey = { key: keys, timer: setTimeout(() => { pendingKey = null; }, 1500) };
-  }
+// The shortcut a keydown triggers, if any; inField is whether it was typed into a text field.
+function shortcutFor(e, inField) {
+  if (e.metaKey || e.ctrlKey || e.repeat) return null;
+  if (e.altKey) return e.shiftKey ? null : shortcuts.find(s => s.code === e.code) || null;
+  if (inField) return null;
+  return shortcuts.find(s => !s.code && s.keys === e.key) || null;
 }
 
-let filterOnOpen = false; // "/" away from the list opens it with the filter focused
+function onShortcut(e) {
+  if (document.getElementById('dialog').open) return;
+  const inField = !!e.target.closest('input, textarea, select, [contenteditable]');
+  if (e.key === 'Escape' && !inField) { closeNotifications(); return; }
+  const sc = shortcutFor(e, inField);
+  if (sc) { e.preventDefault(); sc.run(); }
+}
+
+// Jumps to a page; on that page already, it redraws it (closing the task dialog).
+function go(hash) {
+  if (location.hash === hash) route();
+  else location.hash = hash;
+}
 
 function focusFilter() {
   const f = view.querySelector('.toolbar input');
   if (f) f.focus();
-  else { filterOnOpen = true; location.hash = '#/list'; }
+  else location.hash = '#/list'; // the list focuses its filter on open
 }
 
 function closeNotifications() {
@@ -1224,7 +1230,7 @@ function shortcutsDialog() {
   dlg.replaceChildren(h('h2', {}, 'Keyboard shortcuts'),
     h('table', { class: 'shortcuts' }, shortcuts.map(s => h('tr', {},
       h('td', {}, s.keys.split(' ').map(k => h('kbd', {}, k))), h('td', {}, s.label)))),
-    h('p', { class: 'muted small' }, '⌘/Ctrl+Enter sends a prompt or reply. Esc also closes a dialog. ',
+    h('p', { class: 'muted small' }, '⌘/Ctrl+Enter sends a prompt or reply. Esc closes a dialog or the notifications. ',
       'Greyed keys next to buttons and links show their shortcut.'),
     h('div', { class: 'dialog-actions' }, h('button', { onclick: () => dlg.close() }, 'Close', hint('Esc'))));
   dlg.showModal();
