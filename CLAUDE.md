@@ -16,7 +16,9 @@ Personal workflow app: Go backend + vanilla JS UI embedded in one binary, SQLite
 - `cmd/assistant` — config + flags, wiring, HTTP server lifecycle.
 - `internal/config` — `~/.assistant/config.json`; new settings get a JSON key and a flag.
 - `internal/store` — all SQL. Schema changes go in a **new** entry appended to `migrations`
-  in `migrate.go`; never edit an applied migration. The DB has a single connection — don't run
+  in `migrate.go`; never edit an applied migration. **User data must survive every upgrade**:
+  migrations carry existing rows over (table rebuilds copy data), never drop data, and come
+  with a test that migrates a populated old-schema DB. The DB has a single connection — don't run
   a query while iterating another query's rows.
 - `internal/agent` — runs `claude -p --output-format stream-json`; `ParseLine` maps stream
   events to transcript messages. Tests use a fake CLI script, never the real `claude`.
