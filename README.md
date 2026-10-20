@@ -26,19 +26,25 @@ One Go binary, one SQLite file, no JavaScript build step.
 
 ```sh
 make build
-./assistant                      # http://127.0.0.1:7777
+./assistant                      # http://127.0.0.1:6767
 ```
 
-Flags:
+Settings live in `~/.assistant/config.json` (created with defaults on first run):
 
-| flag | default | |
-|---|---|---|
-| `-addr` | `127.0.0.1:7777` | must be a loopback address |
-| `-db` | `~/.assistant/assistant.db` | SQLite file |
-| `-claude` | `claude` | CLI binary |
-| `-claude-args` | | extra args for every run, e.g. `"--model opus"` |
-| `-workdir` | `$HOME` | default agent working directory |
-| `-mode` | `bypassPermissions` | default permission mode |
+```json
+{
+  "port": 6767,
+  "db": "~/.assistant/assistant.db",
+  "claude": "claude",
+  "claude_args": "",
+  "workdir": "$HOME",
+  "mode": "bypassPermissions"
+}
+```
+
+Every key also has a flag that overrides the file for one run: `-port`, `-db`, `-claude`,
+`-claude-args`, `-workdir`, `-mode`, plus `-config` to point at another file. The server always
+binds to 127.0.0.1. Avoid ports 6665–6669: browsers refuse them.
 
 Agents run with your user's permissions. The server only binds to localhost and rejects
 non-JSON writes, foreign `Origin`s and foreign `Host` headers so that web pages can't drive it.

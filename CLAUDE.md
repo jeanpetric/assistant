@@ -13,7 +13,8 @@ Personal workflow app: Go backend + vanilla JS UI embedded in one binary, SQLite
 
 ## Layout
 
-- `cmd/assistant` — flags, wiring, HTTP server lifecycle.
+- `cmd/assistant` — config + flags, wiring, HTTP server lifecycle.
+- `internal/config` — `~/.assistant/config.json`; new settings get a JSON key and a flag.
 - `internal/store` — all SQL. Schema changes go in a **new** entry appended to `migrations`
   in `migrate.go`; never edit an applied migration. The DB has a single connection — don't run
   a query while iterating another query's rows.

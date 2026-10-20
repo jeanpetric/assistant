@@ -5,8 +5,8 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -17,27 +17,51 @@ import (
 
 	"github.com/jeanpetric/assistant/internal/agent"
 	"github.com/jeanpetric/assistant/internal/app"
+	"github.com/jeanpetric/assistant/internal/config"
 	"github.com/jeanpetric/assistant/internal/server"
 	"github.com/jeanpetric/assistant/internal/store"
 )
 
 func main() {
 	home, _ := os.UserHomeDir()
-	addr := flag.String("addr", "127.0.0.1:7777", "listen address (keep it on localhost: agents run with your permissions)")
-	dbPath := flag.String("db", filepath.Join(home, ".assistant", "assistant.db"), "SQLite database file")
-	claude := flag.String("claude", "claude", "claude CLI binary")
-	claudeArgs := flag.String("claude-args", "", "extra arguments for every claude invocation, space separated (e.g. \"--model opus\")")
-	workdir := flag.String("workdir", home, "default working directory for agent sessions")
-	mode := flag.String("mode", "bypassPermissions", "default permission mode: "+strings.Join(agent.Modes, ", "))
+	configPath := flag.String("config", filepath.Join(home, ".assistant", "config.json"), "JSON config file (created with defaults if missing)")
+	var f config.Config
+	flag.IntVar(&f.Port, "port", 0, "port on 127.0.0.1 (config: port, default 6767)")
+	flag.StringVar(&f.DB, "db", "", "SQLite database file (config: db)")
+	flag.StringVar(&f.Claude, "claude", "", "claude CLI binary (config: claude)")
+	flag.StringVar(&f.ClaudeArgs, "claude-args", "", "extra arguments for every claude run, space separated, e.g. \"--model opus\" (config: claude_args)")
+	flag.StringVar(&f.Workdir, "workdir", "", "default working directory for agent sessions (config: workdir)")
+	flag.StringVar(&f.Mode, "mode", "", "default permission mode: "+strings.Join(agent.Modes, ", ")+" (config: mode)")
 	flag.Parse()
 
-	if host, _, err := net.SplitHostPort(*addr); err != nil || !isLoopback(host) {
-		log.Fatalf("-addr must be a loopback address, got %q", *addr)
-	}
-	if err := os.MkdirAll(filepath.Dir(*dbPath), 0o700); err != nil {
+	cfg, err := config.Load(*configPath, home)
+	if err != nil {
 		log.Fatal(err)
 	}
-	st, err := store.Open(*dbPath)
+	// Flags given on the command line win over the config file.
+	flag.Visit(func(fl *flag.Flag) {
+		switch fl.Name {
+		case "port":
+			cfg.Port = f.Port
+		case "db":
+			cfg.DB = f.DB
+		case "claude":
+			cfg.Claude = f.Claude
+		case "claude-args":
+			cfg.ClaudeArgs = f.ClaudeArgs
+		case "workdir":
+			cfg.Workdir = f.Workdir
+		case "mode":
+			cfg.Mode = f.Mode
+		}
+	})
+	// Always loopback: agents run with your permissions.
+	addr := fmt.Sprintf("127.0.0.1:%d", cfg.Port)
+
+	if err := os.MkdirAll(filepath.Dir(cfg.DB), 0o700); err != nil {
+		log.Fatal(err)
+	}
+	st, err := store.Open(cfg.DB)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -48,28 +72,20 @@ func main() {
 		log.Fatal(err)
 	}
 
-	runner := agent.ClaudeRunner{Command: *claude, ExtraArgs: strings.Fields(*claudeArgs)}
-	a := app.New(st, runner, *workdir, *mode)
+	runner := agent.ClaudeRunner{Command: cfg.Claude, ExtraArgs: strings.Fields(cfg.ClaudeArgs)}
+	a := app.New(st, runner, cfg.Workdir, cfg.Mode)
 	go a.RunScheduler(ctx, 20*time.Second)
 
-	srv := &http.Server{Addr: *addr, Handler: server.New(a), ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Addr: addr, Handler: server.New(a), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		srv.Shutdown(shutdownCtx)
 	}()
-	log.Printf("assistant listening on http://%s (db %s)", *addr, *dbPath)
+	log.Printf("assistant listening on http://%s (db %s, config %s)", addr, cfg.DB, *configPath)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
 	a.Shutdown()
-}
-
-func isLoopback(host string) bool {
-	if host == "localhost" {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }
