@@ -31,6 +31,12 @@ One Go binary, one SQLite file, no JavaScript build step.
 - **Due times & quick reminders**: any task can have a due time; when it's reached you get a
   notification. *⏰ Reminder* (`⌥R`) creates a reminder task in two keystrokes, with presets
   like *15 min* or *Tomorrow 9:00*.
+- **Trello**: with `trello_key` and `trello_token` in the config, *Settings → Trello* picks a
+  board. Every minute its open cards become tasks (title, description, due date, a *Trello card*
+  link) in the chosen project and lane; a due date changed on Trello updates its task. Moving a
+  task into the *Done lane* archives its card on Trello; moving it out brings the card back.
+  Create the key at trello.com/power-ups/admin and a token with read and write scope from the
+  key's page (*Allowed origins* doesn't matter: the server calls Trello, not the browser).
 
 ### Agent sessions
 
@@ -112,12 +118,14 @@ Settings live in `~/.assistant/config.json` (created with defaults on first run)
   "claude": "claude",
   "claude_args": "",
   "workdir": "$HOME",
-  "mode": "bypassPermissions"
+  "mode": "bypassPermissions",
+  "trello_key": "",
+  "trello_token": ""
 }
 ```
 
 Every key also has a flag that overrides the file for one run: `-port`, `-db`, `-claude`,
-`-claude-args`, `-workdir`, `-mode`, plus `-config` to point at another file. Avoid ports
+`-claude-args`, `-workdir`, `-mode`, `-trello-key`, `-trello-token`, plus `-config` to point at another file. Avoid ports
 6665–6669: browsers refuse them.
 
 Agents run with your user's permissions. The server only binds to 127.0.0.1 and rejects

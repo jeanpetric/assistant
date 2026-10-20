@@ -166,6 +166,67 @@ func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, x)
 }
 
+// ---- trello ----
+
+type trelloView struct {
+	store.TrelloSettings
+	app.TrelloStatus
+	Configured bool `json:"configured"` // key and token are in the config
+}
+
+func (s *Server) trelloView(ctx context.Context) (trelloView, error) {
+	x, err := s.app.Store.TrelloSettings(ctx)
+	return trelloView{x, s.app.TrelloStatus(), s.app.Trello != nil}, err
+}
+
+func (s *Server) getTrello(w http.ResponseWriter, r *http.Request) {
+	v, err := s.trelloView(r.Context())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, v)
+}
+
+func (s *Server) saveTrello(w http.ResponseWriter, r *http.Request) {
+	var x store.TrelloSettings
+	if err := decode(r, &x); err != nil {
+		writeErr(w, err)
+		return
+	}
+	x.Board = strings.TrimSpace(x.Board)
+	if x.ProjectID != nil {
+		if _, err := s.app.Store.Project(r.Context(), *x.ProjectID); errors.Is(err, store.ErrNotFound) {
+			writeErr(w, badRequest{"unknown project_id"})
+			return
+		} else if err != nil {
+			writeErr(w, err)
+			return
+		}
+	}
+	if err := s.checkLane(r.Context(), x.LaneID, "lane_id"); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.checkLane(r.Context(), x.DoneLaneID, "done_lane_id"); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.app.Store.SaveTrelloSettings(r.Context(), x); err != nil {
+		writeErr(w, err)
+		return
+	}
+	s.app.KickTrello()
+	s.getTrello(w, r)
+}
+
+// syncTrello syncs now and reports how it went; a failed sync is in the
+// status, not an error of the request.
+func (s *Server) syncTrello(w http.ResponseWriter, r *http.Request) {
+	s.app.SyncTrello(r.Context())
+	s.getTrello(w, r)
+}
+
 // ---- lanes ----
 
 type laneInput struct {

@@ -1386,7 +1386,8 @@ async function revisionDialog(revisionId, latest, done) {
 
 async function renderSettings() {
   const b = await loadBoard();
-  const [rules, settings, skills] = await Promise.all([api('GET', '/api/rules'), api('GET', '/api/settings'), api('GET', '/api/skills')]);
+  const [rules, settings, skills, trello] = await Promise.all([api('GET', '/api/rules'), api('GET', '/api/settings'), api('GET', '/api/skills'),
+    api('GET', '/api/trello')]);
   state.skills = skills;
   const rerender = () => renderSettings();
 
@@ -1481,7 +1482,7 @@ async function renderSettings() {
       : h('p', { class: 'muted' }, 'No rules yet.'));
 
   view.replaceChildren(h('div', { style: 'max-width:900px' }, projects, lanes, workdirsPanel(settings.workdirs, rerender), rulesPanel,
-    skillsPanel(skills, b, rerender), archivePanel(b.lanes, settings), fields));
+    skillsPanel(skills, b, rerender), archivePanel(b.lanes, settings), trelloPanel(b, trello), fields));
 }
 
 // ---------- skills ----------
@@ -1632,6 +1633,36 @@ function archivePanel(lanes, settings) {
     h('div', { class: 'row' },
       h('div', { class: 'grow' }, h('label', {}, 'Lane'), lane),
       h('div', {}, h('label', {}, 'After'), h('div', { class: 'row' }, amount, unitSel))));
+}
+
+// Trello sync: the board whose open cards become tasks, and the lane that archives their cards.
+function trelloPanel(b, trello) {
+  const id = el => (el.value ? Number(el.value) : null);
+  const board = h('input', { value: trello.board, placeholder: 'https://trello.com/b/… — empty turns the sync off' });
+  const project = select([['', `First project (${b.projects[0]?.name ?? ''})`], ...b.projects.map(p => [p.id, p.name])], trello.project_id ?? '');
+  const lane = select([['', `First lane (${b.lanes[0]?.name ?? ''})`], ...b.lanes.map(l => [l.id, l.name])], trello.lane_id ?? '');
+  const done = select([['', 'None — never archive cards'], ...b.lanes.map(l => [l.id, l.name])], trello.done_lane_id ?? '');
+  const status = h('p', { class: 'small grow' });
+  const show = t => status.replaceChildren(
+    !t.configured ? h('span', { class: 'muted' }, 'Off: add trello_key and trello_token to ~/.assistant/config.json and restart.')
+      : t.error ? h('span', { style: 'color:var(--danger)' }, `Last sync failed: ${t.error}`)
+        : h('span', { class: 'muted' }, t.last_sync_at ? `Last synced ${fmtTime(t.last_sync_at)}` : 'Not synced yet'));
+  const save = async () => {
+    show(await api('PUT', '/api/trello', { board: board.value, project_id: id(project), lane_id: id(lane), done_lane_id: id(done) }));
+    toast('Saved');
+  };
+  [board, project, lane, done].forEach(el => el.addEventListener('change', save));
+  show(trello);
+  return h('div', { class: 'panel' }, h('h2', {}, 'Trello'),
+    h('p', { class: 'muted small' }, "Every minute the board's open cards become tasks with their description and due date, and a card's new due date updates its task. A task moved into the done lane gets its card archived on Trello; moved out again, the card comes back."),
+    h('label', {}, 'Board'), board,
+    h('div', { class: 'row' },
+      h('div', { class: 'grow' }, h('label', {}, 'Project'), project),
+      h('div', { class: 'grow' }, h('label', {}, 'Lane for new cards'), lane),
+      h('div', { class: 'grow' }, h('label', {}, 'Done lane'), done)),
+    h('div', { class: 'row' }, status, h('button', {
+      class: 'ghost', disabled: !trello.configured, onclick: async () => show(await api('POST', '/api/trello/sync')),
+    }, 'Sync now')));
 }
 
 function ruleDialog(rule, lanes, done) {

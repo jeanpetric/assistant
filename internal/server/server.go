@@ -39,6 +39,9 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/settings", s.getSettings)
 	m.HandleFunc("PUT /api/settings", s.saveSettings)
 	m.HandleFunc("GET /api/archive", s.archivedTasks)
+	m.HandleFunc("GET /api/trello", s.getTrello)
+	m.HandleFunc("PUT /api/trello", s.saveTrello)
+	m.HandleFunc("POST /api/trello/sync", s.syncTrello)
 
 	m.HandleFunc("POST /api/lanes", s.createLane)
 	m.HandleFunc("PATCH /api/lanes/{id}", s.updateLane)

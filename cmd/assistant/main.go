@@ -20,6 +20,7 @@ import (
 	"github.com/jeanpetric/assistant/internal/config"
 	"github.com/jeanpetric/assistant/internal/server"
 	"github.com/jeanpetric/assistant/internal/store"
+	"github.com/jeanpetric/assistant/internal/trello"
 )
 
 func main() {
@@ -32,6 +33,8 @@ func main() {
 	flag.StringVar(&f.ClaudeArgs, "claude-args", "", "extra arguments for every claude run, space separated, e.g. \"--model opus\" (config: claude_args)")
 	flag.StringVar(&f.Workdir, "workdir", "", "default working directory for agent sessions (config: workdir)")
 	flag.StringVar(&f.Mode, "mode", "", "default permission mode: "+strings.Join(agent.Modes, ", ")+" (config: mode)")
+	flag.StringVar(&f.TrelloKey, "trello-key", "", "Trello API key (config: trello_key)")
+	flag.StringVar(&f.TrelloToken, "trello-token", "", "Trello API token (config: trello_token)")
 	flag.Parse()
 
 	cfg, err := config.Load(*configPath, home)
@@ -53,6 +56,10 @@ func main() {
 			cfg.Workdir = f.Workdir
 		case "mode":
 			cfg.Mode = f.Mode
+		case "trello-key":
+			cfg.TrelloKey = f.TrelloKey
+		case "trello-token":
+			cfg.TrelloToken = f.TrelloToken
 		}
 	})
 	// Always loopback: agents run with your permissions.
@@ -75,6 +82,10 @@ func main() {
 	runner := agent.ClaudeRunner{Command: cfg.Claude, ExtraArgs: strings.Fields(cfg.ClaudeArgs)}
 	a := app.New(st, runner, cfg.Workdir, cfg.Mode)
 	go a.RunScheduler(ctx, 5*time.Second)
+	if cfg.TrelloKey != "" && cfg.TrelloToken != "" {
+		a.Trello = &trello.Client{Key: cfg.TrelloKey, Token: cfg.TrelloToken}
+		go a.RunTrelloSync(ctx, time.Minute)
+	}
 
 	srv := &http.Server{Addr: addr, Handler: server.New(a), ReadHeaderTimeout: 10 * time.Second}
 	go func() {

@@ -342,6 +342,22 @@ UPDATE sessions SET project_id = (SELECT p.id FROM projects p WHERE p.workdir !=
 ALTER TABLE sessions ADD COLUMN context_tokens INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE sessions ADD COLUMN context_window INTEGER NOT NULL DEFAULT 0;
 `,
+	// Trello sync: the board, where its cards land, which lane archives them,
+	// and the cards already imported.
+	`
+ALTER TABLE settings ADD COLUMN trello_board TEXT NOT NULL DEFAULT '';
+ALTER TABLE settings ADD COLUMN trello_project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL;
+ALTER TABLE settings ADD COLUMN trello_lane_id INTEGER REFERENCES lanes(id) ON DELETE SET NULL;
+ALTER TABLE settings ADD COLUMN trello_done_lane_id INTEGER REFERENCES lanes(id) ON DELETE SET NULL;
+CREATE TABLE trello_cards (
+	card_id TEXT PRIMARY KEY,
+	task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+	due_at INTEGER,
+	closed INTEGER NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO field_defs (key, label, type, position)
+	VALUES ('trello', 'Trello card', 'url', (SELECT COALESCE(MAX(position), -1) + 1 FROM field_defs));
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {
