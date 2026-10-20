@@ -80,7 +80,7 @@ those of the task it builds on). *+ Task on this topic* on a memory starts a lin
 *+ New memory* on a task creates one, optionally written from its sessions so far. Agents of
 linked tasks read them with the task context, and after every successful turn a fork of the
 agent rewrites each one with what the session found out — or leaves it as it is. Every change is
-a revision with a diff you can restore, and a notification tells which memory changed. Edit a
+a revision with a diff you can restore; only a failed update notifies. Edit a
 memory by hand, update it from a session with *Update memory*, or from any Claude Code session
 via the MCP tools `search_memories` and `remember`.
 
