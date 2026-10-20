@@ -1992,11 +1992,17 @@ function stepProject(by) {
   toast(next.name);
 }
 
+// How the ⌥K picker names a project: its running sessions in brackets.
+function pickerLabel(p, running) {
+  return `${p.name} (${running.filter(s => s.project_id === p.id).length})`;
+}
+
 // ⌥K: a list of the projects; ↑/↓ move, Enter (or a click) opens the chosen one.
 async function projectPicker() {
   if (!state.board) await loadBoard();
   const ps = state.board.projects;
   if (!ps.length) return;
+  const running = await api('GET', '/api/sessions?status=running');
   const hash = pickedProjectHash(location.hash);
   const dlg = document.getElementById('dialog');
   let i = Math.max(0, ps.findIndex(p => p.id === state.projectId));
@@ -2006,7 +2012,7 @@ async function projectPicker() {
     remember('project', p.id);
     go(hash);
   };
-  const items = ps.map((p, j) => h('li', { onclick: () => pick(p), onmousemove: () => { i = j; draw(); } }, p.name));
+  const items = ps.map((p, j) => h('li', { onclick: () => pick(p), onmousemove: () => { i = j; draw(); } }, pickerLabel(p, running)));
   function draw() {
     items.forEach((el, j) => el.classList.toggle('selected', j === i));
     items[i].scrollIntoView({ block: 'nearest' });
