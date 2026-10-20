@@ -306,6 +306,23 @@ CREATE INDEX task_memories_memory ON task_memories(memory_id);
 ALTER TABLE sessions ADD COLUMN needs_input TEXT NOT NULL DEFAULT '';
 ALTER TABLE notifications ADD COLUMN session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL;
 `,
+	// A memory is a topic of its own, not tied to a project: project_id goes,
+	// the memories, their revisions and task links stay.
+	`
+CREATE TABLE memories_new (
+	id INTEGER PRIMARY KEY,
+	name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+	description TEXT NOT NULL DEFAULT '',
+	body TEXT NOT NULL DEFAULT '',
+	revision INTEGER NOT NULL DEFAULT 0,
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL
+);
+INSERT INTO memories_new (id, name, description, body, revision, created_at, updated_at)
+	SELECT id, name, description, body, revision, created_at, updated_at FROM memories;
+DROP TABLE memories;
+ALTER TABLE memories_new RENAME TO memories;
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

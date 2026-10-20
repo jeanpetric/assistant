@@ -473,7 +473,7 @@ function closeTaskDialog() {
 // archived or deleted, and `reload` redraws it after a restore.
 async function taskView(id, { every, leave, reload }) {
   await loadBoard();
-  const [data, allMemories] = await Promise.all([api('GET', `/api/tasks/${id}`), api('GET', '/api/memories')]);
+  const data = await api('GET', `/api/tasks/${id}`);
   const t = data.task;
   const save = patch => api('PATCH', `/api/tasks/${id}`, patch).then(nt => Object.assign(t, nt));
 
@@ -485,10 +485,16 @@ async function taskView(id, { every, leave, reload }) {
     sessionPanel.drawContextLabel();
     return refs;
   });
-  const memories = memoryEditor(data.memories, allMemories, async ids => {
-    const refs = await save({ memories: ids }).then(() => api('GET', `/api/tasks/${id}`)).then(d => d.memories);
+  // A change of the memories shows in the context label and the sessions' Update memory.
+  const memoriesChanged = d => {
+    t.memories = d.task.memories;
     sessionPanel.drawContextLabel();
-    return refs;
+    components.forEach(c => c.drawHead());
+    return d.memories;
+  };
+  const memories = memoryEditor(t, data.memories, {
+    setIds: ids => save({ memories: ids }).then(() => api('GET', `/api/tasks/${id}`)).then(memoriesChanged),
+    reload: () => api('GET', `/api/tasks/${id}`).then(memoriesChanged),
   });
   const fields = state.board.fields.map(f => {
     const input = h('input', { value: t.fields[f.key] || '', placeholder: f.type === 'url' ? 'https://…' : '' });
@@ -554,7 +560,7 @@ async function taskView(id, { every, leave, reload }) {
   const sessionsEl = h('div');
   const components = new Map();
   const addSession = s => {
-    const c = sessionComponent(s, s.messages || []);
+    const c = sessionComponent(s, s.messages || [], t);
     components.set(s.id, c);
     sessionsEl.prepend(c.el); // newest first
   };
@@ -621,11 +627,14 @@ function buildsOnEditor(task, refs, usedBy, setIds) {
 }
 
 // The memories the task is linked to, editable. setIds saves a new list and
-// resolves to the updated refs.
-function memoryEditor(refs, all, setIds) {
+// reload fetches it again; both resolve to the updated refs.
+function memoryEditor(task, refs, { setIds, reload }) {
   const el = h('div');
+  const add = memorySearch({
+    exclude: x => refs.some(r => r.id === x.id),
+    onPick: async x => { refs = await setIds([...refs.map(r => r.id), x.id]); draw(); add.input.focus(); },
+  });
   const draw = () => {
-    const free = all.filter(m => !refs.some(r => r.id === m.id));
     el.replaceChildren(...[
       h('label', {}, 'Memory — agents read it and update it after each turn'),
       refs.length ? null : h('div', { class: 'muted small' }, 'None: what agents find out stays in their sessions.'),
@@ -635,22 +644,21 @@ function memoryEditor(refs, all, setIds) {
           class: 'ghost small', title: 'Unlink this memory',
           onclick: async () => { refs = await setIds(refs.filter(x => x.id !== r.id).map(x => x.id)); draw(); },
         }, '✕'))),
-      free.length ? select([['', 'Link a memory…'], ...free.map(m => [m.id, m.name])], '', {
-        onchange: async e => {
-          const id = Number(e.target.value);
-          if (id) { refs = await setIds([...refs.map(r => r.id), id]); draw(); }
-        },
-      }) : h('a', { class: 'small', href: '#/memory', onclick: closeTaskDialog }, all.length ? 'All memories are linked' : 'Create a memory…'),
+      add.el,
+      h('button', {
+        class: 'ghost small', title: 'A new memory on this task\'s topic, linked to it',
+        onclick: () => memoryDialog({ task, done: async () => { refs = await reload(); draw(); } }),
+      }, '+ New memory'),
     ].flat().filter(c => c != null));
   };
   draw();
   return { el };
 }
 
-// A search box over every task (archived ones included) with a list of matches:
-// ↑/↓ choose, Enter (or a click) picks one, Esc closes the list. Focusing the
-// empty box lists the most recently updated tasks.
-function taskSearch({ placeholder, exclude, note, onPick }) {
+// A search box with a list of matches: ↑/↓ choose, Enter (or a click) picks
+// one, Esc closes the list. find(query) resolves to the matches (focusing the
+// empty box lists find('')); label(x) draws one, none says there are none.
+function searchBox({ placeholder, find, label, none, onPick }) {
   const input = h('input', { type: 'search', placeholder });
   const list = h('ul', { class: 'picker task-search', hidden: true });
   let found = [], i = 0, timer = 0, seq = 0;
@@ -659,17 +667,17 @@ function taskSearch({ placeholder, exclude, note, onPick }) {
       class: j === i ? 'selected' : '',
       onmousedown: e => { e.preventDefault(); pick(x); },
       onmousemove: () => { if (i !== j) { i = j; draw(); } },
-    }, `#${x.id} ${x.title}`, ...note(x).filter(Boolean).map(n => h('span', { class: 'small task-search-note' }, ' · ' + n)))));
-    if (!found.length) list.append(h('li', { class: 'muted small' }, 'No matching tasks'));
+    }, ...label(x))));
+    if (!found.length) list.append(h('li', { class: 'muted small' }, none));
     list.hidden = false;
     list.children[i]?.scrollIntoView({ block: 'nearest' });
   };
   const close = () => { clearTimeout(timer); seq++; list.hidden = true; };
   const search = async () => {
     const n = ++seq;
-    const ts = await api('GET', '/api/tasks?limit=50&q=' + encodeURIComponent(input.value.trim()));
+    const xs = await find(input.value.trim());
     if (n !== seq) return;
-    found = ts.filter(x => !exclude(x)).slice(0, 20);
+    found = xs.slice(0, 20);
     i = 0;
     draw();
   };
@@ -684,6 +692,25 @@ function taskSearch({ placeholder, exclude, note, onPick }) {
     else if (e.key === 'Escape' && !list.hidden) { e.preventDefault(); e.stopPropagation(); close(); }
   });
   return { el: h('div', { class: 'task-search-box' }, input, list), input };
+}
+
+// A search box over every task (archived ones included).
+function taskSearch({ placeholder, exclude, note, onPick }) {
+  return searchBox({
+    placeholder, onPick, none: 'No matching tasks',
+    find: async q => (await api('GET', '/api/tasks?limit=50&q=' + encodeURIComponent(q))).filter(x => !exclude(x)),
+    label: x => [`#${x.id} ${x.title}`, ...note(x).filter(Boolean).map(n => h('span', { class: 'small task-search-note' }, ' · ' + n))],
+  });
+}
+
+// A search box over the memories by the words of their name, description
+// and body; the empty box lists the most recently used.
+function memorySearch({ exclude, onPick }) {
+  return searchBox({
+    placeholder: 'Link a memory — search by words…', onPick, none: 'No matching memories',
+    find: async q => (await api('GET', q ? '/api/memories?q=' + encodeURIComponent(q) : '/api/memories')).filter(x => !exclude(x)),
+    label: x => [x.name, x.description ? h('span', { class: 'small task-search-note' }, ' · ' + trunc(x.description, 80)) : null].filter(Boolean),
+  });
 }
 
 function newSessionPanel(task, onStarted) {
@@ -771,7 +798,8 @@ function appendMessage(body, m) {
   group.firstElementChild.textContent = n === 1 ? '1 tool call' : `${n} tool calls`;
 }
 
-function sessionComponent(session, messages) {
+// task: the session's task, if it is shown on the task's page.
+function sessionComponent(session, messages, task) {
   let last = 0;
   const body = h('div', { class: 'session-body' });
   const head = h('div', { class: 'session-head' });
@@ -853,7 +881,7 @@ function sessionComponent(session, messages) {
       running ? h('button', { class: 'danger small', onclick: () => api('POST', `/api/sessions/${s.id}/cancel`) }, 'Stop') : null,
       resumable ? h('button', { class: 'small', title: 'Continue this session where it stopped', onclick: doResume }, 'Resume') : null,
       s.memorizing ? h('span', { class: 'badge' }, h('span', { class: 'pulse' }), 'updating memory') : null,
-      !running && !s.memorizing && s.task_id && s.claude_session_id ? h('button', {
+      !running && !s.memorizing && task?.memories.length && s.claude_session_id ? h('button', {
         class: 'ghost small', title: 'Update the task\'s memories with what this session found out (it also happens after every turn)',
         onclick: async () => {
           await api('POST', `/api/sessions/${s.id}/memory`);
@@ -914,6 +942,7 @@ function sessionComponent(session, messages) {
 
   // The countdowns and the turn's elapsed time tick even when nothing else changes.
   c.drawLimits = () => { drawLimits(); drawWorking(); };
+  c.drawHead = drawHead;
 
   c.update = (s, msgs) => {
     c.session = s;
@@ -1086,39 +1115,62 @@ const sourceLabel = { user: 'edited by hand', agent: 'updated by an agent', note
 
 async function renderMemories() {
   if (!state.board) await loadBoard();
-  const xs = await api('GET', '/api/memories');
+  const all = await api('GET', '/api/memories'); // the most recently used first
+  const filter = h('input', { type: 'search', placeholder: 'Filter by words of the name, description or body…', value: recall('memory-filter') || '' });
+  const tbody = h('tbody');
+  const empty = h('p', { class: 'muted' });
+  let seq = 0, timer = 0;
+  const draw = async () => {
+    const q = filter.value.trim(), n = ++seq;
+    remember('memory-filter', q);
+    const xs = q ? await api('GET', '/api/memories?q=' + encodeURIComponent(q)) : all;
+    if (n !== seq) return;
+    tbody.replaceChildren(...xs.map(m => h('tr', { class: 'clickable', onclick: () => { location.hash = `#/memory/${m.id}`; } },
+      h('td', {}, m.name, m.description ? h('div', { class: 'muted small' }, m.description) : null),
+      h('td', { class: 'muted small' }, m.tasks),
+      h('td', { class: 'muted small', title: 'Its latest revision, or the latest activity in a session of a task linked to it' }, ago(m.last_used)))));
+    empty.textContent = xs.length ? '' : all.length ? 'No memory has these words.' : 'No memories yet.';
+  };
+  filter.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(draw, 150); });
   view.replaceChildren(h('div', { class: 'panel', style: 'max-width:900px' },
     h('div', { class: 'toolbar' }, h('h2', { class: 'grow', style: 'flex:1' }, 'Memory'),
-      h('button', { onclick: memoryDialog }, '+ New memory')),
-    h('p', { class: 'muted small' }, 'Lasting knowledge kept across tasks. Link a memory to tasks: their agents read it with the task context, ' +
-      'and after each turn a copy of the agent rewrites it with what the session found out. Every change is kept as a revision.'),
-    xs.length ? h('table', {}, h('thead', {}, h('tr', {}, ['Memory', 'Tasks', 'New tasks of', 'Updated'].map(x => h('th', {}, x)))),
-      h('tbody', {}, xs.map(m => h('tr', { class: 'clickable', onclick: () => { location.hash = `#/memory/${m.id}`; } },
-        h('td', {}, m.name, m.description ? h('div', { class: 'muted small' }, m.description) : null),
-        h('td', { class: 'muted small' }, m.tasks),
-        h('td', { class: 'muted small' }, m.project_id ? projectName(m.project_id) : '—'),
-        h('td', { class: 'muted small' }, ago(m.updated_at))))))
-      : h('p', { class: 'muted' }, 'No memories yet.')));
+      h('button', { onclick: () => memoryDialog() }, '+ New memory')),
+    h('p', { class: 'muted small' }, 'Lasting knowledge on a topic, kept across tasks. Link a memory to tasks: their agents read it with the task context, ' +
+      'and after each turn a copy of the agent rewrites it with what the session found out. Every change is kept as a revision. ' +
+      'A new task is suggested the memories on its topic.'),
+    filter,
+    h('table', {}, h('thead', {}, h('tr', {}, ['Memory', 'Tasks', 'Last used'].map(x => h('th', {}, x)))), tbody),
+    empty));
+  await draw();
+  filter.focus();
 }
 
-function memoryDialog() {
+// opts.task: link the new memory to this task, optionally writing it from
+// the task's sessions so far; then done() instead of opening the memory.
+function memoryDialog(opts = {}) {
+  const { task, done } = opts;
   const dlg = document.getElementById('dialog');
-  const name = h('input', { placeholder: 'e.g. Productive API' });
+  const name = h('input', { placeholder: 'e.g. Productive API', value: task ? task.title : '' });
   const description = h('input', { placeholder: 'What belongs in it — agents go by this' });
-  const project = select([['', 'No project'], ...state.board.projects.map(p => [p.id, p.name])], '');
+  const fill = h('input', { type: 'checkbox', checked: true });
   const create = async () => {
     if (!name.value.trim()) return;
-    const m = await api('POST', '/api/memories', { name: name.value, description: description.value, project_id: Number(project.value) || null });
+    const m = await api('POST', '/api/memories', {
+      name: name.value, description: description.value, ...(task ? { task_id: task.id, fill: fill.checked } : {}),
+    });
     dlg.close();
-    location.hash = `#/memory/${m.id}`;
+    if (!task) { location.hash = `#/memory/${m.id}`; return; }
+    toast(fill.checked ? `Memory ${m.name} linked; writing it from the task's sessions…` : `Memory ${m.name} linked`);
+    done?.(m);
   };
-  submitOnCmdEnter([name, description, project], create);
-  dlg.replaceChildren(h('h2', {}, 'New memory'),
-    h('label', {}, 'Name'), name, h('label', {}, 'About'), description,
-    h('label', {}, 'Link it to the new tasks of'), project,
-    h('div', { class: 'dialog-actions' }, cancelButton(dlg), h('button', { onclick: create }, 'Create', hint('⌘↵'))));
+  submitOnCmdEnter([name, description], create);
+  dlg.replaceChildren(...[h('h2', {}, task ? `New memory for #${task.id}` : 'New memory'),
+    h('label', {}, 'Name — the topic'), name, h('label', {}, 'About'), description,
+    task ? h('label', { class: 'row' }, fill, h('span', {}, 'Write it from this task\'s agent sessions so far')) : null,
+    h('div', { class: 'dialog-actions' }, cancelButton(dlg), h('button', { onclick: create }, 'Create', hint('⌘↵')))].filter(Boolean));
   dlg.showModal();
   name.focus();
+  name.select();
 }
 
 async function renderMemory(id) {
@@ -1130,9 +1182,6 @@ async function renderMemory(id) {
 
   const name = h('input', { class: 'title-input', value: m.name, onchange: e => save({ name: e.target.value }) });
   const description = h('input', { value: m.description, placeholder: 'What belongs in it — agents go by this', onchange: e => save({ description: e.target.value }) });
-  const project = select([['', 'No project'], ...state.board.projects.map(p => [p.id, p.name])], m.project_id ?? '', {
-    onchange: e => save({ project_id: Number(e.target.value) || 0 }),
-  });
   const body = h('textarea', { rows: 26, class: 'mono', placeholder: 'Markdown. Agents fill it in after their turns; you can write in it too.' }, m.body);
   const preview = h('div', { class: 'md memory-preview hidden' });
   const note = h('div', { class: 'muted small grow' });
@@ -1159,6 +1208,7 @@ async function renderMemory(id) {
 
   const revisions = h('div');
   const tasks = h('div');
+  const filling = h('div', { class: 'badge hidden' }, h('span', { class: 'pulse' }), 'being written from a task\'s sessions');
   const drawSide = () => {
     revisions.replaceChildren(...(data.revisions.length ? data.revisions.map((r, i) => h('div', { class: 'revision' },
       h('a', { href: '#', onclick: e => { e.preventDefault(); revisionDialog(r.id, i === 0, reload); } }, fmtTime(r.created_at)),
@@ -1168,6 +1218,7 @@ async function renderMemory(id) {
     tasks.replaceChildren(...(data.tasks.length ? data.tasks.map(t => h('div', { class: 'link-ref' },
       h('a', { href: `#/task/${t.id}` }, `#${t.id} ${t.title}`), t.archived ? ' (archived)' : ''))
       : [h('p', { class: 'muted small' }, 'No task is linked to it yet; link it from a task.')]));
+    filling.classList.toggle('hidden', !data.filling);
   };
   // Fetches the memory again; the editor follows unless it has unsaved changes.
   const reload = async () => {
@@ -1185,7 +1236,9 @@ async function renderMemory(id) {
       h('div', { class: 'panel' },
         h('a', { href: '#/memory', class: 'btn ghost small' }, '← Memory'),
         name, h('label', {}, 'About'), description,
-        h('label', {}, 'Link it to the new tasks of'), project,
+        h('div', { class: 'row', style: 'margin-top:14px' },
+          h('button', { title: 'A new task linked to this memory: its agents read it and add to it', onclick: () => newTaskDialog({ memory: m }) },
+            '+ Task on this topic')),
         h('div', { class: 'row', style: 'margin-top:14px' },
           h('span', { class: 'muted small grow' }, 'Created ' + fmtTime(m.created_at)),
           h('button', {
@@ -1196,7 +1249,7 @@ async function renderMemory(id) {
             },
           }, 'Delete'))),
       h('div', { class: 'panel' }, h('h3', {}, 'Tasks'), tasks),
-      h('div', { class: 'panel' }, h('h3', {}, 'Revisions'), revisions)),
+      h('div', { class: 'panel' }, h('h3', {}, 'Revisions'), filling, revisions)),
     h('div', { class: 'panel' },
       body, preview,
       h('div', { class: 'row', style: 'margin-top:8px' }, note,
@@ -1557,7 +1610,8 @@ async function reminderDialog() {
 
 // ---------- new task dialog ----------
 
-// opts.buildsOn: the task the new one follows up on; it goes in the same project.
+// opts.buildsOn: the task the new one follows up on; it goes in the same
+// project and gets its memories. opts.memory: a memory to link it to.
 async function newTaskDialog(opts = {}) {
   if (!state.board) await loadBoard();
   const from = opts.buildsOn;
@@ -1568,12 +1622,15 @@ async function newTaskDialog(opts = {}) {
   const project = select(state.board.projects.map(p => [p.id, p.name]), from ? from.project_id : state.projectId);
   const lane = select(state.board.lanes.map(l => [l.id, l.name]), state.board.lanes[0]?.id);
   const due = h('input', { type: 'datetime-local' });
+  const memories = memoryPicker(title, desc);
+  if (opts.memory) memories.add(opts.memory);
+  if (from) (await api('GET', `/api/tasks/${from.id}`)).memories.forEach(memories.add);
   const create = async () => {
     if (!title.value.trim()) return;
     if (due.value) askNotificationPermission();
     const t = await api('POST', '/api/tasks', {
       title: title.value, description: desc.value, kind: kind.value, lane_id: Number(lane.value), due_at: fromLocalInput(due.value),
-      project_id: Number(project.value), context_from: from ? [from.id] : [],
+      project_id: Number(project.value), context_from: from ? [from.id] : [], memories: memories.ids(),
     });
     dlg.close();
     // Back to the board, on the new task's project, where the task now shows.
@@ -1584,15 +1641,50 @@ async function newTaskDialog(opts = {}) {
   title.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey) create(); });
   submitOnCmdEnter([title, desc, kind, project, lane, due], create);
   // replaceChildren would draw a null as the text "null", unlike h().
-  dlg.replaceChildren(...[h('h2', {}, from ? 'New follow-up task' : 'New task'),
+  dlg.replaceChildren(...[h('h2', {}, from ? 'New follow-up task' : opts.memory ? `New task on ${opts.memory.name}` : 'New task'),
     from ? h('p', { class: 'muted small' }, `Builds on #${from.id} ${from.title}: its agents' results go into this task's agent context.`) : null,
     h('label', {}, 'Title'), title, h('label', {}, 'Description'), desc,
+    memories.el,
     h('label', {}, 'Project'), project,
     h('div', { class: 'row' }, h('div', { class: 'grow' }, h('label', {}, 'Kind'), kind), h('div', { class: 'grow' }, h('label', {}, 'Lane'), lane)),
     h('label', {}, 'Due (optional) — you get a notification at this time'), due,
     h('div', { class: 'dialog-actions' }, cancelButton(dlg), h('button', { onclick: create }, 'Create', hint('⌘↵')))].filter(Boolean));
   dlg.showModal();
   title.focus();
+}
+
+// The memories of a new task: picked by search, or suggested from the words
+// of its title and description as they are typed, linked with one click.
+function memoryPicker(title, desc) {
+  let picked = []; // {id, name}
+  let suggested = [], seq = 0, timer = 0;
+  const el = h('div');
+  const add = m => { if (!picked.some(x => x.id === m.id)) picked.push({ id: m.id, name: m.name }); draw(); };
+  const search = memorySearch({ exclude: x => picked.some(p => p.id === x.id), onPick: m => { add(m); search.input.focus(); } });
+  const draw = () => {
+    const free = suggested.filter(m => !picked.some(p => p.id === m.id)).slice(0, 5);
+    el.replaceChildren(...[
+      h('label', {}, 'Memory — its agents read it and add to it'),
+      picked.map(m => h('div', { class: 'field-row' }, h('span', { class: 'link-ref' }, m.name),
+        h('button', { class: 'ghost small', title: 'Unlink this memory', onclick: () => { picked = picked.filter(x => x.id !== m.id); draw(); } }, '✕'))),
+      free.length ? h('div', { class: 'memory-suggestions' }, h('span', { class: 'muted small' }, 'On this topic:'),
+        free.map(m => h('button', {
+          class: 'ghost small', title: (m.description ? m.description + ' — ' : '') + 'click to link',
+          onclick: () => add(m),
+        }, '+ ' + m.name))) : null,
+      search.el,
+    ].flat().filter(c => c != null));
+  };
+  const suggest = async () => {
+    const q = `${title.value} ${desc.value}`.trim(), n = ++seq;
+    const xs = q ? await api('GET', '/api/memories?q=' + encodeURIComponent(q)) : [];
+    if (n !== seq) return;
+    suggested = xs;
+    draw();
+  };
+  for (const f of [title, desc]) f.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(suggest, 300); });
+  draw();
+  return { el, add, ids: () => picked.map(m => m.id) };
 }
 
 // ---------- notifications & global counters ----------

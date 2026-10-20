@@ -1,12 +1,15 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // Memory is knowledge kept across tasks: a Markdown document that the agents
@@ -17,12 +20,16 @@ type Memory struct {
 	Description string `json:"description"`
 	Body        string `json:"body"`
 	// Revision is the id of the latest revision, 0 while the memory has none.
-	Revision int64 `json:"revision"`
-	// ProjectID, if set, links the memory to that project's new tasks.
-	ProjectID *int64    `json:"project_id"`
+	Revision  int64     `json:"revision"`
 	Tasks     int       `json:"tasks"` // how many tasks link to it
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+	// LastUsed is its latest revision or the latest activity in a session of
+	// a task linked to it, whichever is newer; its creation without either.
+	LastUsed time.Time `json:"last_used"`
+	// Score ranks a search result: the more of the words and the more
+	// telling the place (name, description, body), the higher.
+	Score int `json:"score,omitempty"`
 }
 
 // Sources of a memory revision.
@@ -49,22 +56,23 @@ var (
 	ErrBadMemory     = errors.New("unknown memory")
 )
 
-const memoryCols = `m.id, m.name, m.description, m.body, m.revision, m.project_id, m.created_at, m.updated_at,
-	(SELECT COUNT(*) FROM task_memories tm WHERE tm.memory_id = m.id)`
+const memoryCols = `m.id, m.name, m.description, m.body, m.revision, m.created_at, m.updated_at,
+	(SELECT COUNT(*) FROM task_memories tm WHERE tm.memory_id = m.id),
+	MAX(m.created_at,
+		COALESCE((SELECT MAX(r.created_at) FROM memory_revisions r WHERE r.memory_id = m.id), 0),
+		COALESCE((SELECT MAX(x.updated_at) FROM task_memories tm JOIN sessions x ON x.task_id = tm.task_id WHERE tm.memory_id = m.id), 0))`
 
 func scanMemory(sc interface{ Scan(...any) error }) (Memory, error) {
 	var x Memory
-	var project sql.NullInt64
-	var created, updated int64
-	err := sc.Scan(&x.ID, &x.Name, &x.Description, &x.Body, &x.Revision, &project, &created, &updated, &x.Tasks)
-	x.ProjectID = fromNullID(project)
-	x.CreatedAt, x.UpdatedAt = fromMillis(created), fromMillis(updated)
+	var created, updated, used int64
+	err := sc.Scan(&x.ID, &x.Name, &x.Description, &x.Body, &x.Revision, &created, &updated, &x.Tasks, &used)
+	x.CreatedAt, x.UpdatedAt, x.LastUsed = fromMillis(created), fromMillis(updated), fromMillis(used)
 	return x, err
 }
 
-// Memories lists the memories by name.
+// Memories lists the memories, the most recently used first.
 func (s *Store) Memories(ctx context.Context) ([]Memory, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+memoryCols+` FROM memories m ORDER BY m.name, m.id`)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+memoryCols+` FROM memories m`)
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +85,16 @@ func (s *Store) Memories(ctx context.Context) ([]Memory, error) {
 		}
 		out = append(out, x)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	slices.SortStableFunc(out, func(a, b Memory) int {
+		if c := b.LastUsed.Compare(a.LastUsed); c != 0 {
+			return c
+		}
+		return cmp.Compare(b.ID, a.ID)
+	})
+	return out, nil
 }
 
 func (s *Store) Memory(ctx context.Context, id int64) (Memory, error) {
@@ -93,8 +110,8 @@ func (s *Store) CreateMemory(ctx context.Context, x Memory) (Memory, error) {
 	var id int64
 	err := s.tx(ctx, func(tx *sql.Tx) error {
 		now := s.ts()
-		res, err := tx.ExecContext(ctx, `INSERT INTO memories (name, description, project_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
-			x.Name, x.Description, x.ProjectID, now, now)
+		res, err := tx.ExecContext(ctx, `INSERT INTO memories (name, description, created_at, updated_at) VALUES (?, ?, ?, ?)`,
+			x.Name, x.Description, now, now)
 		if err != nil {
 			return memoryErr(err)
 		}
@@ -111,11 +128,11 @@ func (s *Store) CreateMemory(ctx context.Context, x Memory) (Memory, error) {
 	return s.Memory(ctx, id)
 }
 
-// UpdateMemory saves name, description and project; the body changes with
+// UpdateMemory saves name and description; the body changes with
 // SetMemoryBody.
 func (s *Store) UpdateMemory(ctx context.Context, x Memory) error {
-	return memoryErr(affected(s.db.ExecContext(ctx, `UPDATE memories SET name = ?, description = ?, project_id = ?, updated_at = ? WHERE id = ?`,
-		x.Name, x.Description, x.ProjectID, s.ts(), x.ID)))
+	return memoryErr(affected(s.db.ExecContext(ctx, `UPDATE memories SET name = ?, description = ?, updated_at = ? WHERE id = ?`,
+		x.Name, x.Description, s.ts(), x.ID)))
 }
 
 func memoryErr(err error) error {
@@ -288,18 +305,17 @@ func setTaskMemories(ctx context.Context, tx *sql.Tx, taskID int64, ids []int64)
 	return nil
 }
 
-// inheritedMemories are the memories a new task gets when it names none: the
-// project's own and those of the tasks it builds on.
-func inheritedMemories(ctx context.Context, tx *sql.Tx, projectID int64, sources []int64) ([]int64, error) {
-	q := `SELECT id FROM memories WHERE project_id = ?`
-	args := []any{projectID}
-	if len(sources) > 0 {
-		q += ` UNION SELECT memory_id FROM task_memories WHERE task_id IN (?` + strings.Repeat(", ?", len(sources)-1) + `)`
-		for _, id := range sources {
-			args = append(args, id)
-		}
+// inheritedMemories are the memories a new task gets when it names none:
+// those of the tasks it builds on.
+func inheritedMemories(ctx context.Context, tx *sql.Tx, sources []int64) ([]int64, error) {
+	if len(sources) == 0 {
+		return nil, nil
 	}
-	rows, err := tx.QueryContext(ctx, q, args...)
+	args := []any{}
+	for _, id := range sources {
+		args = append(args, id)
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT memory_id FROM task_memories WHERE task_id IN (?`+strings.Repeat(", ?", len(sources)-1)+`) ORDER BY memory_id`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -313,4 +329,87 @@ func inheritedMemories(ctx context.Context, tx *sql.Tx, projectID int64, sources
 		out = append(out, id)
 	}
 	return out, rows.Err()
+}
+
+// SearchMemories finds the memories whose name, description or body has any
+// of the query's words, best first: by Score, then the most recently used.
+// A word matches the words that start with it, less its last two letters
+// when it is long, so "memoriju" finds "memorija". Short and common words
+// are left out; a query without others finds nothing.
+func (s *Store) SearchMemories(ctx context.Context, query string) ([]Memory, error) {
+	words := searchWords(query)
+	if len(words) == 0 {
+		return []Memory{}, nil
+	}
+	all, err := s.Memories(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := []Memory{}
+	for _, m := range all {
+		name, desc, body := textWords(m.Name), textWords(m.Description), textWords(m.Body)
+		for _, w := range words {
+			switch {
+			case hasWord(name, w):
+				m.Score += 3
+			case hasWord(desc, w):
+				m.Score += 2
+			case hasWord(body, w):
+				m.Score++
+			}
+		}
+		if m.Score > 0 {
+			out = append(out, m)
+		}
+	}
+	slices.SortStableFunc(out, func(a, b Memory) int { return cmp.Compare(b.Score, a.Score) })
+	return out, nil
+}
+
+// stopWords are left out of searches: they would match nearly every memory.
+var stopWords = map[string]bool{}
+
+func init() {
+	for _, w := range strings.Fields(`the and for with from that this into have has are was were not but you your our can how what when why which
+		all any its about should would will use using make need add also there then than them they some only
+		ali ako bez biti bio bila će ćemo dok gdje ili ima isto jer još kad kada kako koja koje koji kroz mora može nakon
+		nije niti oko ovaj ovo ovu pri sad sada sam samo sve što tako taj treba već više zbog želim`) {
+		stopWords[w] = true
+	}
+}
+
+// searchWords are the distinct words of a query worth searching for, as
+// prefixes: lower case, at least three letters, long ones less their last two.
+func searchWords(q string) []string {
+	var out []string
+	for _, w := range splitWords(q) {
+		r := []rune(w)
+		if len(r) < 3 || stopWords[w] {
+			continue
+		}
+		if len(r) > 5 {
+			w = string(r[:len(r)-2])
+		}
+		if !slices.Contains(out, w) {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+func splitWords(s string) []string {
+	return strings.FieldsFunc(strings.ToLower(s), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
+}
+
+// textWords are the distinct words of a text, sorted, for hasWord.
+func textWords(s string) []string {
+	ws := splitWords(s)
+	slices.Sort(ws)
+	return slices.Compact(ws)
+}
+
+// hasWord tells whether a sorted word list has a word starting with prefix.
+func hasWord(sorted []string, prefix string) bool {
+	i, _ := slices.BinarySearch(sorted, prefix)
+	return i < len(sorted) && strings.HasPrefix(sorted[i], prefix)
 }

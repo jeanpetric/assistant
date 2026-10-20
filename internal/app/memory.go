@@ -195,6 +195,68 @@ func (a *App) memorize(ctx context.Context, sessionID int64) {
 	}
 }
 
+// FillMemory writes a memory just linked to a task from the task's sessions
+// so far, oldest first, in the background, like an update after each of
+// their turns. A notification tells when it is done, or why it failed.
+func (a *App) FillMemory(taskID, memoryID int64) {
+	a.mu.Lock()
+	if _, ok := a.filling[memoryID]; ok || a.stopping {
+		a.mu.Unlock()
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	a.filling[memoryID] = cancel
+	a.wg.Add(1)
+	a.mu.Unlock()
+
+	go func() {
+		defer a.wg.Done()
+		defer func() {
+			a.mu.Lock()
+			delete(a.filling, memoryID)
+			a.mu.Unlock()
+			cancel()
+		}()
+		sessions, err := a.Store.Sessions(ctx, taskID, "")
+		if err != nil {
+			log.Printf("task %d: memory %d: %v", taskID, memoryID, err)
+			return
+		}
+		var last store.Session
+		var m store.Memory
+		changed := false
+		for i := len(sessions) - 1; i >= 0; i-- { // listed newest first
+			sess := sessions[i]
+			if n, err := a.Store.LastMessageID(ctx, sess.ID); err != nil || n == 0 {
+				continue
+			}
+			var ch bool
+			m, ch, err = a.memorizeOne(ctx, sess, memoryID)
+			switch {
+			case ctx.Err() != nil, errors.Is(err, store.ErrNotFound):
+				return
+			case err != nil:
+				log.Printf("session %d: memory %d: %v", sess.ID, memoryID, err)
+				a.notifySession(ctx, sess, fmt.Sprintf("Could not write memory %q from session %q: %v", m.Name, sess.Title, err))
+				return
+			}
+			changed = changed || ch
+			last = sess
+		}
+		if changed {
+			a.notifySession(ctx, last, fmt.Sprintf("Memory %q written from the task's sessions", m.Name))
+		}
+	}()
+}
+
+// Filling tells whether the memory is being written from a task's sessions.
+func (a *App) Filling(memoryID int64) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	_, ok := a.filling[memoryID]
+	return ok
+}
+
 // memorizeOne asks for the memory's new version and saves it. Updates of one
 // memory run one at a time; if it was edited meanwhile, it is asked again.
 func (a *App) memorizeOne(ctx context.Context, sess store.Session, memoryID int64) (store.Memory, bool, error) {

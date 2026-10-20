@@ -257,3 +257,85 @@ func TestLineDiff(t *testing.T) {
 		t.Fatalf("beyond the bound the whole text changes: %d lines", len(got))
 	}
 }
+
+// A memory is a topic: task A on it updates it, and task B on the same topic,
+// months later, finds it by its words, reads it and adds to it.
+func TestMemoryTopicAcrossTasks(t *testing.T) {
+	a, r := newApp(t)
+	ctx := context.Background()
+	facts := 0
+	r.result = func(req agent.Request) string {
+		if !req.Fork {
+			return "done"
+		}
+		facts++
+		body := req.Prompt[strings.Index(req.Prompt, "<memory>\n")+len("<memory>\n") : strings.Index(req.Prompt, "\n</memory>")]
+		return strings.TrimSpace(body + "\n- fact " + itoa(int64(facts)))
+	}
+	m, _ := a.Store.CreateMemory(ctx, store.Memory{Name: "Invoice export", Description: "Exporting invoices to the accounting system"})
+	other, _ := a.Store.CreateMemory(ctx, store.Memory{Name: "Caching", Body: "Redis keys"})
+	taskA, _ := a.Store.CreateTask(ctx, store.Task{Title: "Export invoices as CSV", Memories: []int64{m.ID}})
+	a.StartSession(ctx, StartOpts{TaskID: taskA.ID, Prompt: "build it"})
+	a.Wait()
+	if got, _ := a.Store.Memory(ctx, m.ID); got.Body != "- fact 1" {
+		t.Fatalf("after A = %q", got.Body)
+	}
+
+	// Task B, in another project, is suggested the memory by its words.
+	p, _ := a.Store.CreateProject(ctx, store.Project{Name: "Elsewhere"})
+	title, desc := "Invoices exported twice", "The accounting export sends some invoices again"
+	found, _ := a.Store.SearchMemories(ctx, title+" "+desc)
+	if len(found) != 1 || found[0].ID != m.ID {
+		t.Fatalf("suggested = %+v (other is %d)", found, other.ID)
+	}
+	taskB, _ := a.Store.CreateTask(ctx, store.Task{Title: title, Description: desc, ProjectID: p.ID, Memories: []int64{found[0].ID}})
+	if brief := a.TaskBrief(ctx, taskB); !strings.Contains(brief, "## Memory #"+itoa(m.ID)+": Invoice export") || !strings.Contains(brief, "- fact 1") {
+		t.Fatalf("B's brief:\n%s", brief)
+	}
+	sessB, _ := a.StartSession(ctx, StartOpts{TaskID: taskB.ID, Prompt: "fix it"})
+	a.Wait()
+	if got, _ := a.Store.Memory(ctx, m.ID); got.Body != "- fact 1\n- fact 2" || got.Tasks != 2 {
+		t.Fatalf("after B = %+v", got)
+	}
+	revs, _ := a.Store.MemoryRevisions(ctx, m.ID)
+	if len(revs) != 2 || *revs[0].TaskID != taskB.ID || *revs[0].SessionID != sessB.ID || *revs[1].TaskID != taskA.ID {
+		t.Fatalf("revisions = %+v", revs)
+	}
+}
+
+func TestFillMemoryFromTaskSessions(t *testing.T) {
+	a, r := newApp(t)
+	ctx := context.Background()
+	task, _ := a.Store.CreateTask(ctx, store.Task{Title: "Work", Memories: []int64{}})
+	first, _ := a.StartSession(ctx, StartOpts{TaskID: task.ID, Prompt: "first"})
+	a.Wait()
+	second, _ := a.StartSession(ctx, StartOpts{TaskID: task.ID, Prompt: "second"})
+	a.Wait()
+	before := len(r.requests())
+
+	var seen []string
+	r.result = func(req agent.Request) string {
+		body := req.Prompt[strings.Index(req.Prompt, "<memory>\n")+len("<memory>\n") : strings.Index(req.Prompt, "\n</memory>")]
+		seen = append(seen, body)
+		return strings.TrimSpace(body + "\n- from a session")
+	}
+	m, _ := a.Store.CreateMemory(ctx, store.Memory{Name: "Topic"})
+	a.Store.SetTaskMemories(ctx, task.ID, []int64{m.ID})
+	a.FillMemory(task.ID, m.ID)
+	a.Wait()
+	if a.Filling(m.ID) {
+		t.Fatal("done")
+	}
+	// Oldest session first, each building on the last one's version.
+	if !reflect.DeepEqual(seen, []string{"", "- from a session"}) || len(r.requests())-before != 2 {
+		t.Fatalf("seen = %q", seen)
+	}
+	revs, _ := a.Store.MemoryRevisions(ctx, m.ID)
+	if len(revs) != 2 || *revs[1].SessionID != first.ID || *revs[0].SessionID != second.ID {
+		t.Fatalf("revisions = %+v", revs)
+	}
+	notes, _ := a.Store.Notifications(ctx, false)
+	if len(notes) == 0 || notes[0].Message != `Memory "Topic" written from the task's sessions` {
+		t.Fatalf("notifications = %+v", notes)
+	}
+}

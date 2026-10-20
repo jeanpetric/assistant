@@ -124,10 +124,10 @@ var (
 		"A prompt template: {{.Task.Title}}, {{.Task.ID}}, {{.Fields.pull_request}}, {{.Context}}")
 	pSkillModel = prop("string", "Model the skill's turn runs with, e.g. fable; empty keeps the session's model")
 	pMemories   = map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "Ids of memories (see list_memories) linked to the task: " +
-		"its agents read them with the task context and update them after each turn. On create, left out links the project's memories and those of the tasks it builds on; [] links none."}
+		"its agents read them with the task context and update them after each turn. On create, left out links those of the tasks it builds on; [] links none. " +
+		"Use search_memories to find the memories on the task's topic."}
 	pMemoryID          = prop("integer", "Memory id (see list_memories)")
 	pMemoryDescription = prop("string", "What the memory is about; it tells agents what belongs in it")
-	pMemoryProjectID   = prop("integer", "Project whose new tasks get the memory linked; 0 for none")
 	pContextFrom       = map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "Ids of earlier tasks this task builds on, e.g. the research it follows from. Summaries of their agent sessions (or the final replies, where a session has no up-to-date summary) go into the context of this task's agents (include_context, rules and schedules using {{.Context}}). Empty: the task starts from scratch."}
 )
 
@@ -351,9 +351,18 @@ func (s *Server) mcpTools() []mcpTool {
 		{
 			Name: "list_memories",
 			Description: "The user's memories: Markdown documents of lasting knowledge kept across tasks. Agents of the tasks linked to a memory read it, " +
-				"and after each of their turns a fork of the agent rewrites it with what the session found out. Bodies are left out; get_memory has them.",
+				"and after each of their turns a fork of the agent rewrites it with what the session found out. A memory is a topic, not tied to a project. " +
+				"The most recently used first (last_used: its latest revision or session of a linked task). Bodies are left out; get_memory has them.",
 			InputSchema: schema(nil, map[string]any{}),
 			call:        fixed("GET", "/api/memories", false),
+		},
+		{
+			Name: "search_memories",
+			Description: "Find the memories on a topic: those whose name, description or body has any of the query's words (inflected forms too), " +
+				"best first (score), then the most recently used. Pass e.g. a task's title and description to find the memories its agents should read; " +
+				"link them with update_task (memories).",
+			InputSchema: schema([]string{"q"}, map[string]any{"q": prop("string", "Words to look for")}),
+			call:        list("/api/memories", "q"),
 		},
 		{
 			Name:        "get_memory",
@@ -363,10 +372,12 @@ func (s *Server) mcpTools() []mcpTool {
 		},
 		{
 			Name:        "create_memory",
-			Description: "Add a memory. Link it to tasks with create_task or update_task (memories).",
+			Description: "Add a memory on a topic. Link it to tasks with task_id here, or with create_task or update_task (memories).",
 			InputSchema: schema([]string{"name"}, map[string]any{
-				"name": prop("string", "Unique name, e.g. the subject"), "description": pMemoryDescription,
-				"body": prop("string", "Initial Markdown body"), "project_id": pMemoryProjectID,
+				"name": prop("string", "Unique name, e.g. the topic"), "description": pMemoryDescription,
+				"body":    prop("string", "Initial Markdown body"),
+				"task_id": prop("integer", "Link the new memory to this task"),
+				"fill":    prop("boolean", "With task_id: write the memory from the task's agent sessions so far, in the background"),
 			}),
 			call: fixed("POST", "/api/memories", true),
 		},
@@ -375,7 +386,7 @@ func (s *Server) mcpTools() []mcpTool {
 			Description: "Change a memory; only the given keys change. body replaces the whole document as a new revision: read it with get_memory first " +
 				"and pass its revision as base_revision, so a change made meanwhile is not overwritten. To add a single fact, use remember.",
 			InputSchema: schema([]string{"memory_id"}, map[string]any{
-				"memory_id": pMemoryID, "name": prop("string", "Unique name"), "description": pMemoryDescription, "project_id": pMemoryProjectID,
+				"memory_id": pMemoryID, "name": prop("string", "Unique name"), "description": pMemoryDescription,
 				"body": prop("string", "The whole new Markdown body"), "base_revision": prop("integer", "The revision body is based on (see get_memory)"),
 			}),
 			call: byID("PATCH", "/api/memories/%d", "memory_id", true),

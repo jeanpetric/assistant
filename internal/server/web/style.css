@@ -303,6 +303,7 @@ textarea.mono { font-family: var(--mono); font-size: 13px; }
 /* memory */
 .mono { font-family: var(--mono); font-size: 12.5px; }
 .memory-preview { min-height: 300px; }
+.memory-suggestions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 4px 0; }
 .revision { padding: 4px 0; border-bottom: 1px solid var(--border); }
 pre.diff { font-family: var(--mono); font-size: 12px; max-height: 60vh; overflow: auto; background: var(--surface-2); padding: 8px; border-radius: 6px; white-space: pre-wrap; word-break: break-word; }
 .diff-add { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }

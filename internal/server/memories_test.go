@@ -1,6 +1,7 @@
 package server
 
 import (
+	"net/url"
 	"slices"
 	"strings"
 	"testing"
@@ -11,31 +12,29 @@ import (
 
 func TestMemoriesAPI(t *testing.T) {
 	c := newClient(t)
-	var b board
-	c.do("GET", "/api/board", nil, 200, &b)
-	project := b.ProjectID
-
 	var m store.Memory
-	c.do("POST", "/api/memories", map[string]any{"name": " API ", "description": "The REST API", "body": "- v1", "project_id": project}, 201, &m)
-	if m.Name != "API" || m.Body != "- v1" || m.Revision == 0 || m.ProjectID == nil || *m.ProjectID != project {
+	c.do("POST", "/api/memories", map[string]any{"name": " API ", "description": "The REST API", "body": "- v1"}, 201, &m)
+	if m.Name != "API" || m.Body != "- v1" || m.Revision == 0 {
 		t.Fatalf("created = %+v", m)
 	}
 	c.do("POST", "/api/memories", map[string]any{"name": "api"}, 400, nil)
 	c.do("POST", "/api/memories", map[string]any{"name": " "}, 400, nil)
-	c.do("POST", "/api/memories", map[string]any{"name": "X", "project_id": 999}, 400, nil)
 	var other store.Memory
-	c.do("POST", "/api/memories", map[string]any{"name": "Other", "project_id": 0}, 201, &other)
-	if other.ProjectID != nil || other.Revision != 0 {
+	c.do("POST", "/api/memories", map[string]any{"name": "Other"}, 201, &other)
+	if other.Revision != 0 {
 		t.Fatalf("other = %+v", other)
 	}
 
-	// New tasks of the project get its memory; an explicit list wins.
+	// A new task gets the memories it names; none without.
 	var task, bare store.Task
-	c.do("POST", "/api/tasks", map[string]any{"title": "Work"}, 201, &task)
+	c.do("POST", "/api/tasks", map[string]any{"title": "Work", "memories": []int64{m.ID}}, 201, &task)
 	if !slices.Equal(task.Memories, []int64{m.ID}) {
 		t.Fatalf("task memories = %v", task.Memories)
 	}
-	c.do("POST", "/api/tasks", map[string]any{"title": "Bare", "memories": []int64{}}, 201, &bare)
+	c.do("POST", "/api/tasks", map[string]any{"title": "Bare"}, 201, &bare)
+	if len(bare.Memories) != 0 {
+		t.Fatalf("bare memories = %v", bare.Memories)
+	}
 	c.do("POST", "/api/tasks", map[string]any{"title": "Bad", "memories": []int64{999}}, 400, nil)
 	c.do("PATCH", "/api/tasks/"+itoa(task.ID), map[string]any{"memories": []int64{m.ID, other.ID}}, 200, &task)
 	if !slices.Equal(task.Memories, []int64{m.ID, other.ID}) {
@@ -54,8 +53,8 @@ func TestMemoriesAPI(t *testing.T) {
 	base := m.Revision
 	c.do("PATCH", "/api/memories/"+itoa(m.ID), map[string]any{"body": "- v2", "base_revision": base}, 200, &m)
 	c.do("PATCH", "/api/memories/"+itoa(m.ID), map[string]any{"body": "- lost", "base_revision": base}, 409, nil)
-	c.do("PATCH", "/api/memories/"+itoa(m.ID), map[string]any{"description": "Productive API", "project_id": 0}, 200, &m)
-	if m.Body != "- v2" || m.Description != "Productive API" || m.ProjectID != nil || m.Name != "API" {
+	c.do("PATCH", "/api/memories/"+itoa(m.ID), map[string]any{"description": "Productive API"}, 200, &m)
+	if m.Body != "- v2" || m.Description != "Productive API" || m.Name != "API" {
 		t.Fatalf("patched = %+v", m)
 	}
 	c.do("PATCH", "/api/memories/"+itoa(m.ID), map[string]any{"name": "other"}, 400, nil)
@@ -112,14 +111,68 @@ func TestMemoriesAPI(t *testing.T) {
 
 	var list []store.Memory
 	c.do("GET", "/api/memories", nil, 200, &list)
-	if len(list) != 2 || list[0].Name != "API" || list[0].Body != "" || list[0].Tasks != 1 {
+	if len(list) != 2 || list[0].Name != "API" || list[0].Body != "" || list[0].Tasks != 1 || list[0].LastUsed.IsZero() {
 		t.Fatalf("list = %+v", list)
+	}
+	// A search finds by words, the body's too, best first; bodies stay out.
+	c.do("GET", "/api/memories?q="+url.QueryEscape("rate limits of the REST api"), nil, 200, &list)
+	if len(list) != 1 || list[0].ID != m.ID || list[0].Score == 0 || list[0].Body != "" {
+		t.Fatalf("search = %+v", list)
+	}
+	c.do("GET", "/api/memories?q=", nil, 200, &list)
+	if len(list) != 0 {
+		t.Fatalf("empty search = %+v", list)
 	}
 	c.do("DELETE", "/api/memories/"+itoa(other.ID), nil, 204, nil)
 	c.do("DELETE", "/api/memories/"+itoa(other.ID), nil, 404, nil)
 	c.do("GET", "/api/tasks/"+itoa(task.ID), nil, 200, &page)
 	if len(page.Memories) != 1 {
 		t.Fatalf("deleted memory unlinked: %+v", page.Memories)
+	}
+}
+
+func TestCreateMemoryForTask(t *testing.T) {
+	c := newClient(t)
+	var existing, task store.Task
+	var m store.Memory
+	c.do("POST", "/api/memories", map[string]any{"name": "Old"}, 201, &m)
+	c.do("POST", "/api/tasks", map[string]any{"title": "Work", "memories": []int64{m.ID}}, 201, &task)
+	var sess store.Session
+	c.do("POST", "/api/tasks/"+itoa(task.ID)+"/sessions", map[string]any{"prompt": "dig"}, 201, &sess)
+	c.app.Wait()
+	c.do("POST", "/api/tasks", map[string]any{"title": "Other"}, 201, &existing)
+
+	// Linked to the task next to its other memory, and written from its session.
+	var created store.Memory
+	c.do("POST", "/api/memories", map[string]any{"name": "Topic", "task_id": task.ID, "fill": true}, 201, &created)
+	if created.Tasks != 1 {
+		t.Fatalf("created = %+v", created)
+	}
+	c.app.Wait()
+	var full struct {
+		Memory    store.Memory           `json:"memory"`
+		Revisions []store.MemoryRevision `json:"revisions"`
+		Filling   bool                   `json:"filling"`
+	}
+	c.do("GET", "/api/memories/"+itoa(created.ID), nil, 200, &full)
+	if full.Memory.Body != "SUMMARY of c-1" || len(full.Revisions) != 1 || *full.Revisions[0].SessionID != sess.ID || full.Filling {
+		t.Fatalf("filled = %+v", full)
+	}
+	c.do("GET", "/api/tasks/"+itoa(task.ID), nil, 200, &struct{ Task *store.Task }{&task})
+	if !slices.Equal(task.Memories, []int64{m.ID, created.ID}) {
+		t.Fatalf("task memories = %v", task.Memories)
+	}
+	// Without fill it starts empty; an unknown task creates nothing.
+	c.do("POST", "/api/memories", map[string]any{"name": "Empty", "task_id": existing.ID}, 201, &created)
+	c.app.Wait()
+	if c.do("GET", "/api/memories/"+itoa(created.ID), nil, 200, &full); full.Memory.Body != "" || full.Memory.Tasks != 1 {
+		t.Fatalf("empty = %+v", full)
+	}
+	c.do("POST", "/api/memories", map[string]any{"name": "Nowhere", "task_id": 999}, 400, nil)
+	var list []store.Memory
+	c.do("GET", "/api/memories", nil, 200, &list)
+	if len(list) != 3 {
+		t.Fatalf("list = %+v", list)
 	}
 }
 
@@ -143,6 +196,15 @@ func TestMCPMemories(t *testing.T) {
 	}
 	if text, isErr = c.tool("list_memories", map[string]any{}); isErr || strings.Contains(text, "Pages") || !strings.Contains(text, `"tasks":1`) {
 		t.Fatalf("list: %s", text)
+	}
+	if text, isErr = c.tool("search_memories", map[string]any{"q": "the rest api"}); isErr || !strings.Contains(text, `"name":"API"`) || !strings.Contains(text, `"score":`) {
+		t.Fatalf("search: %s", text)
+	}
+	if text, isErr = c.tool("search_memories", map[string]any{"q": "redis"}); isErr || text != "[]" {
+		t.Fatalf("search nothing: %s", text)
+	}
+	if text, isErr = c.tool("create_memory", map[string]any{"name": "Topic", "task_id": 1}); isErr || !strings.Contains(text, `"tasks":1`) {
+		t.Fatalf("create for a task: %s", text)
 	}
 	if text, isErr = c.tool("get_memory", map[string]any{"memory_id": 1}); isErr || !strings.Contains(text, `"source":"note"`) {
 		t.Fatalf("get: %s", text)

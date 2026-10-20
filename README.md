@@ -22,14 +22,18 @@ One Go binary, one SQLite file, no JavaScript build step.
   (`bypassPermissions`) or a stricter mode. Reply to continue a session (uses `claude --resume`),
   stop it, or copy the resume command to continue in a terminal.
 - **Sessions overview**: every session across all tasks with status and latest message.
-- **Memory**: lasting knowledge kept across tasks, one Markdown document per subject, under
-  *Memory* in the top menu (`⌥O`). Link memories to a task (a new task gets its project's
-  memories and those of the tasks it builds on): its agents read them with the task context, and
-  after every successful turn a fork of the agent rewrites each one with what the session found
-  out — answers you gave included — or leaves it as it is. Every change is a revision with a diff
-  you can restore; a notification tells which memory changed. Edit a memory by hand, update it
-  from a session with *Update memory*, or, from any Claude Code session, add to it with the MCP
-  `remember` tool.
+- **Memory**: lasting knowledge on a topic, kept across tasks and not tied to a project, one
+  Markdown document each, under *Memory* in the top menu (`⌥O`), most recently used first and
+  searchable by words. Link memories to a task: while you type a new task's title and description
+  the *New task* dialog suggests the memories on its topic, one click links them (a follow-up also
+  gets those of the task it builds on); *+ Task on this topic* on a memory starts a task linked to
+  it, and *+ New memory* on a task creates one linked to it, optionally written from the task's
+  sessions so far. The agents of the linked tasks read them with the task context, and after every
+  successful turn a fork of the agent rewrites each one with what the session found out — answers
+  you gave included — or leaves it as it is. Every change is a revision with a diff you can
+  restore; a notification tells which memory changed. Edit a memory by hand, update it from a
+  session with *Update memory*, or, from any Claude Code session, find one with the MCP
+  `search_memories` tool and add to it with `remember`.
 - **Working directories**: list the directories agents may run in under *Settings → Working
   directories*; the task, new session, standalone session and rule forms pick from that list
   (empty means the task's directory, else its project's, else the app default `workdir`). Upgrading seeds the list

@@ -337,16 +337,20 @@ func TestStaticUI(t *testing.T) {
 		// A project's directory is picked in Settings and shown as the default for its tasks.
 		"function taskWorkdir(t)", "workdir.addEventListener('change', saveProject)", "`Default (${taskWorkdir(task)})`",
 		// The new task dialog drops its missing "Builds on" line instead of drawing "null".
-		"dlg.replaceChildren(...[h('h2', {}, from ? 'New follow-up task' : 'New task')", "hint('⌘↵')))].filter(Boolean));",
+		"dlg.replaceChildren(...[h('h2', {}, from ? 'New follow-up task' : opts.memory ? `New task on ${opts.memory.name}` : 'New task')", "hint('⌘↵')))].filter(Boolean));",
+		// A new task is suggested memories by its words; a memory starts a task on its topic, a task a memory.
+		"const memories = memoryPicker(title, desc);", "memories: memories.ids()", "newTaskDialog({ memory: m })", "memoryDialog({ task, done:",
+		// Update memory shows only on a session whose task has a memory.
+		"!running && !s.memorizing && task?.memories.length && s.claude_session_id",
 		// A created task shows on its project's board, not full screen.
 		"remember('project', t.project_id);\n    go('#/board');"} {
 		if !bytes.Contains(js, []byte(want)) {
 			t.Fatalf("app.js lacks %q", want)
 		}
 	}
-	// List and Archive focus their filter on open; ⌥ shortcuts still work from inside it.
-	if n := bytes.Count(js, []byte("filter.focus()")); n != 2 {
-		t.Fatalf("app.js focuses a filter %d times, want List and Archive", n)
+	// List, Archive and Memory focus their filter on open; ⌥ shortcuts still work from inside it.
+	if n := bytes.Count(js, []byte("filter.focus()")); n != 3 {
+		t.Fatalf("app.js focuses a filter %d times, want List, Archive and Memory", n)
 	}
 	if bytes.Contains(js, []byte("blur()")) {
 		t.Fatal("app.js blurs a field; Esc belongs to the dialogs")

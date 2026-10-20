@@ -45,13 +45,15 @@ type App struct {
 	// (see UpdateMemories); memorizeAgain those to update once more after.
 	memorizing    map[int64]context.CancelFunc
 	memorizeAgain map[int64]bool
-	memoryLocks   map[int64]*sync.Mutex // one update of a memory at a time
+	memoryLocks   map[int64]*sync.Mutex        // one update of a memory at a time
+	filling       map[int64]context.CancelFunc // memories being written from a task's sessions (see FillMemory)
 }
 
 func New(s *store.Store, r agent.Runner, workdir, mode string) *App {
 	return &App{Store: s, Runner: r, DefaultWorkdir: workdir, DefaultMode: mode, Now: time.Now,
 		running: map[int64]context.CancelFunc{}, limits: map[int64]agent.RateLimits{}, summarizing: map[int64]context.CancelFunc{},
-		memorizing: map[int64]context.CancelFunc{}, memorizeAgain: map[int64]bool{}, memoryLocks: map[int64]*sync.Mutex{}}
+		memorizing: map[int64]context.CancelFunc{}, memorizeAgain: map[int64]bool{}, memoryLocks: map[int64]*sync.Mutex{},
+		filling: map[int64]context.CancelFunc{}}
 }
 
 // Wait blocks until all agent turns started so far have finished.
@@ -69,6 +71,9 @@ func (a *App) Shutdown() {
 		cancel()
 	}
 	for _, cancel := range a.memorizing {
+		cancel()
+	}
+	for _, cancel := range a.filling {
 		cancel()
 	}
 	a.mu.Unlock()

@@ -1378,9 +1378,17 @@ func (s *Server) memoryRefs(ctx context.Context, ids []int64) ([]memoryRef, erro
 	return out, nil
 }
 
-// listMemories lists the memories without their bodies; getMemory has them.
+// listMemories lists the memories without their bodies (getMemory has
+// them), the most recently used first; with q only those matching its words,
+// best first.
 func (s *Server) listMemories(w http.ResponseWriter, r *http.Request) {
-	xs, err := s.app.Store.Memories(r.Context())
+	var xs []store.Memory
+	var err error
+	if q, ok := r.URL.Query()["q"]; ok {
+		xs, err = s.app.Store.SearchMemories(r.Context(), strings.Join(q, " "))
+	} else {
+		xs, err = s.app.Store.Memories(r.Context())
+	}
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -1391,40 +1399,67 @@ func (s *Server) listMemories(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, xs)
 }
 
+// createMemory adds a memory. With task_id it is linked to that task too,
+// and with fill it is then written from the task's sessions in the background.
 func (s *Server) createMemory(w http.ResponseWriter, r *http.Request) {
-	var x store.Memory
-	if err := decode(r, &x); err != nil {
+	ctx := r.Context()
+	var in struct {
+		store.Memory
+		TaskID int64 `json:"task_id"`
+		Fill   bool  `json:"fill"`
+	}
+	if err := decode(r, &in); err != nil {
 		writeErr(w, err)
 		return
 	}
-	if err := s.checkMemory(r.Context(), &x); err != nil {
+	x := in.Memory
+	if err := checkMemory(&x); err != nil {
 		writeErr(w, err)
 		return
 	}
-	x, err := s.app.Store.CreateMemory(r.Context(), x)
+	var task store.Task
+	if in.TaskID != 0 {
+		var err error
+		if task, err = s.app.Store.Task(ctx, in.TaskID); errors.Is(err, store.ErrNotFound) {
+			writeErr(w, badRequest{"unknown task_id"})
+			return
+		} else if err != nil {
+			writeErr(w, err)
+			return
+		}
+	}
+	x, err := s.app.Store.CreateMemory(ctx, x)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
+	if in.TaskID != 0 {
+		if err := s.app.Store.SetTaskMemories(ctx, task.ID, append(task.Memories, x.ID)); err != nil {
+			writeErr(w, err)
+			return
+		}
+		if in.Fill {
+			s.app.FillMemory(task.ID, x.ID)
+		}
+		if x, err = s.app.Store.Memory(ctx, x.ID); err != nil {
+			writeErr(w, err)
+			return
+		}
+	}
 	writeJSON(w, 201, x)
 }
 
-// checkMemory trims and checks a memory's attributes; project 0 means none.
-func (s *Server) checkMemory(ctx context.Context, x *store.Memory) error {
+// checkMemory trims and checks a memory's attributes.
+func checkMemory(x *store.Memory) error {
 	if x.Name = strings.TrimSpace(x.Name); x.Name == "" {
 		return badRequest{"name is required"}
 	}
 	x.Description = strings.TrimSpace(x.Description)
-	if x.ProjectID != nil && *x.ProjectID == 0 {
-		x.ProjectID = nil
-	}
-	if x.ProjectID != nil {
-		return s.checkProject(ctx, *x.ProjectID)
-	}
 	return nil
 }
 
-// getMemory returns a memory with its revisions (without bodies) and the tasks linked to it.
+// getMemory returns a memory with its revisions (without bodies), the tasks
+// linked to it and whether it is being written from a task's sessions.
 func (s *Server) getMemory(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	id, err := pathID(r)
@@ -1452,7 +1487,7 @@ func (s *Server) getMemory(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"memory": m, "revisions": revs, "tasks": tasks})
+	writeJSON(w, 200, map[string]any{"memory": m, "revisions": revs, "tasks": tasks, "filling": s.app.Filling(id)})
 }
 
 // updateMemory changes the given keys only. A new body is a revision; with
@@ -1472,7 +1507,6 @@ func (s *Server) updateMemory(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Name         *string `json:"name"`
 		Description  *string `json:"description"`
-		ProjectID    *int64  `json:"project_id"` // 0: no project
 		Body         *string `json:"body"`
 		BaseRevision *int64  `json:"base_revision"`
 	}
@@ -1480,17 +1514,14 @@ func (s *Server) updateMemory(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	if in.Name != nil || in.Description != nil || in.ProjectID != nil {
+	if in.Name != nil || in.Description != nil {
 		if in.Name != nil {
 			cur.Name = *in.Name
 		}
 		if in.Description != nil {
 			cur.Description = *in.Description
 		}
-		if in.ProjectID != nil {
-			cur.ProjectID = in.ProjectID
-		}
-		if err := s.checkMemory(ctx, &cur); err != nil {
+		if err := checkMemory(&cur); err != nil {
 			writeErr(w, err)
 			return
 		}

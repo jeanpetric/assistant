@@ -30,8 +30,8 @@ type Task struct {
 	// Earlier tasks this one builds on, in order: their agents' results go
 	// into the context of this task's agents.
 	ContextFrom []int64 `json:"context_from"`
-	// Memories its agents read and update. Nil on create: the project's
-	// memories and those of the tasks it builds on.
+	// Memories its agents read and update. Nil on create: those of the
+	// tasks it builds on.
 	Memories   []int64    `json:"memories"`
 	DueAt      *time.Time `json:"due_at"`      // notify when reached
 	RemindedAt *time.Time `json:"reminded_at"` // set once the due notification fired
@@ -393,7 +393,7 @@ func (s *Store) CreateTask(ctx context.Context, t Task) (Task, error) {
 		}
 		mems := t.Memories
 		if mems == nil {
-			if mems, err = inheritedMemories(ctx, tx, t.ProjectID, t.ContextFrom); err != nil {
+			if mems, err = inheritedMemories(ctx, tx, t.ContextFrom); err != nil {
 				return err
 			}
 		}
