@@ -61,7 +61,6 @@ func (s *Server) routes() {
 
 	m.HandleFunc("GET /api/sessions", s.listSessions)
 	m.HandleFunc("POST /api/sessions", s.startStandaloneSession)
-	m.HandleFunc("GET /api/workdirs", s.recentWorkdirs)
 	m.HandleFunc("GET /api/sessions/{id}", s.getSession)
 	m.HandleFunc("PATCH /api/sessions/{id}", s.updateSession)
 	m.HandleFunc("POST /api/sessions/{id}/messages", s.sendMessage)

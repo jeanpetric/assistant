@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -144,6 +146,67 @@ func TestSettings(t *testing.T) {
 	}
 	if x, _ := s.Settings(ctx); x.ArchiveLaneID != nil || x.ArchiveAfterMinutes != 90 {
 		t.Fatalf("after lane delete = %+v", x)
+	}
+}
+
+func TestSettingsWorkdirs(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	if x, err := s.Settings(ctx); err != nil || x.Workdirs == nil || len(x.Workdirs) != 0 {
+		t.Fatalf("defaults = %+v, %v", x, err)
+	}
+	if err := s.SaveSettings(ctx, Settings{Workdirs: []string{"/b", "/a"}}); err != nil {
+		t.Fatal(err)
+	}
+	if x, _ := s.Settings(ctx); len(x.Workdirs) != 2 || x.Workdirs[0] != "/b" || x.Workdirs[1] != "/a" {
+		t.Fatalf("saved = %+v", x)
+	}
+	if err := s.SaveSettings(ctx, Settings{}); err != nil {
+		t.Fatal(err)
+	}
+	if x, _ := s.Settings(ctx); x.Workdirs == nil || len(x.Workdirs) != 0 {
+		t.Fatalf("cleared = %+v", x)
+	}
+}
+
+// Upgrading seeds the directory list with every workdir already in use,
+// most recently used first, and keeps the other settings.
+func TestWorkdirsMigrationSeedsUsedDirs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const n = 6 // migrations before the workdirs list
+	for _, m := range migrations[:n] {
+		if _, err := db.Exec(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, q := range []string{
+		fmt.Sprintf(`PRAGMA user_version = %d`, n),
+		`UPDATE settings SET archive_after_minutes = 42`,
+		`INSERT INTO tasks (id, title, lane_id, position, workdir, created_at, updated_at) VALUES (1, 't', 1, 0, '/task', 0, 3000)`,
+		`INSERT INTO sessions (id, task_id, status, mode, workdir, created_at, updated_at) VALUES (1, 1, 'idle', 'plan', '/old', 0, 1000)`,
+		`INSERT INTO sessions (id, task_id, status, mode, workdir, created_at, updated_at) VALUES (2, 1, 'idle', 'plan', '/new', 0, 5000)`,
+		`INSERT INTO sessions (id, task_id, status, mode, workdir, created_at, updated_at) VALUES (3, 1, 'idle', 'plan', '/old', 0, 2000)`,
+		`INSERT INTO sessions (id, task_id, status, mode, workdir, created_at, updated_at) VALUES (4, 1, 'idle', 'plan', '', 0, 9000)`,
+		`INSERT INTO transition_rules (name, to_lane_id, prompt, workdir) VALUES ('r', 1, 'p', '/rule')`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(q, err)
+		}
+	}
+	db.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	x, err := s.Settings(context.Background())
+	if err != nil || x.ArchiveAfterMinutes != 42 || strings.Join(x.Workdirs, ",") != "/new,/task,/old,/rule" {
+		t.Fatalf("settings = %+v, %v", x, err)
 	}
 }
 

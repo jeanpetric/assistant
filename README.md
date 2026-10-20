@@ -18,6 +18,10 @@ One Go binary, one SQLite file, no JavaScript build step.
   (`bypassPermissions`) or a stricter mode. Reply to continue a session (uses `claude --resume`),
   stop it, or copy the resume command to continue in a terminal.
 - **Sessions overview**: every session across all tasks with status and latest message.
+- **Working directories**: list the directories agents may run in under *Settings → Working
+  directories*; the task, new session, standalone session and rule forms pick from that list
+  (empty means the task's directory, else the app default `workdir`). Upgrading seeds the list
+  with every directory already used.
 - **Transition rules**: when a task moves from lane A (or any lane) to lane B, start an agent
   session with a prompt template — e.g. run a skill like `/p-dev:code` when a task enters
   *In progress*.

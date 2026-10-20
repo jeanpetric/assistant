@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"time"
 )
@@ -13,20 +14,31 @@ type Settings struct {
 	// Nil (or a non-positive duration) turns auto-archive off.
 	ArchiveLaneID       *int64 `json:"archive_lane_id"`
 	ArchiveAfterMinutes int    `json:"archive_after_minutes"`
+	// Working directories agents can be started in, offered as a dropdown.
+	Workdirs []string `json:"workdirs"`
 }
 
 func (s *Store) Settings(ctx context.Context) (Settings, error) {
 	var x Settings
 	var lane sql.NullInt64
-	err := s.db.QueryRowContext(ctx, `SELECT archive_lane_id, archive_after_minutes FROM settings WHERE id = 1`).
-		Scan(&lane, &x.ArchiveAfterMinutes)
+	var dirs string
+	err := s.db.QueryRowContext(ctx, `SELECT archive_lane_id, archive_after_minutes, workdirs FROM settings WHERE id = 1`).
+		Scan(&lane, &x.ArchiveAfterMinutes, &dirs)
+	if err != nil {
+		return x, err
+	}
 	x.ArchiveLaneID = fromNullID(lane)
-	return x, err
+	x.Workdirs = []string{}
+	return x, json.Unmarshal([]byte(dirs), &x.Workdirs)
 }
 
 func (s *Store) SaveSettings(ctx context.Context, x Settings) error {
-	return affected(s.db.ExecContext(ctx, `UPDATE settings SET archive_lane_id = ?, archive_after_minutes = ? WHERE id = 1`,
-		x.ArchiveLaneID, x.ArchiveAfterMinutes))
+	if x.Workdirs == nil {
+		x.Workdirs = []string{}
+	}
+	dirs, _ := json.Marshal(x.Workdirs)
+	return affected(s.db.ExecContext(ctx, `UPDATE settings SET archive_lane_id = ?, archive_after_minutes = ?, workdirs = ? WHERE id = 1`,
+		x.ArchiveLaneID, x.ArchiveAfterMinutes, string(dirs)))
 }
 
 // ArchiveTask takes the task off the board; it keeps its lane. Archiving an

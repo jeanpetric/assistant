@@ -310,7 +310,7 @@ func TestStaticUI(t *testing.T) {
 	}
 	js, _ := io.ReadAll(res.Body)
 	res.Body.Close()
-	for _, want := range []string{"getElementById('task-dialog')",
+	for _, want := range []string{"getElementById('task-dialog')", "function workdirSelect(", "workdirsPanel(settings.workdirs, rerender)",
 		// Tool calls fold into one collapsed group per run instead of one row each.
 		"appendMessage(body, m)", "h('details', { class: 'tools' }", "onclick: e => { if (e.metaKey || e.ctrlKey) location.hash = `#/task/${t.id}`; else openTaskDialog(t.id); }"} {
 		if !bytes.Contains(js, []byte(want)) {
@@ -361,12 +361,6 @@ func TestStandaloneSession(t *testing.T) {
 	if len(b.Running) != 0 {
 		t.Fatalf("standalone sessions must not count on the board: %v", b.Running)
 	}
-	var dirs []string
-	c.do("GET", "/api/workdirs", nil, 200, &dirs)
-	if len(dirs) != 1 || dirs[0] != dir {
-		t.Fatalf("workdirs = %v", dirs)
-	}
-
 	c.do("POST", "/api/sessions/"+itoa(sess.ID)+"/resume", nil, 202, nil)
 	c.app.Wait()
 	c.do("GET", "/api/sessions/"+itoa(sess.ID), nil, 200, &got)
@@ -456,6 +450,24 @@ func TestArchive(t *testing.T) {
 	c.do("PUT", "/api/settings", map[string]any{"archive_lane_id": 999, "archive_after_minutes": 30}, 400, nil)
 	c.do("PUT", "/api/settings", map[string]any{"archive_lane_id": nil, "archive_after_minutes": -1}, 400, nil)
 	c.do("PUT", "/api/settings", map[string]any{"archive_lane_id": nil, "archive_after_minutes": 0}, 200, nil)
+
+	// Workdirs are resolved, deduplicated and kept when a save leaves them out.
+	a, b2 := t.TempDir(), t.TempDir()
+	c.do("PUT", "/api/settings", map[string]any{"archive_after_minutes": 0, "workdirs": []string{a + "/", " ", b2, a}}, 200, &set)
+	if len(set.Workdirs) != 2 || set.Workdirs[0] != a || set.Workdirs[1] != b2 {
+		t.Fatalf("workdirs = %v", set.Workdirs)
+	}
+	c.do("PUT", "/api/settings", map[string]any{"archive_after_minutes": 0, "workdirs": []string{"relative"}}, 400, nil)
+	c.do("PUT", "/api/settings", map[string]any{"archive_after_minutes": 0, "workdirs": []string{a + "/missing"}}, 400, nil)
+	c.do("PUT", "/api/settings", map[string]any{"archive_after_minutes": 5}, 200, nil)
+	c.do("GET", "/api/settings", nil, 200, &set)
+	if len(set.Workdirs) != 2 || set.ArchiveAfterMinutes != 5 {
+		t.Fatalf("after save without workdirs = %+v", set)
+	}
+	c.do("PUT", "/api/settings", map[string]any{"archive_after_minutes": 0, "workdirs": []string{}}, 200, &set)
+	if set.Workdirs == nil || len(set.Workdirs) != 0 {
+		t.Fatalf("cleared workdirs = %v", set.Workdirs)
+	}
 
 	var task store.Task
 	c.do("POST", "/api/tasks", map[string]any{"title": "T", "lane_id": lane["Done"]}, 201, &task)

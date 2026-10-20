@@ -291,13 +291,6 @@ func TestStandaloneSessionsAndWorkdirs(t *testing.T) {
 	if len(all) != 2 {
 		t.Fatalf("all = %d", len(all))
 	}
-	dirs, _ := s.RecentWorkdirs(ctx, 10)
-	if len(dirs) != 3 {
-		t.Fatalf("dirs = %v", dirs)
-	}
-	if dirs, _ := s.RecentWorkdirs(ctx, 1); len(dirs) != 1 {
-		t.Fatalf("limit: %v", dirs)
-	}
 }
 
 // Rebuilding the sessions table must keep messages and the cascade from tasks.

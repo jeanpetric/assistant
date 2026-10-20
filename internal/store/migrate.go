@@ -158,6 +158,18 @@ ALTER TABLE sessions ADD COLUMN limit_5h_resets_at INTEGER;
 ALTER TABLE sessions ADD COLUMN limit_7d_used REAL;
 ALTER TABLE sessions ADD COLUMN limit_7d_resets_at INTEGER;
 `,
+	// Working directories offered when starting agents, a JSON array of paths.
+	// Starts with every directory already used, most recent first.
+	`
+ALTER TABLE settings ADD COLUMN workdirs TEXT NOT NULL DEFAULT '[]';
+UPDATE settings SET workdirs = (SELECT json_group_array(workdir) FROM (
+	SELECT workdir FROM (
+		SELECT workdir, updated_at FROM sessions
+		UNION ALL SELECT workdir, updated_at FROM tasks
+		UNION ALL SELECT workdir, 0 FROM transition_rules
+	) WHERE workdir != '' GROUP BY workdir ORDER BY MAX(updated_at) DESC, workdir
+));
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

@@ -92,6 +92,22 @@ func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	// Leaving workdirs out keeps the saved list.
+	if x.Workdirs == nil {
+		cur, err := s.app.Store.Settings(r.Context())
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		x.Workdirs = cur.Workdirs
+	} else {
+		dirs, err := resolveWorkdirs(x.Workdirs)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		x.Workdirs = dirs
+	}
 	if err := s.app.Store.SaveSettings(r.Context(), x); err != nil {
 		writeErr(w, err)
 		return
@@ -461,6 +477,24 @@ func resolveWorkdir(dir string) (string, error) {
 	return filepath.Clean(dir), nil
 }
 
+// resolveWorkdirs resolves each directory like resolveWorkdir, dropping
+// blanks and duplicates and keeping the order.
+func resolveWorkdirs(in []string) ([]string, error) {
+	out := []string{}
+	seen := map[string]bool{}
+	for _, d := range in {
+		dir, err := resolveWorkdir(d)
+		if err != nil {
+			return nil, err
+		}
+		if dir != "" && !seen[dir] {
+			seen[dir] = true
+			out = append(out, dir)
+		}
+	}
+	return out, nil
+}
+
 // startStandaloneSession runs an agent session that belongs to no task.
 func (s *Server) startStandaloneSession(w http.ResponseWriter, r *http.Request) {
 	var in sessionInput
@@ -480,15 +514,6 @@ func (s *Server) startStandaloneSession(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, 201, sess)
-}
-
-func (s *Server) recentWorkdirs(w http.ResponseWriter, r *http.Request) {
-	dirs, err := s.app.Store.RecentWorkdirs(r.Context(), 30)
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
-	writeJSON(w, 200, dirs)
 }
 
 func (s *Server) startSession(w http.ResponseWriter, r *http.Request) {

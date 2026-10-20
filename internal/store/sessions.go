@@ -126,28 +126,6 @@ func (s *Store) Sessions(ctx context.Context, taskID int64, status string) ([]Se
 	return out, rows.Err()
 }
 
-// RecentWorkdirs returns distinct working directories of sessions and tasks,
-// most recently used first.
-func (s *Store) RecentWorkdirs(ctx context.Context, limit int) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT workdir FROM (
-			SELECT workdir, updated_at FROM sessions UNION ALL SELECT workdir, updated_at FROM tasks
-		) WHERE workdir != '' GROUP BY workdir ORDER BY MAX(updated_at) DESC LIMIT ?`, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []string{}
-	for rows.Next() {
-		var d string
-		if err := rows.Scan(&d); err != nil {
-			return nil, err
-		}
-		out = append(out, d)
-	}
-	return out, rows.Err()
-}
-
 func (s *Store) SetSessionStatus(ctx context.Context, id int64, status, errMsg string) error {
 	return affected(s.db.ExecContext(ctx,
 		`UPDATE sessions SET status = ?, error = ?, updated_at = ? WHERE id = ?`, status, errMsg, s.ts(), id))

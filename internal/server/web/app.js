@@ -94,11 +94,11 @@ function modelInput(value) {
   return [h('input', { value: value || '', placeholder: 'Model — CLI default', list: list.id }), list];
 }
 
-// Directory input suggesting recently used working directories.
-function workdirInput(value, placeholder) {
-  const list = h('datalist', { id: 'workdirs-' + Math.random().toString(36).slice(2) });
-  api('GET', '/api/workdirs').then(dirs => list.replaceChildren(...dirs.map(d => h('option', { value: d })))).catch(() => {});
-  return [h('input', { value: value || '', placeholder, list: list.id }), list];
+// Working directory picked from the list in Settings; '' falls back to defaultLabel's directory.
+// A value no longer in the list stays selectable so it isn't lost silently.
+function workdirSelect(value, defaultLabel, attrs) {
+  const dirs = state.workdirs.includes(value) || !value ? state.workdirs : [...state.workdirs, value];
+  return select([['', defaultLabel], ...dirs.map(d => [d, d])], value || '', attrs);
 }
 
 function remember(key, value) {
@@ -127,7 +127,7 @@ function trunc(s, n) {
 
 // ---------- state & routing ----------
 
-const state = { meta: null, board: null, timers: [] };
+const state = { meta: null, board: null, workdirs: [], timers: [] };
 const view = document.getElementById('view');
 
 function every(ms, fn) {
@@ -477,7 +477,7 @@ async function taskView(id, { every, leave, reload }) {
     h('label', {}, 'Description'),
     h('textarea', { rows: 6, onchange: e => save({ description: e.target.value }) }, t.description),
     h('label', {}, 'Working directory for agents'),
-    h('input', { value: t.workdir, placeholder: state.meta.workdir, onchange: e => save({ workdir: e.target.value }) }),
+    workdirSelect(t.workdir, `App default (${state.meta.workdir})`, { onchange: e => save({ workdir: e.target.value }) }),
     fields,
     h('div', { class: 'row', style: 'margin-top:14px' },
       h('span', { class: 'muted small grow' }, 'Created ' + fmtTime(t.created_at)),
@@ -533,7 +533,7 @@ function newSessionPanel(task, onStarted) {
   const mode = select(modeOptions(false), state.meta.default_mode);
   const [model, modelList] = modelInput('');
   const ctx = h('input', { type: 'checkbox', checked: true });
-  const [workdir, workdirList] = workdirInput('', task.workdir || state.meta.workdir);
+  const workdir = workdirSelect('', `Default (${task.workdir || state.meta.workdir})`);
   const doneLane = doneLaneSelect(state.board.lanes, '');
   const start = async () => {
     if (!prompt.value.trim()) return;
@@ -552,7 +552,7 @@ function newSessionPanel(task, onStarted) {
     h('div', { class: 'row', style: 'margin-top:8px; flex-wrap:wrap' },
       h('div', { class: 'grow', style: 'min-width:200px' }, mode),
       h('div', { class: 'grow', style: 'min-width:140px' }, model, modelList),
-      h('div', { class: 'grow', style: 'min-width:200px' }, workdir, workdirList),
+      h('div', { class: 'grow', style: 'min-width:200px' }, workdir),
       h('div', { class: 'grow', style: 'min-width:200px' }, doneLane),
       h('label', { class: 'row', style: 'margin:0' }, ctx, 'Include task context'),
       h('button', { onclick: start }, 'Start ⌘↵')));
@@ -766,7 +766,8 @@ async function renderSession(id) {
 function sessionDialog() {
   const dlg = document.getElementById('dialog');
   const prompt = h('textarea', { rows: 6, placeholder: 'What should the agent do? Skills work too, e.g. /p-dev:review 123' });
-  const [workdir, workdirList] = workdirInput(recall('session.workdir'), state.meta.workdir);
+  const lastDir = recall('session.workdir');
+  const workdir = workdirSelect(state.workdirs.includes(lastDir) ? lastDir : '', `App default (${state.meta.workdir})`);
   const [model, modelList] = modelInput(recall('session.model'));
   const mode = select(modeOptions(false), recall('session.mode') || state.meta.default_mode);
   const start = async () => {
@@ -781,7 +782,7 @@ function sessionDialog() {
   prompt.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) start(); });
   dlg.replaceChildren(h('h2', {}, 'New agent session'),
     h('label', {}, 'Prompt'), prompt,
-    h('label', {}, 'Directory'), workdir, workdirList,
+    h('label', {}, 'Directory'), workdir,
     h('div', { class: 'row' },
       h('div', { class: 'grow' }, h('label', {}, 'Model'), model, modelList),
       h('div', { class: 'grow' }, h('label', {}, 'Mode'), mode)),
@@ -853,7 +854,34 @@ async function renderSettings() {
           h('button', { class: 'danger small', onclick: async () => { await api('DELETE', `/api/rules/${r.id}`); rerender(); } }, 'Delete'))))))
       : h('p', { class: 'muted' }, 'No rules yet.'));
 
-  view.replaceChildren(h('div', { style: 'max-width:900px' }, lanes, rulesPanel, archivePanel(b.lanes, settings), fields));
+  view.replaceChildren(h('div', { style: 'max-width:900px' }, lanes, workdirsPanel(settings.workdirs, rerender), rulesPanel,
+    archivePanel(b.lanes, settings), fields));
+}
+
+// The directories agents can be started in; every directory field is a dropdown of these.
+function workdirsPanel(dirs, rerender) {
+  const save = async next => {
+    const cur = await api('GET', '/api/settings');
+    state.workdirs = (await api('PUT', '/api/settings', { ...cur, workdirs: next })).workdirs;
+    rerender();
+  };
+  const move = (i, d) => {
+    const next = [...dirs];
+    [next[i], next[i + d]] = [next[i + d], next[i]];
+    save(next);
+  };
+  return h('div', { class: 'panel' }, h('h2', {}, 'Working directories'),
+    h('p', { class: 'muted small' }, `Where agents can run, offered as a dropdown wherever you start one. Unset means the app default (${state.meta.workdir}).`),
+    dirs.map((d, i) => h('div', { class: 'row', style: 'margin-bottom:6px' },
+      h('code', { class: 'grow' }, d),
+      h('button', { class: 'ghost', disabled: i === 0, onclick: () => move(i, -1) }, '↑'),
+      h('button', { class: 'ghost', disabled: i === dirs.length - 1, onclick: () => move(i, 1) }, '↓'),
+      h('button', { class: 'danger', onclick: () => save(dirs.filter(x => x !== d)) }, 'Remove'))),
+    h('input', {
+      placeholder: '+ Add directory, e.g. ~/workspace/assistant (Enter)', onkeydown: e => {
+        if (e.key === 'Enter' && e.target.value.trim()) save([...dirs, e.target.value]);
+      },
+    }));
 }
 
 // Auto-archive: which lane, and how long a task stays there first.
@@ -889,7 +917,7 @@ function ruleDialog(rule, lanes, done) {
   const to = select(lanes.map(l => [l.id, l.name]), rule.to_lane_id);
   const prompt = h('textarea', { rows: 6 }, rule.prompt);
   const mode = select(modeOptions(true), rule.mode);
-  const workdir = h('input', { value: rule.workdir, placeholder: 'Task workdir, else app default' });
+  const workdir = workdirSelect(rule.workdir, 'Task directory, else app default');
   const doneLane = doneLaneSelect(lanes, rule.done_lane_id);
   dlg.replaceChildren(h('h2', {}, rule.id ? 'Edit rule' : 'New rule'),
     h('label', {}, 'Name'), name,
@@ -1034,7 +1062,7 @@ async function toggleNotifications() {
 // ---------- boot ----------
 
 (async function boot() {
-  state.meta = await api('GET', '/api/meta');
+  [state.meta, { workdirs: state.workdirs }] = await Promise.all([api('GET', '/api/meta'), api('GET', '/api/settings')]);
   document.getElementById('new-task-btn').addEventListener('click', newTaskDialog);
   document.getElementById('reminder-btn').addEventListener('click', reminderDialog);
   document.getElementById('new-session-btn').addEventListener('click', sessionDialog);
