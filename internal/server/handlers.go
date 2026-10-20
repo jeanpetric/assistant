@@ -18,6 +18,8 @@ import (
 
 // ---- board & meta ----
 
+// board returns the lanes and the tasks of one project (?project_id=, else the
+// first project), plus every project to switch to.
 func (s *Server) board(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	lanes, err := s.app.Store.Lanes(ctx)
@@ -25,7 +27,25 @@ func (s *Server) board(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	tasks, err := s.app.Store.Tasks(ctx)
+	projects, err := s.app.Store.Projects(ctx)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	projectID, err := queryID(r, "project_id")
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	// An unknown project (e.g. one deleted in another tab) shows the first one.
+	known := false
+	for _, p := range projects {
+		known = known || p.ID == projectID
+	}
+	if !known && len(projects) > 0 {
+		projectID = projects[0].ID
+	}
+	tasks, err := s.app.Store.Tasks(ctx, projectID)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -56,7 +76,7 @@ func (s *Server) board(w http.ResponseWriter, r *http.Request) {
 			limitsByTask[x.TaskID] = l
 		}
 	}
-	writeJSON(w, 200, map[string]any{"lanes": lanes, "tasks": tasks, "fields": fields,
+	writeJSON(w, 200, map[string]any{"projects": projects, "project_id": projectID, "lanes": lanes, "tasks": tasks, "fields": fields,
 		"running": runningByTask, "running_limits": limitsByTask})
 }
 
@@ -200,6 +220,88 @@ func (s *Server) reorderLanes(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(204)
 }
 
+// ---- projects ----
+
+func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
+	var in laneInput
+	if err := decode(r, &in); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := in.validate(); err != nil {
+		writeErr(w, err)
+		return
+	}
+	p, err := s.app.Store.CreateProject(r.Context(), strings.TrimSpace(in.Name), in.Color)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 201, p)
+}
+
+func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	var in laneInput
+	if err := decode(r, &in); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := in.validate(); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.app.Store.UpdateProject(r.Context(), id, strings.TrimSpace(in.Name), in.Color); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(204)
+}
+
+func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.app.Store.DeleteProject(r.Context(), id); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(204)
+}
+
+func (s *Server) reorderProjects(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		IDs []int64 `json:"ids"`
+	}
+	if err := decode(r, &in); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.app.Store.ReorderProjects(r.Context(), in.IDs); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(204)
+}
+
+// checkProject rejects a project id that doesn't exist; 0 is fine.
+func (s *Server) checkProject(ctx context.Context, id int64) error {
+	if id == 0 {
+		return nil
+	}
+	_, err := s.app.Store.Project(ctx, id)
+	if errors.Is(err, store.ErrNotFound) {
+		return badRequest{"unknown project_id"}
+	}
+	return err
+}
+
 // ---- field definitions ----
 
 var fieldKeyRe = regexp.MustCompile(`^[a-z][a-z0-9_]{0,40}$`)
@@ -246,6 +348,10 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.TrimSpace(t.Title) == "" {
 		writeErr(w, badRequest{"title is required"})
+		return
+	}
+	if err := s.checkProject(r.Context(), t.ProjectID); err != nil {
+		writeErr(w, err)
 		return
 	}
 	t, err := s.app.Store.CreateTask(r.Context(), t)
@@ -313,7 +419,8 @@ func (s *Server) updateTask(w http.ResponseWriter, r *http.Request) {
 		Description *string           `json:"description"`
 		Kind        *string           `json:"kind"`
 		Workdir     *string           `json:"workdir"`
-		DueAt       json.RawMessage   `json:"due_at"` // absent: keep, null: clear
+		ProjectID   *int64            `json:"project_id"` // moves the task to the end of its lane there
+		DueAt       json.RawMessage   `json:"due_at"`     // absent: keep, null: clear
 		Fields      map[string]string `json:"fields"`
 	}
 	if err := decode(r, &in); err != nil {
@@ -344,9 +451,21 @@ func (s *Server) updateTask(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	cur.Fields = in.Fields
+	if in.ProjectID != nil {
+		if err := s.checkProject(r.Context(), *in.ProjectID); err != nil {
+			writeErr(w, err)
+			return
+		}
+	}
 	if err := s.app.Store.UpdateTask(r.Context(), cur); err != nil {
 		writeErr(w, err)
 		return
+	}
+	if in.ProjectID != nil && *in.ProjectID != 0 {
+		if err := s.app.Store.MoveTaskToProject(r.Context(), id, *in.ProjectID); err != nil {
+			writeErr(w, err)
+			return
+		}
 	}
 	t, _ := s.app.Store.Task(r.Context(), id)
 	writeJSON(w, 200, t)
@@ -394,8 +513,14 @@ func (s *Server) moveTask(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"started": started})
 }
 
+// archivedTasks lists one project's archived tasks (?project_id=), or all of them.
 func (s *Server) archivedTasks(w http.ResponseWriter, r *http.Request) {
-	tasks, err := s.app.Store.ArchivedTasks(r.Context())
+	projectID, err := queryID(r, "project_id")
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	tasks, err := s.app.Store.ArchivedTasks(r.Context(), projectID)
 	if err != nil {
 		writeErr(w, err)
 		return

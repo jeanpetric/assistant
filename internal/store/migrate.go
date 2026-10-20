@@ -170,6 +170,21 @@ UPDATE settings SET workdirs = (SELECT json_group_array(workdir) FROM (
 	) WHERE workdir != '' GROUP BY workdir ORDER BY MAX(updated_at) DESC, workdir
 ));
 `,
+	// Projects: every task belongs to one; all boards share the lanes. Existing
+	// tasks go to an Assistant project. Positions now count within a project's lane.
+	// (Adding a REFERENCES column with a non-NULL default needs foreign keys off,
+	// which they are while migrating.)
+	`
+CREATE TABLE projects (
+	id INTEGER PRIMARY KEY,
+	name TEXT NOT NULL,
+	color TEXT NOT NULL DEFAULT '',
+	position INTEGER NOT NULL
+);
+INSERT INTO projects (id, name, position) VALUES (1, 'Assistant', 0);
+ALTER TABLE tasks ADD COLUMN project_id INTEGER NOT NULL DEFAULT 1 REFERENCES projects(id);
+CREATE INDEX tasks_project ON tasks(project_id, lane_id, position);
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

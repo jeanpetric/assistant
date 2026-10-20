@@ -34,7 +34,7 @@ func TestArchiveAndRestore(t *testing.T) {
 	if got := laneOrder(t, s, l0); len(got) != 2 || got[0] != "a" || got[1] != "c" {
 		t.Fatalf("board after archive: %v", got)
 	}
-	arch, _ := s.ArchivedTasks(ctx)
+	arch, _ := s.ArchivedTasks(ctx, 0)
 	if len(arch) != 1 || arch[0].ID != b.ID || arch[0].LaneID != l0 || arch[0].ArchivedAt == nil || !arch[0].ArchivedAt.Equal(now) {
 		t.Fatalf("archived = %+v", arch)
 	}
@@ -260,7 +260,7 @@ func TestArchiveMigrationKeepsData(t *testing.T) {
 	}
 	defer s.Close()
 	ctx := context.Background()
-	tasks, _ := s.Tasks(ctx)
+	tasks, _ := s.Tasks(ctx, 0)
 	if len(tasks) != 1 || tasks[0].Title != "old" || tasks[0].ArchivedAt != nil || tasks[0].LaneChangedAt.UnixMilli() != 5000 ||
 		tasks[0].Fields["slack"] != "https://slack/x" {
 		t.Fatalf("tasks = %+v", tasks)

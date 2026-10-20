@@ -45,6 +45,11 @@ func (s *Server) routes() {
 	m.HandleFunc("DELETE /api/lanes/{id}", s.deleteLane)
 	m.HandleFunc("POST /api/lanes/reorder", s.reorderLanes)
 
+	m.HandleFunc("POST /api/projects", s.createProject)
+	m.HandleFunc("PATCH /api/projects/{id}", s.updateProject)
+	m.HandleFunc("DELETE /api/projects/{id}", s.deleteProject)
+	m.HandleFunc("POST /api/projects/reorder", s.reorderProjects)
+
 	m.HandleFunc("POST /api/fields", s.saveField)
 	m.HandleFunc("DELETE /api/fields/{key}", s.deleteField)
 
@@ -125,7 +130,8 @@ func writeErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		status = http.StatusNotFound
-	case errors.Is(err, store.ErrLaneNotEmpty), errors.Is(err, app.ErrBusy), errors.Is(err, app.ErrNoResume):
+	case errors.Is(err, store.ErrLaneNotEmpty), errors.Is(err, store.ErrProjectNotEmpty), errors.Is(err, store.ErrLastProject),
+		errors.Is(err, app.ErrBusy), errors.Is(err, app.ErrNoResume):
 		status = http.StatusConflict
 	case errors.As(err, new(badRequest)), errors.Is(err, app.ErrBadAction), errors.Is(err, app.ErrBadCron):
 		status = http.StatusBadRequest
@@ -151,6 +157,19 @@ func pathID(r *http.Request) (int64, error) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		return 0, badRequest{"invalid id"}
+	}
+	return id, nil
+}
+
+// queryID reads an optional id from the query string; absent is 0.
+func queryID(r *http.Request, key string) (int64, error) {
+	v := r.URL.Query().Get(key)
+	if v == "" {
+		return 0, nil
+	}
+	id, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return 0, badRequest{"invalid " + key}
 	}
 	return id, nil
 }

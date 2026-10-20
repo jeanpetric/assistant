@@ -85,6 +85,7 @@ label { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 3px;
 .topbar nav a.active { color: var(--text); background: var(--surface-2); }
 .topbar nav a:hover { text-decoration: none; color: var(--text); }
 .spacer { flex: 1; }
+.topbar .project-select { width: auto; max-width: 220px; font-weight: 600; }
 .pill {
   display: inline-block; min-width: 18px; padding: 0 6px;
   border-radius: 9px; background: var(--accent); color: var(--accent-text);

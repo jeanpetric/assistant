@@ -79,9 +79,11 @@ func (c *client) do(method, path string, body any, wantStatus int, out any) {
 }
 
 type board struct {
-	Lanes  []store.Lane     `json:"lanes"`
-	Tasks  []store.Task     `json:"tasks"`
-	Fields []store.FieldDef `json:"fields"`
+	Projects  []store.Project  `json:"projects"`
+	ProjectID int64            `json:"project_id"`
+	Lanes     []store.Lane     `json:"lanes"`
+	Tasks     []store.Task     `json:"tasks"`
+	Fields    []store.FieldDef `json:"fields"`
 }
 
 func TestBoardFlow(t *testing.T) {
@@ -508,4 +510,64 @@ func TestArchive(t *testing.T) {
 	}
 	c.do("POST", "/api/tasks/999/archive", nil, 404, nil)
 	c.do("POST", "/api/tasks/999/unarchive", nil, 404, nil)
+}
+
+func TestProjects(t *testing.T) {
+	c := newClient(t)
+	var b board
+	c.do("GET", "/api/board", nil, 200, &b)
+	if len(b.Projects) != 1 || b.ProjectID != b.Projects[0].ID {
+		t.Fatalf("board = %+v", b)
+	}
+	work := b.ProjectID
+	var private store.Project
+	c.do("POST", "/api/projects", map[string]any{"name": " Private "}, 201, &private)
+	c.do("POST", "/api/projects", map[string]any{"name": ""}, 400, nil)
+	c.do("PATCH", "/api/projects/"+itoa(private.ID), map[string]any{"name": "Home", "color": "#0a0"}, 204, nil)
+	c.do("PATCH", "/api/projects/999", map[string]any{"name": "x"}, 404, nil)
+
+	var a, x store.Task
+	c.do("POST", "/api/tasks", map[string]any{"title": "a"}, 201, &a)
+	c.do("POST", "/api/tasks", map[string]any{"title": "x", "project_id": private.ID}, 201, &x)
+	c.do("POST", "/api/tasks", map[string]any{"title": "bad", "project_id": 999}, 400, nil)
+	if a.ProjectID != work || x.ProjectID != private.ID {
+		t.Fatalf("a = %+v, x = %+v", a, x)
+	}
+
+	c.do("GET", "/api/board?project_id="+itoa(private.ID), nil, 200, &b)
+	if b.ProjectID != private.ID || len(b.Tasks) != 1 || b.Tasks[0].ID != x.ID || b.Projects[1].Name != "Home" {
+		t.Fatalf("private board = %+v", b)
+	}
+	// An unknown project falls back to the first.
+	c.do("GET", "/api/board?project_id=999", nil, 200, &b)
+	if b.ProjectID != work || len(b.Tasks) != 1 || b.Tasks[0].ID != a.ID {
+		t.Fatalf("fallback board = %+v", b)
+	}
+	c.do("GET", "/api/board?project_id=nope", nil, 400, nil)
+
+	// PATCH project_id moves the task; other edits in the same request apply too.
+	var got store.Task
+	c.do("PATCH", "/api/tasks/"+itoa(a.ID), map[string]any{"project_id": private.ID, "title": "a2"}, 200, &got)
+	if got.ProjectID != private.ID || got.Title != "a2" {
+		t.Fatalf("moved = %+v", got)
+	}
+	c.do("PATCH", "/api/tasks/"+itoa(a.ID), map[string]any{"project_id": 999}, 400, nil)
+
+	c.do("POST", "/api/tasks/"+itoa(x.ID)+"/archive", nil, 200, nil)
+	var arch []store.Task
+	c.do("GET", "/api/archive?project_id="+itoa(work), nil, 200, &arch)
+	if len(arch) != 0 {
+		t.Fatalf("work archive = %+v", arch)
+	}
+	c.do("GET", "/api/archive?project_id="+itoa(private.ID), nil, 200, &arch)
+	if len(arch) != 1 {
+		t.Fatalf("private archive = %+v", arch)
+	}
+
+	c.do("DELETE", "/api/projects/"+itoa(private.ID), nil, 409, nil)
+	c.do("DELETE", "/api/projects/"+itoa(work), nil, 204, nil)
+	c.do("POST", "/api/projects/reorder", map[string]any{"ids": []int64{private.ID}}, 204, nil)
+	c.do("DELETE", "/api/tasks/"+itoa(a.ID), nil, 204, nil)
+	c.do("DELETE", "/api/tasks/"+itoa(x.ID), nil, 204, nil)
+	c.do("DELETE", "/api/projects/"+itoa(private.ID), nil, 409, nil) // the last one stays
 }

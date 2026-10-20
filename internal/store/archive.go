@@ -50,9 +50,10 @@ func (s *Store) ArchiveTask(ctx context.Context, id int64) error {
 }
 
 func archive(ctx context.Context, tx *sql.Tx, id, now int64) error {
-	var lane int64
+	var project, lane int64
 	var archived bool
-	err := tx.QueryRowContext(ctx, `SELECT lane_id, archived_at IS NOT NULL FROM tasks WHERE id = ?`, id).Scan(&lane, &archived)
+	err := tx.QueryRowContext(ctx, `SELECT project_id, lane_id, archived_at IS NOT NULL FROM tasks WHERE id = ?`, id).
+		Scan(&project, &lane, &archived)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -62,7 +63,7 @@ func archive(ctx context.Context, tx *sql.Tx, id, now int64) error {
 	if _, err := tx.ExecContext(ctx, `UPDATE tasks SET archived_at = ? WHERE id = ?`, now, id); err != nil {
 		return err
 	}
-	ids, err := laneTaskIDs(ctx, tx, lane, id)
+	ids, err := laneTaskIDs(ctx, tx, project, lane, id)
 	if err != nil {
 		return err
 	}
@@ -73,9 +74,10 @@ func archive(ctx context.Context, tx *sql.Tx, id, now int64) error {
 // lane starts over, so auto-archive doesn't take it straight back.
 func (s *Store) UnarchiveTask(ctx context.Context, id int64) error {
 	return s.tx(ctx, func(tx *sql.Tx) error {
-		var lane int64
+		var project, lane int64
 		var archived bool
-		err := tx.QueryRowContext(ctx, `SELECT lane_id, archived_at IS NOT NULL FROM tasks WHERE id = ?`, id).Scan(&lane, &archived)
+		err := tx.QueryRowContext(ctx, `SELECT project_id, lane_id, archived_at IS NOT NULL FROM tasks WHERE id = ?`, id).
+			Scan(&project, &lane, &archived)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -84,7 +86,7 @@ func (s *Store) UnarchiveTask(ctx context.Context, id int64) error {
 		}
 		now := s.ts()
 		_, err = tx.ExecContext(ctx, `UPDATE tasks SET archived_at = NULL, position = `+nextPosition+`,
-			lane_changed_at = ?, updated_at = ? WHERE id = ?`, lane, now, now, id)
+			lane_changed_at = ?, updated_at = ? WHERE id = ?`, project, lane, now, now, id)
 		return err
 	})
 }

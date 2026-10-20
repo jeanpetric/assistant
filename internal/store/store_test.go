@@ -33,7 +33,7 @@ func TestReopenKeepsDataAndSkipsMigrations(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	tasks, _ := s.Tasks(context.Background())
+	tasks, _ := s.Tasks(context.Background(), 0)
 	lanes, _ := s.Lanes(context.Background())
 	if len(tasks) != 1 || len(lanes) != 5 {
 		t.Fatalf("tasks=%d lanes=%d", len(tasks), len(lanes))
@@ -75,7 +75,7 @@ func TestTasksAndFields(t *testing.T) {
 	if err := s.UpdateTask(ctx, got); err != nil {
 		t.Fatal(err)
 	}
-	all, _ := s.Tasks(ctx)
+	all, _ := s.Tasks(ctx, 0)
 	if all[0].Fields["doc"] != "https://docs" {
 		t.Fatalf("tasks fields %+v", all[0].Fields)
 	}
@@ -90,7 +90,7 @@ func TestTasksAndFields(t *testing.T) {
 
 func laneOrder(t *testing.T, s *Store, laneID int64) []string {
 	t.Helper()
-	tasks, _ := s.Tasks(context.Background())
+	tasks, _ := s.Tasks(context.Background(), 0)
 	var out []string
 	for _, x := range tasks {
 		if x.LaneID == laneID {

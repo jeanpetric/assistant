@@ -127,7 +127,8 @@ function trunc(s, n) {
 
 // ---------- state & routing ----------
 
-const state = { meta: null, board: null, workdirs: [], timers: [] };
+// projectId: the project whose tasks the board, list and archive show; remembered across reloads.
+const state = { meta: null, board: null, workdirs: [], timers: [], projectId: Number(recall('project')) || 0 };
 const view = document.getElementById('view');
 
 function every(ms, fn) {
@@ -154,8 +155,31 @@ function route() {
 }
 
 async function loadBoard() {
-  state.board = await api('GET', '/api/board');
+  state.board = await api('GET', '/api/board' + (state.projectId ? `?project_id=${state.projectId}` : ''));
+  state.projectId = state.board.project_id; // the server falls back to the first project
+  drawProjectSelect();
   return state.board;
+}
+
+function drawProjectSelect() {
+  const sel = document.getElementById('project-select');
+  const ps = state.board.projects;
+  const same = sel.options.length === ps.length && ps.every((p, i) => sel.options[i].value === String(p.id) && sel.options[i].text === p.name);
+  if (!same) sel.replaceChildren(...ps.map(p => h('option', { value: p.id }, p.name)));
+  sel.value = state.projectId;
+}
+
+function switchProject(id) {
+  state.projectId = id;
+  remember('project', id);
+  // Pages showing one task stay on it; the others redraw for the project.
+  if (!/^#\/(task|session|sessions|settings)\b/.test(location.hash)) route();
+  else loadBoard();
+}
+
+function projectName(id) {
+  const p = state.board && state.board.projects.find(p => p.id === id);
+  return p ? p.name : '?';
 }
 
 function laneName(id) {
@@ -227,7 +251,7 @@ async function renderBoard() {
           if (e.key !== 'Enter' || !e.target.value.trim()) return;
           const title = e.target.value.trim();
           e.target.value = '';
-          await api('POST', '/api/tasks', { title, lane_id: lane.id });
+          await api('POST', '/api/tasks', { title, lane_id: lane.id, project_id: state.projectId });
           renderBoardInPlace();
         },
       })));
@@ -348,7 +372,8 @@ async function renderList() {
 // ---------- archive ----------
 
 async function renderArchive() {
-  const [b, tasks] = await Promise.all([loadBoard(), api('GET', '/api/archive')]);
+  const b = await loadBoard();
+  const tasks = await api('GET', `/api/archive?project_id=${b.project_id}`);
   const filter = h('input', { placeholder: 'Filter…', oninput: draw });
   const tbody = h('tbody');
   function draw() {
@@ -463,6 +488,10 @@ async function taskView(id, { every, leave, reload }) {
   side.append(h('div', { class: 'panel' },
     archived,
     h('input', { class: 'title-input', value: t.title, onchange: e => save({ title: e.target.value }) }),
+    h('label', {}, 'Project'),
+    select(state.board.projects.map(p => [p.id, p.name]), t.project_id, {
+      onchange: async e => { await save({ project_id: Number(e.target.value) }); toast('Moved to ' + projectName(t.project_id)); },
+    }),
     h('label', {}, 'Lane'),
     select(state.board.lanes.map(l => [l.id, l.name]), t.lane_id, {
       onchange: async e => {
@@ -823,6 +852,34 @@ async function renderSettings() {
       },
     }));
 
+  const projects = h('div', { class: 'panel' }, h('h2', {}, 'Projects'),
+    h('p', { class: 'muted small' }, 'Each project is a board of its own on the same lanes; pick one at the top. Rules and auto-archive apply to all of them.'),
+    b.projects.map((p, i) => {
+      const name = h('input', { value: p.name });
+      const color = h('input', { type: 'color', value: p.color || '#888888', style: 'width:42px;padding:2px' });
+      const saveProject = async () => { await api('PATCH', `/api/projects/${p.id}`, { name: name.value, color: color.value }); loadBoard(); };
+      name.addEventListener('change', saveProject);
+      color.addEventListener('change', saveProject);
+      const move = async d => {
+        const ids = b.projects.map(x => x.id);
+        [ids[i], ids[i + d]] = [ids[i + d], ids[i]];
+        await api('POST', '/api/projects/reorder', { ids });
+        rerender();
+      };
+      return h('div', { class: 'row', style: 'margin-bottom:6px' }, color, h('div', { class: 'grow' }, name),
+        h('button', { class: 'ghost', disabled: i === 0, onclick: () => move(-1) }, '↑'),
+        h('button', { class: 'ghost', disabled: i === b.projects.length - 1, onclick: () => move(1) }, '↓'),
+        h('button', {
+          class: 'danger', title: 'Only a project without tasks (archived ones included) can be deleted',
+          onclick: async () => { await api('DELETE', `/api/projects/${p.id}`); rerender(); },
+        }, 'Delete'));
+    }),
+    h('input', {
+      placeholder: '+ New project (Enter)', onkeydown: async e => {
+        if (e.key === 'Enter' && e.target.value.trim()) { await api('POST', '/api/projects', { name: e.target.value }); rerender(); }
+      },
+    }));
+
   const fKey = h('input', { placeholder: 'key, e.g. figma' });
   const fLabel = h('input', { placeholder: 'Label' });
   const fType = select([['url', 'Link'], ['text', 'Text']], 'url');
@@ -854,7 +911,7 @@ async function renderSettings() {
           h('button', { class: 'danger small', onclick: async () => { await api('DELETE', `/api/rules/${r.id}`); rerender(); } }, 'Delete'))))))
       : h('p', { class: 'muted' }, 'No rules yet.'));
 
-  view.replaceChildren(h('div', { style: 'max-width:900px' }, lanes, workdirsPanel(settings.workdirs, rerender), rulesPanel,
+  view.replaceChildren(h('div', { style: 'max-width:900px' }, projects, lanes, workdirsPanel(settings.workdirs, rerender), rulesPanel,
     archivePanel(b.lanes, settings), fields));
 }
 
@@ -965,7 +1022,7 @@ async function reminderDialog() {
   const when = h('input', { type: 'datetime-local', value: toLocalInput(Date.now() + 3600000) });
   const create = async () => {
     if (!title.value.trim() || !when.value) return;
-    await api('POST', '/api/tasks', { title: title.value, kind: 'reminder', due_at: fromLocalInput(when.value) });
+    await api('POST', '/api/tasks', { title: title.value, kind: 'reminder', due_at: fromLocalInput(when.value), project_id: state.projectId });
     dlg.close();
     toast('Reminder set for ' + fmtTime(fromLocalInput(when.value)));
     if (location.hash === '' || location.hash.startsWith('#/board')) renderBoardInPlace();
@@ -991,6 +1048,7 @@ async function newTaskDialog() {
   const title = h('input', { placeholder: 'Title' });
   const desc = h('textarea', { rows: 4, placeholder: 'Description' });
   const kind = select(state.meta.kinds.map(k => [k, k]), 'task');
+  const project = select(state.board.projects.map(p => [p.id, p.name]), state.projectId);
   const lane = select(state.board.lanes.map(l => [l.id, l.name]), state.board.lanes[0]?.id);
   const due = h('input', { type: 'datetime-local' });
   const create = async () => {
@@ -998,12 +1056,14 @@ async function newTaskDialog() {
     if (due.value) askNotificationPermission();
     const t = await api('POST', '/api/tasks', {
       title: title.value, description: desc.value, kind: kind.value, lane_id: Number(lane.value), due_at: fromLocalInput(due.value),
+      project_id: Number(project.value),
     });
     dlg.close();
     location.hash = `#/task/${t.id}`;
   };
   title.addEventListener('keydown', e => { if (e.key === 'Enter') create(); });
   dlg.replaceChildren(h('h2', {}, 'New task'), h('label', {}, 'Title'), title, h('label', {}, 'Description'), desc,
+    h('label', {}, 'Project'), project,
     h('div', { class: 'row' }, h('div', { class: 'grow' }, h('label', {}, 'Kind'), kind), h('div', { class: 'grow' }, h('label', {}, 'Lane'), lane)),
     h('label', {}, 'Due (optional) — you get a notification at this time'), due,
     h('div', { class: 'dialog-actions' }, h('button', { class: 'ghost', onclick: () => dlg.close() }, 'Cancel'), h('button', { onclick: create }, 'Create')));
@@ -1075,6 +1135,7 @@ async function toggleNotifications() {
     shortcuts[e.key]();
   });
   document.getElementById('notif-btn').addEventListener('click', toggleNotifications);
+  document.getElementById('project-select').addEventListener('change', e => switchProject(Number(e.target.value)));
   window.addEventListener('hashchange', route);
   route();
   refreshGlobal();
