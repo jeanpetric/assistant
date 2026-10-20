@@ -334,7 +334,9 @@ func TestStaticUI(t *testing.T) {
 		// A project's directory is picked in Settings and shown as the default for its tasks.
 		"function taskWorkdir(t)", "workdir.addEventListener('change', saveProject)", "`Default (${taskWorkdir(task)})`",
 		// The new task dialog drops its missing "Builds on" line instead of drawing "null".
-		"dlg.replaceChildren(...[h('h2', {}, from ? 'New follow-up task' : 'New task')", "hint('⌘↵')))].filter(Boolean));"} {
+		"dlg.replaceChildren(...[h('h2', {}, from ? 'New follow-up task' : 'New task')", "hint('⌘↵')))].filter(Boolean));",
+		// A created task shows on its project's board, not full screen.
+		"remember('project', t.project_id);\n    go('#/board');"} {
 		if !bytes.Contains(js, []byte(want)) {
 			t.Fatalf("app.js lacks %q", want)
 		}
@@ -774,19 +776,21 @@ func TestSkills(t *testing.T) {
 	c.do("POST", "/api/skills", map[string]any{"name": " ", "body": "x"}, 400, nil)
 	c.do("POST", "/api/skills", map[string]any{"name": "x", "body": "{{.Nope"}, 400, nil)
 	c.do("POST", "/api/skills", map[string]any{"name": "research SUMMARY", "body": "x"}, 400, nil)
+	c.do("POST", "/api/skills", map[string]any{"name": "x", "body": "x", "model": "--dangerous"}, 400, nil)
+	c.do("POST", "/api/skills", map[string]any{"name": "x", "body": "x", "model": "fa ble"}, 400, nil)
 	c.do("POST", "/api/skills", map[string]any{"name": "x", "body": "x", "automations": []map[string]any{{"kind": "weird"}}}, 400, nil)
 	c.do("POST", "/api/skills", map[string]any{"name": "x", "body": "x", "automations": []map[string]any{{"lane_id": 999}}}, 400, nil)
 	c.do("POST", "/api/skills", map[string]any{"name": "x", "body": "x", "automations": []map[string]any{{"project_id": 999}}}, 400, nil)
 
 	var sk store.Skill
-	c.do("POST", "/api/skills", map[string]any{"name": "Digest", "body": "Digest {{.Task.Title}}", "artifact": true,
+	c.do("POST", "/api/skills", map[string]any{"name": "Digest", "body": "Digest {{.Task.Title}}", "artifact": true, "model": " fable ",
 		"automations": []map[string]any{{"kind": "research", "project_id": b.ProjectID, "enabled": true}}}, 200, &sk)
-	if sk.ID == 0 || len(sk.Automations) != 1 || *sk.Automations[0].ProjectID != b.ProjectID {
+	if sk.ID == 0 || len(sk.Automations) != 1 || *sk.Automations[0].ProjectID != b.ProjectID || sk.Model != "fable" {
 		t.Fatalf("created = %+v", sk)
 	}
 	// A patch keeps what it leaves out.
 	c.do("PATCH", "/api/skills/"+itoa(sk.ID), map[string]any{"description": "short"}, 200, &sk)
-	if sk.Description != "short" || sk.Body != "Digest {{.Task.Title}}" || len(sk.Automations) != 1 || !sk.Artifact {
+	if sk.Description != "short" || sk.Body != "Digest {{.Task.Title}}" || len(sk.Automations) != 1 || !sk.Artifact || sk.Model != "fable" {
 		t.Fatalf("patched = %+v", sk)
 	}
 

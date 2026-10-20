@@ -1116,10 +1116,11 @@ function skillsPanel(skills, b, rerender) {
     h('div', { class: 'row' }, h('h2', { class: 'grow' }, 'Skills'), h('button', { onclick: () => skillDialog(null, b, rerender) }, '+ Add skill')),
     h('p', { class: 'muted small' }, 'Instructions an agent applies to the work of its session: automatically after a successful turn on a ' +
       'matching task, or by hand from a session ("Run skill"). A skill can keep the agent\'s reply as an artifact on the task.'),
-    skills.length ? h('table', {}, h('thead', {}, h('tr', {}, ['Skill', 'Runs', 'Artifact', ''].map(x => h('th', {}, x)))),
+    skills.length ? h('table', {}, h('thead', {}, h('tr', {}, ['Skill', 'Runs', 'Model', 'Artifact', ''].map(x => h('th', {}, x)))),
       h('tbody', {}, skills.map(sk => h('tr', {},
         h('td', {}, sk.name, sk.description ? h('div', { class: 'muted small' }, sk.description) : null),
         h('td', { class: 'small' }, runsWhen(sk)),
+        h('td', { class: 'muted small' }, sk.model || 'session\'s'),
         h('td', { class: 'muted small' }, sk.artifact ? 'kept' : '—'),
         h('td', {}, h('button', { class: 'ghost small', onclick: () => skillDialog(sk, b, rerender) }, 'Edit'), ' ',
           h('button', {
@@ -1131,12 +1132,14 @@ function skillsPanel(skills, b, rerender) {
 }
 
 function skillDialog(skill, b, done) {
-  skill = skill || { name: '', description: '', body: '', artifact: true, automations: [] };
+  skill = skill || { name: '', description: '', body: '', artifact: true, model: '', automations: [] };
   const dlg = document.getElementById('dialog');
   const name = h('input', { value: skill.name, placeholder: 'e.g. Research summary' });
   const description = h('input', { value: skill.description, placeholder: 'What it is for' });
   const body = h('textarea', { rows: 14, class: 'mono' }, skill.body);
   const artifact = h('input', { type: 'checkbox', checked: skill.artifact });
+  const [model, modelList] = modelInput(skill.model);
+  model.placeholder = 'Model — the session\'s';
   const nullableID = sel => sel.value ? Number(sel.value) : null;
   const rows = h('div');
   const addRow = a => {
@@ -1157,6 +1160,7 @@ function skillDialog(skill, b, done) {
     h('label', {}, 'Instructions — what the agent does with its session\'s work, e.g. the shape of a summary. ' +
       'Template vars: {{.Task.Title}}, {{.Task.ID}}, {{.Fields.pull_request}}, {{.Context}}'),
     body,
+    h('label', {}, 'Model for the skill\'s turn, e.g. fable — empty keeps the session\'s model'), model, modelList,
     h('label', { class: 'row', style: 'margin-top:8px' }, artifact, 'Keep the agent\'s reply as an artifact on the task'),
     h('label', {}, 'Run automatically after an agent turn finishes successfully, on a task that matches any of:'),
     rows,
@@ -1166,7 +1170,7 @@ function skillDialog(skill, b, done) {
       h('button', {
         onclick: async () => {
           const out = {
-            name: name.value, description: description.value, body: body.value, artifact: artifact.checked,
+            name: name.value, description: description.value, body: body.value, artifact: artifact.checked, model: model.value,
             automations: [...rows.children].map(r => r.value()),
           };
           await api(skill.id ? 'PATCH' : 'POST', skill.id ? `/api/skills/${skill.id}` : '/api/skills', out);
@@ -1343,8 +1347,10 @@ async function newTaskDialog(opts = {}) {
       project_id: Number(project.value), context_from: from ? [from.id] : [],
     });
     dlg.close();
-    closeTaskDialog();
-    location.hash = `#/task/${t.id}`;
+    // Back to the board, on the new task's project, where the task now shows.
+    state.projectId = t.project_id;
+    remember('project', t.project_id);
+    go('#/board');
   };
   title.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey) create(); });
   submitOnCmdEnter([title, desc, kind, project, lane, due], create);

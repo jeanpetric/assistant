@@ -675,13 +675,17 @@ func (in *sessionInput) validate() error {
 	if strings.TrimSpace(in.Prompt) == "" {
 		return badRequest{"prompt is required"}
 	}
-	in.Model = strings.TrimSpace(in.Model)
-	if strings.ContainsAny(in.Model, " \t\n") || strings.HasPrefix(in.Model, "-") {
+	if in.Model = strings.TrimSpace(in.Model); !validModel(in.Model) {
 		return badRequest{"invalid model"}
 	}
 	dir, err := resolveWorkdir(in.Workdir)
 	in.Workdir = dir
 	return err
+}
+
+// validModel accepts empty (the default) or anything that passes as one --model argument.
+func validModel(m string) bool {
+	return !strings.ContainsAny(m, " \t\n") && !strings.HasPrefix(m, "-")
 }
 
 // resolveWorkdir expands a leading ~ and checks the directory exists.
@@ -1078,6 +1082,10 @@ func (s *Server) saveSkill(w http.ResponseWriter, r *http.Request, x store.Skill
 	x.Name = strings.TrimSpace(x.Name)
 	if x.Name == "" || strings.TrimSpace(x.Body) == "" {
 		writeErr(w, badRequest{"name and body are required"})
+		return
+	}
+	if x.Model = strings.TrimSpace(x.Model); !validModel(x.Model) {
+		writeErr(w, badRequest{"invalid model"})
 		return
 	}
 	if _, err := app.RenderPrompt(x.Body, store.Task{}); err != nil {

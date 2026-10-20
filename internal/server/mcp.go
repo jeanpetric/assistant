@@ -122,6 +122,7 @@ var (
 		})}
 	pSkillBody = prop("string", "Instructions for the agent (Markdown), e.g. how a summary should look and where to write it. "+
 		"A prompt template: {{.Task.Title}}, {{.Task.ID}}, {{.Fields.pull_request}}, {{.Context}}")
+	pSkillModel  = prop("string", "Model the skill's turn runs with, e.g. fable; empty keeps the session's model")
 	pContextFrom = map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "Ids of earlier tasks this task builds on, e.g. the research it follows from. Summaries of their agent sessions (or the final replies, where a session has no up-to-date summary) go into the context of this task's agents (include_context, rules and schedules using {{.Context}}). Empty: the task starts from scratch."}
 )
 
@@ -290,6 +291,7 @@ func (s *Server) mcpTools() []mcpTool {
 			InputSchema: schema([]string{"name", "body"}, map[string]any{
 				"name": prop("string", "Unique name"), "description": prop("string", "What it is for"), "body": pSkillBody,
 				"artifact":    prop("boolean", "Keep the agent's reply as an artifact on the task"),
+				"model":       pSkillModel,
 				"automations": pSkillAutomations,
 			}),
 			call: fixed("POST", "/api/skills", true),
@@ -299,7 +301,8 @@ func (s *Server) mcpTools() []mcpTool {
 			Description: "Change a skill; only the given keys change (automations, if given, replace the list).",
 			InputSchema: schema([]string{"skill_id"}, map[string]any{
 				"skill_id": prop("integer", "Skill id"), "name": prop("string", "Unique name"), "description": prop("string", "What it is for"),
-				"body": pSkillBody, "artifact": prop("boolean", "Keep the agent's reply as an artifact on the task"), "automations": pSkillAutomations,
+				"body": pSkillBody, "artifact": prop("boolean", "Keep the agent's reply as an artifact on the task"), "model": pSkillModel,
+				"automations": pSkillAutomations,
 			}),
 			call: byID("PATCH", "/api/skills/%d", "skill_id", true),
 		},
