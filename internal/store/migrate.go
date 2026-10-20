@@ -257,6 +257,13 @@ The answer in two or three sentences.
 ## Recommended next steps', 1, strftime('%s', 'now') * 1000, strftime('%s', 'now') * 1000);
 INSERT INTO skill_automations (skill_id, kind, enabled) VALUES (1, 'research', 0);
 `,
+	// A session's summary, written for the agents of tasks that build on its
+	// task. summary_upto is the last message it covers: newer messages make it stale.
+	`
+ALTER TABLE sessions ADD COLUMN summary TEXT NOT NULL DEFAULT '';
+ALTER TABLE sessions ADD COLUMN summary_upto INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE sessions ADD COLUMN summary_at INTEGER;
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

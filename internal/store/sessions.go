@@ -16,25 +16,31 @@ const (
 )
 
 type Session struct {
-	ID              int64     `json:"id"`
-	TaskID          int64     `json:"task_id"` // 0: standalone session
-	TaskTitle       string    `json:"task_title,omitempty"`
-	TaskProjectID   int64     `json:"task_project_id,omitempty"`
-	Title           string    `json:"title"`
-	Status          string    `json:"status"`
-	Mode            string    `json:"mode"`
-	Model           string    `json:"model"` // empty: CLI default
-	Workdir         string    `json:"workdir"`
-	Trigger         string    `json:"trigger"`
-	DoneLaneID      *int64    `json:"done_lane_id"` // move the task here when a turn finishes successfully
-	ParentID        *int64    `json:"parent_id"`    // the session this one was handed off from
-	ChildID         *int64    `json:"child_id"`     // the latest session this one was handed off to
-	ClaudeSessionID string    `json:"claude_session_id"`
-	CostUSD         float64   `json:"cost_usd"`
-	Error           string    `json:"error"`
-	LastMessage     string    `json:"last_message,omitempty"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	ID              int64   `json:"id"`
+	TaskID          int64   `json:"task_id"` // 0: standalone session
+	TaskTitle       string  `json:"task_title,omitempty"`
+	TaskProjectID   int64   `json:"task_project_id,omitempty"`
+	Title           string  `json:"title"`
+	Status          string  `json:"status"`
+	Mode            string  `json:"mode"`
+	Model           string  `json:"model"` // empty: CLI default
+	Workdir         string  `json:"workdir"`
+	Trigger         string  `json:"trigger"`
+	DoneLaneID      *int64  `json:"done_lane_id"` // move the task here when a turn finishes successfully
+	ParentID        *int64  `json:"parent_id"`    // the session this one was handed off from
+	ChildID         *int64  `json:"child_id"`     // the latest session this one was handed off to
+	ClaudeSessionID string  `json:"claude_session_id"`
+	CostUSD         float64 `json:"cost_usd"`
+	Error           string  `json:"error"`
+	LastMessage     string  `json:"last_message,omitempty"`
+	// Summary of the session for agents that build on its task; empty until one
+	// is written. It covers messages up to SummaryUpto; later ones make it stale.
+	Summary      string     `json:"summary"`
+	SummaryUpto  int64      `json:"summary_upto"`
+	SummaryAt    *time.Time `json:"summary_at"`
+	SummaryStale bool       `json:"summary_stale"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
 }
 
 type Message struct {
@@ -48,15 +54,20 @@ type Message struct {
 
 const sessionCols = `s.id, COALESCE(s.task_id, 0), COALESCE(t.title, ''), COALESCE(t.project_id, 0), s.title, s.status, s.mode, s.model, s.workdir, s.trigger, s.done_lane_id, s.parent_id,
 	(SELECT MAX(c.id) FROM sessions c WHERE c.parent_id = s.id), s.claude_session_id, s.cost_usd, s.error, s.created_at, s.updated_at,
-	COALESCE((SELECT content FROM messages m WHERE m.session_id = s.id AND m.kind IN ('text', 'result', 'error') ORDER BY m.id DESC LIMIT 1), '')`
+	COALESCE((SELECT content FROM messages m WHERE m.session_id = s.id AND m.kind IN ('text', 'result', 'error') ORDER BY m.id DESC LIMIT 1), ''),
+	s.summary, s.summary_upto, s.summary_at, COALESCE((SELECT MAX(m.id) FROM messages m WHERE m.session_id = s.id), 0)`
 
 func scanSession(sc interface{ Scan(...any) error }) (Session, error) {
 	var x Session
 	var created, updated int64
-	var doneLane, parent, child sql.NullInt64
+	var doneLane, parent, child, summaryAt sql.NullInt64
+	var lastID int64
 	err := sc.Scan(&x.ID, &x.TaskID, &x.TaskTitle, &x.TaskProjectID, &x.Title, &x.Status, &x.Mode, &x.Model, &x.Workdir, &x.Trigger,
-		&doneLane, &parent, &child, &x.ClaudeSessionID, &x.CostUSD, &x.Error, &created, &updated, &x.LastMessage)
+		&doneLane, &parent, &child, &x.ClaudeSessionID, &x.CostUSD, &x.Error, &created, &updated, &x.LastMessage,
+		&x.Summary, &x.SummaryUpto, &summaryAt, &lastID)
 	x.DoneLaneID, x.ParentID, x.ChildID = fromNullID(doneLane), fromNullID(parent), fromNullID(child)
+	x.SummaryAt = fromNullMillis(summaryAt)
+	x.SummaryStale = x.Summary != "" && lastID > x.SummaryUpto
 	x.CreatedAt, x.UpdatedAt = fromMillis(created), fromMillis(updated)
 	return x, err
 }
@@ -125,6 +136,22 @@ func (s *Store) SetClaudeSessionID(ctx context.Context, id int64, claudeID strin
 func (s *Store) AddSessionCost(ctx context.Context, id int64, usd float64) error {
 	return affected(s.db.ExecContext(ctx,
 		`UPDATE sessions SET cost_usd = cost_usd + ?, updated_at = ? WHERE id = ?`, usd, s.ts(), id))
+}
+
+// SetSessionSummary stores the session's summary, which covers its messages
+// up to upto, and adds what writing it cost. The session's activity time stays:
+// a summary is not work in the session.
+func (s *Store) SetSessionSummary(ctx context.Context, id int64, summary string, upto int64, costUSD float64) error {
+	return affected(s.db.ExecContext(ctx,
+		`UPDATE sessions SET summary = ?, summary_upto = ?, summary_at = ?, cost_usd = cost_usd + ? WHERE id = ?`,
+		summary, upto, s.ts(), costUSD, id))
+}
+
+// LastMessageID is the id of the session's latest message, 0 if it has none.
+func (s *Store) LastMessageID(ctx context.Context, sessionID int64) (int64, error) {
+	var id int64
+	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(id), 0) FROM messages WHERE session_id = ?`, sessionID).Scan(&id)
+	return id, err
 }
 
 // MarkInterrupted flags sessions left running by a previous process.

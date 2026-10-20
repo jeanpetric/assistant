@@ -22,6 +22,9 @@ type fakeRunner struct {
 	failOn string            // if set, prompts starting with it fail
 	block  chan struct{}     // if set, Run waits for close or ctx cancel
 	limits *agent.RateLimits // if set, emitted as a rate_limit event
+	// If set, the final reply and the error of a request; otherwise "ok" and err.
+	result func(agent.Request) string
+	fail   func(agent.Request) error
 }
 
 func (f *fakeRunner) Run(ctx context.Context, req agent.Request, emit func(agent.Event)) error {
@@ -42,12 +45,24 @@ func (f *fakeRunner) Run(ctx context.Context, req agent.Request, emit func(agent
 			return ctx.Err()
 		}
 	}
-	emit(agent.Event{Role: "assistant", Kind: "text", Content: "echo: " + req.Prompt})
-	emit(agent.Event{Role: "system", Kind: "result", Content: "ok", CostUSD: 0.5})
-	if f.failOn != "" && strings.HasPrefix(req.Prompt, f.failOn) {
-		return errors.New("failed: " + f.failOn)
+	f.mu.Lock()
+	result, fail, failOn, err := f.result, f.fail, f.failOn, f.err
+	f.mu.Unlock()
+	if fail != nil {
+		if err := fail(req); err != nil {
+			return err
+		}
 	}
-	return f.err
+	reply := "ok"
+	if result != nil {
+		reply = result(req)
+	}
+	emit(agent.Event{Role: "assistant", Kind: "text", Content: "echo: " + req.Prompt})
+	emit(agent.Event{Role: "system", Kind: "result", Content: reply, CostUSD: 0.5})
+	if failOn != "" && strings.HasPrefix(req.Prompt, failOn) {
+		return errors.New("failed: " + failOn)
+	}
+	return err
 }
 
 func (f *fakeRunner) requests() []agent.Request {
@@ -713,9 +728,15 @@ func TestTaskBriefSharesEarlierResults(t *testing.T) {
 	empty, _ := a.Store.CreateTask(ctx, store.Task{Title: "Nothing yet"})
 
 	follow, _ := a.Store.CreateTask(ctx, store.Task{Title: "Make tasks", LaneID: lanes["Todo"], ContextFrom: []int64{research.ID, empty.ID}})
+	r.result = func(req agent.Request) string {
+		if strings.Contains(req.Prompt, "Redis wins.") {
+			return "SUMMARY: compared Redis and Memcached; Redis wins."
+		}
+		return "SUMMARY: settled on a 5 minute TTL."
+	}
 	brief := a.TaskBrief(ctx, follow)
 	for _, want := range []string{"Task #" + itoa(follow.ID) + ": Make tasks", SharedIntro, "## Task #" + itoa(research.ID) + ": Research caching",
-		"Compare options", "First pass", "Redis wins.", "Use Redis with a 5 minute TTL.", "(cut;", "Nothing yet", "(No agent results yet.)"} {
+		"Compare options", "Final reply of session", "First pass", "Redis wins.", "Use Redis with a 5 minute TTL.", "(cut;", "Nothing yet", "(No agent results yet.)"} {
 		if !strings.Contains(brief, want) {
 			t.Fatalf("brief lacks %q:\n%s", want, brief)
 		}
@@ -732,6 +753,33 @@ func TestTaskBriefSharesEarlierResults(t *testing.T) {
 		t.Fatal("a task that builds on nothing gets only its own context")
 	}
 
+	// Without summaries the brief has the final replies, and the sessions get
+	// summarised in the background for the next brief, from their transcripts
+	// as they have no agent conversation to fork.
+	a.Wait()
+	reqs := r.requests()
+	if len(reqs) != 2 {
+		t.Fatalf("want a summary of the two finished sessions: %+v", reqs)
+	}
+	for _, req := range reqs {
+		if !strings.HasPrefix(req.Prompt, TranscriptSummaryPrompt) || req.Model != SummaryModel || req.Mode != "plan" || req.ResumeID != "" {
+			t.Fatalf("summary request = %+v", req)
+		}
+	}
+	brief = a.TaskBrief(ctx, follow)
+	for _, want := range []string{"### Summary of session", "SUMMARY: compared Redis and Memcached; Redis wins.", "SUMMARY: settled on a 5 minute TTL."} {
+		if !strings.Contains(brief, want) {
+			t.Fatalf("brief lacks %q:\n%s", want, brief)
+		}
+	}
+	if strings.Contains(brief, "Final reply of session") || strings.Contains(brief, "xxxxx") {
+		t.Fatalf("summaries should replace the final replies:\n%s", brief)
+	}
+	a.Wait()
+	if n := len(r.requests()); n != 2 {
+		t.Fatalf("fresh summaries are not written again: %d requests", n)
+	}
+
 	// Rules get the shared results through {{.Context}}.
 	wip := lanes["In progress"]
 	a.Store.SaveRule(ctx, store.Rule{Name: "Plan", ToLaneID: wip, Enabled: true, Prompt: "{{.Context}}\n\nPlan it."})
@@ -739,7 +787,7 @@ func TestTaskBriefSharesEarlierResults(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.Wait()
-	if p := r.requests()[0].Prompt; !strings.Contains(p, "Redis wins.") || !strings.HasSuffix(p, "Plan it.") {
+	if p := r.requests()[2].Prompt; !strings.Contains(p, "SUMMARY: compared Redis") || !strings.HasSuffix(p, "Plan it.") {
 		t.Fatalf("rule prompt = %q", p)
 	}
 }
@@ -865,5 +913,197 @@ func TestFailedSkillStopsTheChain(t *testing.T) {
 	notes, _ = a.Store.Notifications(ctx, true)
 	if len(notes) != 1 || !strings.Contains(notes[0].Message, `Skill "A" ended error`) {
 		t.Fatalf("notifications = %+v", notes)
+	}
+}
+
+func TestSummaryAfterTurnForksTheConversation(t *testing.T) {
+	a, r := newApp(t)
+	ctx := context.Background()
+	lanes := lanesByName(t, a)
+	wip, review := lanes["In progress"], lanes["Review"]
+	research, _ := a.Store.CreateTask(ctx, store.Task{Title: "Research", LaneID: wip, Workdir: "/repo"})
+	r.result = func(req agent.Request) string {
+		if req.Fork {
+			return "Whole session: found X in /repo/x.go."
+		}
+		return "Final: X."
+	}
+
+	// Nobody builds on the task yet: no summary is written.
+	solo, _ := a.StartSession(ctx, StartOpts{TaskID: research.ID, Prompt: "look", Mode: "bypassPermissions", Model: "sonnet"})
+	a.Wait()
+	if n := len(r.requests()); n != 1 {
+		t.Fatalf("no users, no summary: %d requests", n)
+	}
+
+	a.Store.CreateTask(ctx, store.Task{Title: "Build", ContextFrom: []int64{research.ID}})
+	sess, _ := a.StartSession(ctx, StartOpts{TaskID: research.ID, Prompt: "dig", Mode: "bypassPermissions", Model: "sonnet", DoneLaneID: &review})
+	a.Wait()
+	reqs := r.requests()
+	if len(reqs) != 3 {
+		t.Fatalf("requests = %+v", reqs)
+	}
+	var sum agent.Request
+	for _, req := range reqs {
+		if req.Fork {
+			sum = req
+		}
+	}
+	if sum.Prompt != SummaryPrompt || sum.ResumeID != "claude-1" || sum.Mode != "plan" || sum.Model != "sonnet" || sum.Workdir != "/repo" {
+		t.Fatalf("summary request = %+v", sum)
+	}
+	got, _ := a.Store.Session(ctx, sess.ID)
+	msgs, _ := a.Store.Messages(ctx, sess.ID, 0)
+	if got.Summary != "Whole session: found X in /repo/x.go." || got.SummaryStale || got.SummaryUpto != msgs[len(msgs)-1].ID {
+		t.Fatalf("session = %+v", got)
+	}
+	if len(msgs) != 3 {
+		t.Fatalf("the summary must stay out of the transcript: %+v", msgs)
+	}
+	if got.CostUSD != 1 {
+		t.Fatalf("cost should include the summary: %v", got.CostUSD)
+	}
+	if other, _ := a.Store.Session(ctx, solo.ID); other.Summary != "" {
+		t.Fatalf("only the finished session is summarised: %+v", other)
+	}
+
+	// A follow-up makes the summary stale; regenerating it moves nothing and
+	// fires no rules.
+	if tk, _ := a.Store.Task(ctx, research.ID); tk.LaneID != review {
+		t.Fatalf("the turn should move the task: lane %d", tk.LaneID)
+	}
+	a.Store.SaveRule(ctx, store.Rule{Name: "Check", ToLaneID: review, Enabled: true, Prompt: "check"})
+	a.Store.MoveTask(ctx, research.ID, wip, 0)
+	a.SendMessage(ctx, solo.ID, "more")
+	a.Wait()
+	before := len(r.requests())
+	stale, _ := a.Store.Session(ctx, sess.ID)
+	a.Store.AddMessage(ctx, store.Message{SessionID: sess.ID, Role: "user", Kind: "text", Content: "and Y?"})
+	if stale, _ = a.Store.Session(ctx, sess.ID); !stale.SummaryStale {
+		t.Fatalf("summary should be stale: %+v", stale)
+	}
+	if err := a.Summarize(ctx, sess.ID); err != nil {
+		t.Fatal(err)
+	}
+	a.Wait()
+	if reqs = r.requests(); len(reqs) != before+1 || !reqs[before].Fork {
+		t.Fatalf("one request for the summary: %+v", reqs[before:])
+	}
+	if got, _ = a.Store.Session(ctx, sess.ID); got.SummaryStale || got.Summary == "" {
+		t.Fatalf("regenerated = %+v", got)
+	}
+	if tk, _ := a.Store.Task(ctx, research.ID); tk.LaneID != wip {
+		t.Fatalf("a summary must not move the task: lane %d", tk.LaneID)
+	}
+	if xs, _ := a.Store.Sessions(ctx, research.ID, ""); len(xs) != 2 {
+		t.Fatalf("a summary must not start sessions: %d", len(xs))
+	}
+}
+
+func TestSummaryFallbackAndFailures(t *testing.T) {
+	a, r := newApp(t)
+	ctx := context.Background()
+	if err := a.Summarize(ctx, 999); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("missing session: %v", err)
+	}
+	task, _ := a.Store.CreateTask(ctx, store.Task{Title: "Research"})
+	sess, _ := a.StartSession(ctx, StartOpts{TaskID: task.ID, Prompt: "find the bug", Model: "opus"})
+	a.Wait()
+
+	// The fork fails: the summary comes from the transcript, with the cheap model.
+	r.fail = func(req agent.Request) error {
+		if req.Fork {
+			return errors.New("no conversation")
+		}
+		return nil
+	}
+	r.result = func(req agent.Request) string { return "From the transcript." }
+	if err := a.Summarize(ctx, sess.ID); err != nil {
+		t.Fatal(err)
+	}
+	a.Wait()
+	reqs := r.requests()
+	last := reqs[len(reqs)-1]
+	if len(reqs) != 3 || !reqs[1].Fork || last.Fork || last.ResumeID != "" || last.Model != SummaryModel ||
+		!strings.Contains(last.Prompt, "[User]\nfind the bug") || !strings.Contains(last.Prompt, "[Final reply of the turn]\nok") {
+		t.Fatalf("requests = %+v", reqs)
+	}
+	if got, _ := a.Store.Session(ctx, sess.ID); got.Summary != "From the transcript." {
+		t.Fatalf("session = %+v", got)
+	}
+
+	// Both fail: the summary stays as it was and a notification says why.
+	r.fail = func(agent.Request) error { return errors.New("no claude") }
+	a.Store.AddMessage(ctx, store.Message{SessionID: sess.ID, Role: "user", Kind: "text", Content: "more"})
+	a.Summarize(ctx, sess.ID)
+	a.Wait()
+	if got, _ := a.Store.Session(ctx, sess.ID); got.Summary != "From the transcript." || !got.SummaryStale {
+		t.Fatalf("session = %+v", got)
+	}
+	n, _ := a.Store.Notifications(ctx, true)
+	if len(n) != 1 || !strings.Contains(n[0].Message, "Could not summarise") || !strings.Contains(n[0].Message, "no claude") {
+		t.Fatalf("notifications = %+v", n)
+	}
+
+	// While a turn runs there is nothing settled to sum up; while a summary is
+	// being written, asking again does nothing.
+	r.fail = nil
+	r.block = make(chan struct{})
+	a.SendMessage(ctx, sess.ID, "go on")
+	if err := a.Summarize(ctx, sess.ID); !errors.Is(err, ErrBusy) {
+		t.Fatalf("running session: %v", err)
+	}
+	close(r.block)
+	a.Wait()
+	r.block = make(chan struct{})
+	before := len(r.requests())
+	a.Summarize(ctx, sess.ID)
+	if !a.Summarizing(sess.ID) {
+		t.Fatal("should be summarising")
+	}
+	a.Summarize(ctx, sess.ID)
+	close(r.block)
+	a.Wait()
+	if a.Summarizing(sess.ID) || len(r.requests()) != before+1 {
+		t.Fatalf("one summary at a time: %d requests, want %d", len(r.requests()), before+1)
+	}
+}
+
+func TestTranscriptCutsLongSessions(t *testing.T) {
+	msgs := []store.Message{
+		{ID: 1, Role: "user", Kind: "text", Content: "start"},
+		{ID: 2, Role: "tool", Kind: "tool_result", Content: strings.Repeat("r", 5000)},
+	}
+	for i := 0; i < 10; i++ {
+		msgs = append(msgs, store.Message{ID: int64(3 + i), Role: "assistant", Kind: "text", Content: strings.Repeat("a", 20000)})
+	}
+	msgs = append(msgs, store.Message{ID: 13, Role: "system", Kind: "result", Content: "the end"},
+		store.Message{ID: 14, Role: "user", Kind: "text", Content: "after the summary"})
+	got := transcript(msgs, 13)
+	if !strings.HasPrefix(got, "[User]\nstart") || !strings.Contains(got, "left out") || !strings.HasSuffix(got, "the end\n\n") {
+		t.Fatalf("transcript = %.200q … %q", got, got[len(got)-50:])
+	}
+	if strings.Contains(got, strings.Repeat("r", 2001)) || strings.Contains(got, "after the summary") {
+		t.Fatal("tool output should be cut and later messages left out")
+	}
+	if n := len([]rune(got)); n > maxTranscriptRunes+100 {
+		t.Fatalf("transcript has %d runes", n)
+	}
+}
+
+func TestSummaryWaitsForSkills(t *testing.T) {
+	a, r := newApp(t)
+	ctx := context.Background()
+	task, _ := a.Store.CreateTask(ctx, store.Task{Title: "Research"})
+	a.Store.CreateTask(ctx, store.Task{Title: "Build", ContextFrom: []int64{task.ID}})
+	a.Store.SaveSkill(ctx, store.Skill{Name: "Notes", Body: "Note it.", Automations: []store.SkillAutomation{{Enabled: true}}})
+	sess, _ := a.StartSession(ctx, StartOpts{TaskID: task.ID, Prompt: "dig"})
+	a.Wait()
+	reqs := r.requests()
+	if len(reqs) != 3 || !strings.HasPrefix(reqs[1].Prompt, `Apply the skill "Notes"`) || !reqs[2].Fork {
+		t.Fatalf("want the turn, the skill, then the summary: %+v", reqs)
+	}
+	if got, _ := a.Store.Session(ctx, sess.ID); got.Summary == "" || got.SummaryStale {
+		t.Fatalf("the summary should cover the skill turn too: %+v", got)
 	}
 }

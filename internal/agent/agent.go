@@ -48,6 +48,7 @@ type Request struct {
 	Mode     string // claude --permission-mode value; empty uses CLI default
 	Model    string // claude --model value; empty uses CLI default
 	ResumeID string // continue an existing claude session
+	Fork     bool   // with ResumeID: continue in a copy, leaving that session as it was
 }
 
 type Runner interface {
@@ -72,6 +73,9 @@ func (r ClaudeRunner) Args(req Request) []string {
 	args := []string{"-p", "--output-format", "stream-json", "--verbose"}
 	if req.ResumeID != "" {
 		args = append(args, "--resume", req.ResumeID)
+		if req.Fork {
+			args = append(args, "--fork-session")
+		}
 	}
 	if req.Mode != "" && req.Mode != "default" {
 		args = append(args, "--permission-mode", req.Mode)

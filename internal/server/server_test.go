@@ -29,7 +29,11 @@ func (echoRunner) Run(ctx context.Context, req agent.Request, emit func(agent.Ev
 		return ctx.Err()
 	}
 	emit(agent.Event{Role: "assistant", Kind: "text", Content: "did: " + req.Prompt})
-	emit(agent.Event{Role: "system", Kind: "result", Content: "ok"})
+	result := "ok"
+	if req.Fork { // a session summary
+		result = "SUMMARY of " + req.ResumeID
+	}
+	emit(agent.Event{Role: "system", Kind: "result", Content: result})
 	return nil
 }
 
@@ -677,6 +681,58 @@ func TestTaskContextSharing(t *testing.T) {
 		t.Fatalf("prompt = %q", p)
 	}
 
+	// That brief had the final reply and summarised the research session in
+	// the background; the next brief has the summary instead.
+	var sessions []sessionOut
+	c.do("GET", "/api/sessions?task_id="+itoa(research.ID), nil, 200, &sessions)
+	if len(sessions) != 1 || sessions[0].Summary != "SUMMARY of c-1" || sessions[0].SummaryStale || sessions[0].Summarizing {
+		t.Fatalf("research sessions = %+v", sessions)
+	}
+	researchSess := sessions[0].ID
+	c.do("POST", "/api/tasks/"+itoa(follow.ID)+"/sessions", map[string]any{"prompt": "again", "include_context": true}, 201, &sess)
+	c.app.Wait()
+	c.do("GET", "/api/sessions/"+itoa(sess.ID), nil, 200, &got)
+	if p := got.Messages[0].Content; !strings.Contains(p, "### Summary of session "+itoa(researchSess)) || !strings.Contains(p, "SUMMARY of c-1") ||
+		strings.Contains(p, "Final reply of session") {
+		t.Fatalf("prompt = %q", p)
+	}
+
+	// A follow-up in the research session makes its summary stale until it is
+	// rewritten (here after the follow-up's turn, as a task builds on it).
+	c.do("POST", "/api/sessions/"+itoa(researchSess)+"/messages", map[string]any{"text": "block"}, 202, nil)
+	c.do("POST", "/api/sessions/"+itoa(researchSess)+"/summary", nil, 409, nil)
+	var one struct {
+		Session sessionOut `json:"session"`
+	}
+	c.do("GET", "/api/sessions/"+itoa(researchSess), nil, 200, &one)
+	if !one.Session.SummaryStale {
+		t.Fatalf("session = %+v", one.Session)
+	}
+	c.do("POST", "/api/sessions/"+itoa(researchSess)+"/cancel", nil, 202, nil)
+	c.app.Wait()
+	c.do("POST", "/api/sessions/"+itoa(researchSess)+"/summary", nil, 202, nil)
+	c.app.Wait()
+	c.do("GET", "/api/sessions/"+itoa(researchSess), nil, 200, &one)
+	if one.Session.SummaryStale || one.Session.Summary != "SUMMARY of c-1" {
+		t.Fatalf("session = %+v", one.Session)
+	}
+	c.do("POST", "/api/sessions/999/summary", nil, 404, nil)
+
+	// MCP: get_session has the summary, list_sessions leaves it out, and
+	// summarize_session rewrites it.
+	text, isErr := c.tool("get_session", map[string]any{"session_id": researchSess})
+	if isErr || !strings.Contains(text, `"summary":"SUMMARY of c-1"`) || !strings.Contains(text, `"summary_stale":false`) {
+		t.Fatalf("get_session = %s", text)
+	}
+	text, isErr = c.tool("list_sessions", map[string]any{"task_id": research.ID})
+	if isErr || strings.Contains(text, "SUMMARY") || !strings.Contains(text, `"summary_at":"`) {
+		t.Fatalf("list_sessions = %s", text)
+	}
+	if text, isErr = c.tool("summarize_session", map[string]any{"session_id": researchSess}); isErr {
+		t.Fatalf("summarize_session = %s", text)
+	}
+	c.app.Wait()
+
 	// PATCH replaces the list; a bad list changes nothing, not even the other keys.
 	c.do("PATCH", "/api/tasks/"+itoa(follow.ID), map[string]any{"title": "renamed", "context_from": []int64{follow.ID}}, 400, nil)
 	c.do("GET", "/api/tasks/"+itoa(follow.ID), nil, 200, &page)
@@ -693,7 +749,7 @@ func TestTaskContextSharing(t *testing.T) {
 	}
 
 	// MCP: an agent can create a follow-up of its own task, and get_task shows the links.
-	text, isErr := c.tool("create_task", map[string]any{"title": "From MCP", "context_from": []int64{research.ID}})
+	text, isErr = c.tool("create_task", map[string]any{"title": "From MCP", "context_from": []int64{research.ID}})
 	if isErr || !strings.Contains(text, `"context_from":[`+itoa(research.ID)+`]`) {
 		t.Fatalf("create_task = %s", text)
 	}

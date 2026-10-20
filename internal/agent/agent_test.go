@@ -90,6 +90,13 @@ func TestArgs(t *testing.T) {
 	if got := r.Args(Request{Prompt: "hi", Mode: "default"}); strings.Contains(strings.Join(got, " "), "permission-mode") {
 		t.Fatalf("default mode should not pass a flag: %v", got)
 	}
+	got = ClaudeRunner{}.Args(Request{ResumeID: "s1", Fork: true, Mode: "plan"})
+	if want := []string{"-p", "--output-format", "stream-json", "--verbose", "--resume", "s1", "--fork-session", "--permission-mode", "plan"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("fork: %v", got)
+	}
+	if got := r.Args(Request{Fork: true}); strings.Contains(strings.Join(got, " "), "fork") {
+		t.Fatalf("there is nothing to fork without a session to resume: %v", got)
+	}
 }
 
 // TestClaudeRunnerWithFakeCLI runs a shell script standing in for the claude binary.

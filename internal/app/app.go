@@ -39,22 +39,27 @@ type App struct {
 	stopping bool // set by Shutdown: cancelled turns end as interrupted, not cancelled
 	wg       sync.WaitGroup
 	limits   map[int64]agent.RateLimits // per session, last reported; in memory only
+	// summarizing holds the sessions whose summary is being written (see Summarize).
+	summarizing map[int64]context.CancelFunc
 }
 
 func New(s *store.Store, r agent.Runner, workdir, mode string) *App {
 	return &App{Store: s, Runner: r, DefaultWorkdir: workdir, DefaultMode: mode, Now: time.Now,
-		running: map[int64]context.CancelFunc{}, limits: map[int64]agent.RateLimits{}}
+		running: map[int64]context.CancelFunc{}, limits: map[int64]agent.RateLimits{}, summarizing: map[int64]context.CancelFunc{}}
 }
 
 // Wait blocks until all agent turns started so far have finished.
 func (a *App) Wait() { a.wg.Wait() }
 
-// Shutdown cancels running turns and waits for them. The turns are marked
-// interrupted so they can be resumed after the next start.
+// Shutdown cancels running turns and summaries and waits for them. The turns
+// are marked interrupted so they can be resumed after the next start.
 func (a *App) Shutdown() {
 	a.mu.Lock()
 	a.stopping = true
 	for _, cancel := range a.running {
+		cancel()
+	}
+	for _, cancel := range a.summarizing {
 		cancel()
 	}
 	a.mu.Unlock()
@@ -379,7 +384,8 @@ func (a *App) Limits(sessionID int64) agent.RateLimits {
 }
 
 // afterTurn follows a successful turn: the skills whose automations match the
-// task run in the session, one turn each, then the task moves to its done lane.
+// task run in the session, one turn each, then the task moves to its done lane
+// and, if other tasks build on it, the session's summary is written.
 // A skill turn that does not finish successfully ends the chain there.
 func (a *App) afterTurn(ctx context.Context, sessionID, startLane int64) {
 	sess, err := a.Store.Session(ctx, sessionID)
@@ -394,7 +400,10 @@ func (a *App) afterTurn(ctx context.Context, sessionID, startLane int64) {
 			}
 		}
 	}
-	a.runSkills(ctx, sess, skills, func(ctx context.Context) { a.moveWhenDone(ctx, sessionID, startLane) })
+	a.runSkills(ctx, sess, skills, func(ctx context.Context) {
+		a.moveWhenDone(ctx, sessionID, startLane)
+		a.summarizeForUsers(ctx, sess)
+	})
 }
 
 func (a *App) runSkills(ctx context.Context, sess store.Session, skills []store.Skill, then func(context.Context)) {
@@ -684,12 +693,14 @@ const (
 )
 
 // SharedIntro opens the part of a task brief that carries earlier tasks' results.
-const SharedIntro = "This task builds on earlier tasks. What their agents reported, oldest session first:"
+const SharedIntro = "This task builds on earlier tasks. What their agents did, oldest session first: " +
+	"a summary of each session, or its final reply where the session has no up-to-date summary."
 
 // TaskBrief is TaskContext followed by what the agents of the tasks it builds
-// on (ContextFrom) reported: per task, the final reply of each of its latest
-// sessions. Sessions that were handed off are left out; the session that took
-// over carries on.
+// on (ContextFrom) did: per task, each of its latest sessions' summary, or its
+// final reply if the summary is missing or stale. Such sessions get a fresh
+// summary in the background, for the next brief. Sessions that were handed
+// off are left out; the session that took over carries on.
 func (a *App) TaskBrief(ctx context.Context, t store.Task) string {
 	brief := TaskContext(t)
 	if len(t.ContextFrom) == 0 {
@@ -725,11 +736,17 @@ func (a *App) taskResults(ctx context.Context, t store.Task) string {
 		if x.ChildID != nil || x.Status == store.StatusRunning {
 			continue
 		}
+		if x.Summary != "" && !x.SummaryStale {
+			results = append(results, fmt.Sprintf("### Summary of session %d: %s (%s)\n\n%s",
+				x.ID, x.Title, x.UpdatedAt.Format("2006-01-02"), truncate(x.Summary, sharedRunes)))
+			continue
+		}
 		reply, err := a.lastReply(ctx, x.ID)
 		if err != nil {
 			continue
 		}
-		results = append(results, fmt.Sprintf("### Session %d: %s (%s)\n\n%s",
+		a.startSummary(x.ID, false)
+		results = append(results, fmt.Sprintf("### Final reply of session %d: %s (%s)\n\n%s",
 			x.ID, x.Title, x.UpdatedAt.Format("2006-01-02"), truncate(strings.TrimSpace(reply), sharedRunes)))
 	}
 	if len(results) == 0 {

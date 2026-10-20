@@ -74,6 +74,7 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/sessions/{id}/resume", s.resumeSession)
 	m.HandleFunc("POST /api/sessions/{id}/handoff", s.handoffSession)
 	m.HandleFunc("POST /api/sessions/{id}/skill", s.runSkill)
+	m.HandleFunc("POST /api/sessions/{id}/summary", s.summarizeSession)
 
 	m.HandleFunc("GET /api/rules", s.listRules)
 	m.HandleFunc("POST /api/rules", s.saveRule)

@@ -560,7 +560,7 @@ async function taskView(id, { every, leave, reload }) {
       if (!c) {
         const full = await api('GET', `/api/sessions/${s.id}`);
         addSession(Object.assign(full.session, { messages: full.messages }));
-      } else if (s.status === 'running' || s.status !== c.session.status || s.updated_at !== c.session.updated_at) {
+      } else if (s.status === 'running' || s.status !== c.session.status || s.updated_at !== c.session.updated_at || summaryChanged(s, c.session)) {
         finished = finished || (c.session.status === 'running' && s.status !== 'running');
         const upd = await api('GET', `/api/sessions/${s.id}?after=${c.lastId()}`);
         c.update(upd.session, upd.messages);
@@ -615,7 +615,7 @@ function newSessionPanel(task, onStarted) {
   const ctxLabel = h('span');
   const drawContextLabel = () => {
     const n = task.context_from.length;
-    ctxLabel.textContent = n ? `Include task context and results of ${n} earlier task${n > 1 ? 's' : ''}` : 'Include task context';
+    ctxLabel.textContent = n ? `Include task context and session summaries of ${n} earlier task${n > 1 ? 's' : ''}` : 'Include task context';
   };
   drawContextLabel();
   const workdir = workdirSelect('', `Default (${taskWorkdir(task)})`);
@@ -709,7 +709,10 @@ function sessionComponent(session, messages) {
   }) : null;
   const foot = h('div', { class: 'session-foot' }, input,
     h('div', { class: 'row', style: 'margin-top:6px; justify-content:flex-end' }, runSkill, doneLane, send));
-  const el = h('div', { class: 'session' }, head, body, limits, foot);
+  // What tasks building on this one get instead of the transcript; collapsed
+  // until opened, and the open state survives redraws.
+  const summary = h('details', { class: 'session-summary' });
+  const el = h('div', { class: 'session' }, head, summary, body, limits, foot);
   const c = { el, session, lastId: () => last };
 
   const doResume = async () => {
@@ -758,6 +761,32 @@ function sessionComponent(session, messages) {
     send.disabled = running || !s.claude_session_id;
     if (runSkill) runSkill.disabled = send.disabled;
     drawLimits();
+    drawSummary();
+  }
+
+  function drawSummary() {
+    const s = c.session;
+    const status = s.summarizing ? 'writing…' : !s.summary ? 'none yet' : s.summary_stale ? 'out of date' : 'up to date';
+    const doSummarize = async e => {
+      e.preventDefault(); // a button in <summary> would toggle the details
+      await api('POST', `/api/sessions/${s.id}/summary`);
+      c.session.summarizing = true;
+      drawSummary();
+      toast('Writing the summary…');
+    };
+    summary.replaceChildren(
+      h('summary', {},
+        h('span', {}, 'Summary'),
+        h('span', { class: 'badge' + (s.summary_stale ? ' stale' : '') }, s.summarizing ? h('span', { class: 'pulse' }) : null, status),
+        s.summary_at && !s.summarizing ? h('span', { class: 'muted small' }, fmtTime(s.summary_at)) : null,
+        h('button', {
+          class: 'ghost small', disabled: s.summarizing || s.status === 'running',
+          title: 'Have a copy of the agent sum up this session for tasks that build on this one',
+          onclick: doSummarize,
+        }, s.summary ? 'Regenerate summary' : 'Summarize')),
+      s.summary ? h('div', { class: 'msg md' }, markdown(s.summary))
+        : h('p', { class: 'muted small' }, 'Tasks that build on this one get the summary of this session instead of its final reply. ' +
+          'It is written when a turn finishes and another task builds on this one, or on request.'));
   }
 
   // Shown while the session runs and kept after the turn as the last known value.
@@ -779,6 +808,11 @@ function sessionComponent(session, messages) {
   };
   c.update(session, messages);
   return c;
+}
+
+// A summary being written or written does not count as activity in the session.
+function summaryChanged(a, b) {
+  return a.summarizing !== b.summarizing || a.summary_at !== b.summary_at || a.summary_stale !== b.summary_stale;
 }
 
 // Hand a session off to a fresh one: its agent writes a brief, and a new
@@ -888,7 +922,8 @@ async function renderSession(id) {
   every(2000, async () => {
     c.drawLimits();
     const upd = await api('GET', `/api/sessions/${id}?after=${c.lastId()}`);
-    if (upd.messages.length || upd.session.status !== c.session.status || upd.session.updated_at !== c.session.updated_at) {
+    if (upd.messages.length || upd.session.status !== c.session.status || upd.session.updated_at !== c.session.updated_at ||
+      summaryChanged(upd.session, c.session)) {
       c.update(upd.session, upd.messages);
     }
   });

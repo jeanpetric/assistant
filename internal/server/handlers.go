@@ -780,14 +780,16 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, out)
 }
 
-// sessionOut is a session with its live usage limits, which are never stored.
+// sessionOut is a session with its live state, which is never stored: usage
+// limits and whether its summary is being written.
 type sessionOut struct {
 	store.Session
-	Limits agent.RateLimits `json:"limits"`
+	Limits      agent.RateLimits `json:"limits"`
+	Summarizing bool             `json:"summarizing"`
 }
 
 func (s *Server) withLimits(x store.Session) sessionOut {
-	return sessionOut{x, s.app.Limits(x.ID)}
+	return sessionOut{x, s.app.Limits(x.ID), s.app.Summarizing(x.ID)}
 }
 
 func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
@@ -924,6 +926,20 @@ func (s *Server) handoffSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.app.Handoff(r.Context(), id, in.Note); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(202)
+}
+
+// summarizeSession (re)writes the session's summary in the background.
+func (s *Server) summarizeSession(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.app.Summarize(r.Context(), id); err != nil {
 		writeErr(w, err)
 		return
 	}

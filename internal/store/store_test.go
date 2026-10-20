@@ -576,3 +576,89 @@ func TestContextMigrationKeepsData(t *testing.T) {
 		t.Fatalf("next = %+v", next)
 	}
 }
+
+func TestSessionSummary(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	task, _ := s.CreateTask(ctx, Task{Title: "Research"})
+	x, _ := s.CreateSession(ctx, Session{TaskID: task.ID, Title: "work", Mode: "plan"})
+	if x.Summary != "" || x.SummaryAt != nil || x.SummaryStale {
+		t.Fatalf("new session = %+v", x)
+	}
+	if id, err := s.LastMessageID(ctx, x.ID); err != nil || id != 0 {
+		t.Fatalf("no messages: %d, %v", id, err)
+	}
+	m, _ := s.AddMessage(ctx, Message{SessionID: x.ID, Role: "user", Kind: "text", Content: "go"})
+	if id, _ := s.LastMessageID(ctx, x.ID); id != m.ID {
+		t.Fatalf("last message = %d, want %d", id, m.ID)
+	}
+	before, _ := s.Session(ctx, x.ID)
+	if err := s.SetSessionSummary(ctx, x.ID, "Found it.", m.ID, 0.25); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.Session(ctx, x.ID)
+	if got.Summary != "Found it." || got.SummaryUpto != m.ID || got.SummaryAt == nil || got.SummaryStale || got.CostUSD != 0.25 {
+		t.Fatalf("summarised = %+v", got)
+	}
+	if !got.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Fatal("a summary must not count as activity in the session")
+	}
+	s.AddMessage(ctx, Message{SessionID: x.ID, Role: "user", Kind: "text", Content: "more"})
+	if got, _ = s.Session(ctx, x.ID); !got.SummaryStale || got.Summary != "Found it." {
+		t.Fatalf("a newer message should make the summary stale: %+v", got)
+	}
+	if err := s.SetSessionSummary(ctx, 999, "x", 0, 0); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing session: %v", err)
+	}
+}
+
+func TestSummaryMigrationKeepsSessions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const n = 12 // migrations before the session summary
+	for _, m := range migrations[:n] {
+		if _, err := db.Exec(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, q := range []string{
+		`PRAGMA user_version = 12`,
+		`INSERT INTO tasks (id, title, lane_id, position, created_at, updated_at) VALUES (1, 'old', 1, 0, 0, 0), (2, 'next', 1, 1, 0, 0)`,
+		`INSERT INTO task_context (task_id, source_id, position) VALUES (2, 1, 0)`,
+		`INSERT INTO sessions (id, task_id, title, status, mode, claude_session_id, cost_usd, created_at, updated_at) VALUES (7, 1, 'work', 'idle', 'plan', 'c-7', 1.5, 0, 5)`,
+		`INSERT INTO sessions (id, task_id, title, status, mode, parent_id, created_at, updated_at) VALUES (8, 1, 'work', 'idle', 'plan', 7, 0, 6)`,
+		`INSERT INTO messages (session_id, role, kind, content, created_at) VALUES (7, 'user', 'text', 'hi', 0), (7, 'system', 'result', 'done', 0)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(q, err)
+		}
+	}
+	db.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	x, err := s.Session(ctx, 7)
+	if err != nil || x.Title != "work" || x.ClaudeSessionID != "c-7" || x.CostUSD != 1.5 || x.LastMessage != "done" ||
+		x.ChildID == nil || *x.ChildID != 8 || x.Summary != "" || x.SummaryUpto != 0 || x.SummaryAt != nil || x.SummaryStale {
+		t.Fatalf("session = %+v, %v", x, err)
+	}
+	if msgs, _ := s.Messages(ctx, 7, 0); len(msgs) != 2 {
+		t.Fatalf("messages = %+v", msgs)
+	}
+	if next, _ := s.Task(ctx, 2); len(next.ContextFrom) != 1 || next.ContextFrom[0] != 1 {
+		t.Fatalf("next = %+v", next)
+	}
+	if err := s.SetSessionSummary(ctx, 7, "sum", 2, 0); err != nil {
+		t.Fatal(err)
+	}
+	if x, _ = s.Session(ctx, 7); x.Summary != "sum" || x.SummaryStale {
+		t.Fatalf("summarised = %+v", x)
+	}
+}

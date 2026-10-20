@@ -122,7 +122,7 @@ var (
 		})}
 	pSkillBody = prop("string", "Instructions for the agent (Markdown), e.g. how a summary should look and where to write it. "+
 		"A prompt template: {{.Task.Title}}, {{.Task.ID}}, {{.Fields.pull_request}}, {{.Context}}")
-	pContextFrom = map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "Ids of earlier tasks this task builds on, e.g. the research it follows from. Their agents' final replies go into the context of this task's agents (include_context, rules and schedules using {{.Context}}). Empty: the task starts from scratch."}
+	pContextFrom = map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "Ids of earlier tasks this task builds on, e.g. the research it follows from. Summaries of their agent sessions (or the final replies, where a session has no up-to-date summary) go into the context of this task's agents (include_context, rules and schedules using {{.Context}}). Empty: the task starts from scratch."}
 )
 
 func (s *Server) mcpTools() []mcpTool {
@@ -311,18 +311,27 @@ func (s *Server) mcpTools() []mcpTool {
 		},
 		{
 			Name:        "list_sessions",
-			Description: "Agent sessions, newest first, with status and latest message.",
+			Description: "Agent sessions, newest first, with status and latest message. Summaries are left out (get_session has them); summary_at says a session has one and summary_stale that newer messages came after it.",
 			InputSchema: schema(nil, map[string]any{
 				"task_id": prop("integer", "Only this task's sessions"),
 				"status":  map[string]any{"type": "string", "enum": []string{"running", "idle", "error", "cancelled", "interrupted"}},
 			}),
 			call: list("/api/sessions", "task_id", "status"),
+			post: sessionsWithoutSummaries,
 		},
 		{
-			Name:        "get_session",
-			Description: "One agent session with its whole transcript.",
+			Name: "get_session",
+			Description: "One agent session with its whole transcript and its summary (summary: empty if none; summary_stale: messages came after it; " +
+				"summarizing: one is being written). Tasks that build on the session's task get the summary instead of the transcript.",
 			InputSchema: schema([]string{"session_id"}, map[string]any{"session_id": prop("integer", "Session id")}),
 			call:        byID("GET", "/api/sessions/%d", "session_id", false),
+		},
+		{
+			Name: "summarize_session",
+			Description: "Write or rewrite a session's summary of what was done, found and decided, for the agents of tasks that build on its task. " +
+				"It is written in the background by a fork of the session's agent (the session itself is not continued); see get_session for the result.",
+			InputSchema: schema([]string{"session_id"}, map[string]any{"session_id": prop("integer", "Session id")}),
+			call:        byID("POST", "/api/sessions/%d/summary", "session_id", false),
 		},
 		{
 			Name:        "send_message",
@@ -469,6 +478,18 @@ func boardSummary(raw []byte) ([]byte, error) {
 	}
 	delete(b, "running_limits")
 	return json.Marshal(b)
+}
+
+// sessionsWithoutSummaries keeps list_sessions small; get_session has the summary.
+func sessionsWithoutSummaries(raw []byte) ([]byte, error) {
+	var xs []map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &xs); err != nil {
+		return nil, err
+	}
+	for _, x := range xs {
+		delete(x, "summary")
+	}
+	return json.Marshal(xs)
 }
 
 // taskWithoutTranscripts keeps get_task small; get_session has the transcript.
