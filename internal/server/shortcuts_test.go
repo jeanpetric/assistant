@@ -28,9 +28,9 @@ func TestShortcutKeys(t *testing.T) {
 	// The table names functions defined elsewhere in app.js; a proxy stands in for them.
 	script := `
 const src = require('fs').readFileSync(process.argv.at(-1), 'utf8');
-const own = new Set(['src', 'shortcuts', 'shortcutFor']);
+const own = new Set(['src', 'shortcuts', 'shortcutFor', 'pickedProjectHash']);
 const stubs = new Proxy({}, { has: (_, k) => !own.has(k) && !(k in globalThis), get: () => () => {} });
-const api = (function () { with (stubs) return eval(src + '; ({ shortcutFor })'); })();
+const api = (function () { with (stubs) return eval(src + '; ({ shortcutFor, pickedProjectHash })'); })();
 const key = (code, key, mods = {}) => ({ code, key, altKey: false, shiftKey: false, metaKey: false, ctrlKey: false, repeat: false, ...mods });
 const cases = [
   [key('KeyB', '∫', { altKey: true }), true, '⌥B'],
@@ -40,6 +40,7 @@ const cases = [
   [key('KeyA', 'å', { altKey: true }), true, '⌥A'],
   [key('Comma', '≤', { altKey: true }), true, '⌥,'],
   [key('KeyT', '†', { altKey: true }), true, '⌥T'],
+  [key('KeyK', '˚', { altKey: true }), false, '⌥K'],
   [key('BracketRight', '‘', { altKey: true }), true, '⌥]'],
   [key('Slash', '/'), false, '/'],
   [key('Slash', '?', { shiftKey: true }), false, '?'],
@@ -55,6 +56,14 @@ const cases = [
   [key('KeyB', '∫', { altKey: true, repeat: true }), true, null],
   [key('Escape', 'Escape'), true, null],
 ];
+for (const [hash, want] of [['#/list', '#/list'], ['#/board', '#/board'], ['', '#/board'],
+    ['#/archive', '#/board'], ['#/task/3', '#/board'], ['#/listing', '#/board']]) {
+  const got = api.pickedProjectHash(hash);
+  if (got !== want) {
+    console.log(JSON.stringify({ hash, want, got }));
+    process.exitCode = 1;
+  }
+}
 for (const [e, inField, want] of cases) {
   const got = api.shortcutFor(e, inField);
   if ((got ? got.keys : null) !== want) {

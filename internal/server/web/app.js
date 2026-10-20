@@ -1342,6 +1342,7 @@ const shortcuts = [
   { keys: '⌥R', code: 'KeyR', label: 'Quick reminder', run: reminderDialog },
   { keys: '⌥P', code: 'KeyP', label: 'Agent session without a task', run: sessionDialog },
   { keys: '⌥M', code: 'KeyM', label: 'Notifications', run: toggleNotifications },
+  { keys: '⌥K', code: 'KeyK', label: 'Pick a project', run: projectPicker },
   { keys: '⌥[', code: 'BracketLeft', label: 'Previous project', run: () => stepProject(-1) },
   { keys: '⌥]', code: 'BracketRight', label: 'Next project', run: () => stepProject(1) },
   { keys: '⌥B', code: 'KeyB', label: 'Go to Board', run: () => go('#/board') },
@@ -1359,6 +1360,11 @@ function shortcutFor(e, inField) {
   if (e.altKey) return e.shiftKey ? null : shortcuts.find(s => s.code === e.code) || null;
   if (inField) return null;
   return shortcuts.find(s => !s.code && s.keys === e.key) || null;
+}
+
+// Where a project picked with ⌥K opens: the list when on the list, else the board.
+function pickedProjectHash(hash) {
+  return /^#\/list\b/.test(hash) ? '#/list' : '#/board';
 }
 
 function onShortcut(e) {
@@ -1392,6 +1398,39 @@ function stepProject(by) {
   const next = ps[(i + by + ps.length) % ps.length];
   switchProject(next.id);
   toast(next.name);
+}
+
+// ⌥K: a list of the projects; ↑/↓ move, Enter (or a click) opens the chosen one.
+async function projectPicker() {
+  if (!state.board) await loadBoard();
+  const ps = state.board.projects;
+  if (!ps.length) return;
+  const hash = pickedProjectHash(location.hash);
+  const dlg = document.getElementById('dialog');
+  let i = Math.max(0, ps.findIndex(p => p.id === state.projectId));
+  const pick = p => {
+    dlg.close();
+    state.projectId = p.id;
+    remember('project', p.id);
+    go(hash);
+  };
+  const items = ps.map((p, j) => h('li', { onclick: () => pick(p), onmousemove: () => { i = j; draw(); } }, p.name));
+  function draw() {
+    items.forEach((el, j) => el.classList.toggle('selected', j === i));
+    items[i].scrollIntoView({ block: 'nearest' });
+  }
+  const list = h('ul', {
+    class: 'picker', tabindex: 0, onkeydown: e => {
+      const by = { ArrowDown: 1, ArrowUp: -1 }[e.key];
+      if (by) { e.preventDefault(); i = (i + by + ps.length) % ps.length; draw(); }
+      else if (e.key === 'Enter') { e.preventDefault(); pick(ps[i]); }
+    },
+  }, items);
+  dlg.replaceChildren(h('h2', {}, 'Open project'), list,
+    h('p', { class: 'muted small' }, `↑/↓ to choose, Enter opens its ${hash === '#/list' ? 'list' : 'board'}, Esc closes.`));
+  dlg.showModal();
+  list.focus();
+  draw();
 }
 
 function shortcutsDialog() {
