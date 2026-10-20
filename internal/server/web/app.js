@@ -82,6 +82,27 @@ function modeOptions(includeDefault) {
   return includeDefault ? [['', `App default (${state.meta.default_mode})`], ...opts] : opts;
 }
 
+// Free-text input with suggestions; empty means the CLI's default model.
+function modelInput(value) {
+  const list = h('datalist', { id: 'models-' + Math.random().toString(36).slice(2) }, state.meta.models.map(m => h('option', { value: m })));
+  return [h('input', { value: value || '', placeholder: 'Model — CLI default', list: list.id }), list];
+}
+
+// Directory input suggesting recently used working directories.
+function workdirInput(value, placeholder) {
+  const list = h('datalist', { id: 'workdirs-' + Math.random().toString(36).slice(2) });
+  api('GET', '/api/workdirs').then(dirs => list.replaceChildren(...dirs.map(d => h('option', { value: d })))).catch(() => {});
+  return [h('input', { value: value || '', placeholder, list: list.id }), list];
+}
+
+function remember(key, value) {
+  try { localStorage.setItem(key, value); } catch (_) { /* storage unavailable */ }
+}
+
+function recall(key) {
+  try { return localStorage.getItem(key) || ''; } catch (_) { return ''; }
+}
+
 // Minimal rendering: fenced code blocks become <pre>, the rest stays plain text.
 function richText(text) {
   const out = [];
@@ -118,6 +139,7 @@ function route() {
     list: renderList,
     task: () => renderTask(Number(parts[1]), Number(parts[3]) || 0),
     sessions: renderSessions,
+    session: () => renderSession(Number(parts[1])),
     settings: renderSettings,
   }[parts[0]] || renderBoard;
   r().catch(err => view.replaceChildren(h('div', { class: 'panel' }, 'Error: ' + err.message)));
@@ -377,12 +399,13 @@ async function renderTask(id, focusSession) {
 function newSessionPanel(task, onStarted) {
   const prompt = h('textarea', { rows: 4, placeholder: 'What should the agent do? Skills work too, e.g. /p-dev:review 123' });
   const mode = select(modeOptions(false), state.meta.default_mode);
+  const [model, modelList] = modelInput('');
   const ctx = h('input', { type: 'checkbox', checked: true });
-  const workdir = h('input', { placeholder: task.workdir || state.meta.workdir });
+  const [workdir, workdirList] = workdirInput('', task.workdir || state.meta.workdir);
   const start = async () => {
     if (!prompt.value.trim()) return;
     const s = await api('POST', `/api/tasks/${task.id}/sessions`, {
-      prompt: prompt.value, mode: mode.value, workdir: workdir.value, include_context: ctx.checked,
+      prompt: prompt.value, mode: mode.value, model: model.value, workdir: workdir.value, include_context: ctx.checked,
     });
     prompt.value = '';
     const full = await api('GET', `/api/sessions/${s.id}`);
@@ -394,7 +417,8 @@ function newSessionPanel(task, onStarted) {
     prompt,
     h('div', { class: 'row', style: 'margin-top:8px; flex-wrap:wrap' },
       h('div', { class: 'grow', style: 'min-width:200px' }, mode),
-      h('div', { class: 'grow', style: 'min-width:200px' }, workdir),
+      h('div', { class: 'grow', style: 'min-width:140px' }, model, modelList),
+      h('div', { class: 'grow', style: 'min-width:200px' }, workdir, workdirList),
       h('label', { class: 'row', style: 'margin:0' }, ctx, 'Include task context'),
       h('button', { onclick: start }, 'Start ⌘↵')));
 }
@@ -448,6 +472,7 @@ function sessionComponent(session, messages) {
       h('span', { class: 'title' }, s.title || `Session ${s.id}`),
       h('span', { class: 'badge status-' + s.status }, running ? h('span', { class: 'pulse' }) : null, s.status),
       h('span', { class: 'badge' }, s.mode),
+      s.model ? h('span', { class: 'badge' }, s.model) : null,
       s.trigger !== 'manual' ? h('span', { class: 'badge' }, s.trigger) : null,
       s.cost_usd ? h('span', { class: 'muted small' }, '$' + s.cost_usd.toFixed(2)) : null,
       h('span', { class: 'muted small' }, fmtTime(s.created_at)),
@@ -516,18 +541,70 @@ async function renderSessions() {
   const tbody = h('tbody');
   async function draw() {
     const xs = await api('GET', '/api/sessions' + (statusSel.value ? `?status=${statusSel.value}` : ''));
-    tbody.replaceChildren(...xs.map(s => h('tr', { class: 'clickable', onclick: () => { location.hash = `#/task/${s.task_id}/s/${s.id}`; } },
+    tbody.replaceChildren(...xs.map(s => h('tr', { class: 'clickable', onclick: () => { location.hash = sessionHref(s); } },
       h('td', {}, h('span', { class: 'badge status-' + s.status }, s.status === 'running' ? h('span', { class: 'pulse' }) : null, s.status)),
-      h('td', {}, h('div', {}, s.task_title), h('div', { class: 'muted small' }, s.title)),
+      h('td', {}, s.task_id ? h('div', {}, s.task_title) : h('div', { class: 'muted' }, 'No task'), h('div', { class: 'muted small' }, s.title)),
       h('td', { class: 'small' }, trunc(s.last_message, 220)),
       h('td', { class: 'muted small' }, s.trigger, h('br'), s.mode),
       h('td', { class: 'muted small' }, ago(s.updated_at)))));
   }
   view.replaceChildren(h('div', { class: 'panel' },
-    h('div', { class: 'toolbar' }, h('h2', { class: 'grow', style: 'flex:1' }, 'Agent sessions'), statusSel),
+    h('div', { class: 'toolbar' }, h('h2', { class: 'grow', style: 'flex:1' }, 'Agent sessions'), statusSel,
+      h('button', { onclick: sessionDialog }, '▶ New session')),
     h('table', {}, h('thead', {}, h('tr', {}, ['Status', 'Task / session', 'Latest', 'Trigger', 'Updated'].map(x => h('th', {}, x)))), tbody)));
   await draw();
   every(3000, draw);
+}
+
+function sessionHref(s) {
+  return s.task_id ? `#/task/${s.task_id}/s/${s.id}` : `#/session/${s.id}`;
+}
+
+// ---------- standalone session ----------
+
+async function renderSession(id) {
+  const data = await api('GET', `/api/sessions/${id}`);
+  if (data.session.task_id) { location.hash = sessionHref(data.session); return; }
+  const c = sessionComponent(data.session, data.messages);
+  view.replaceChildren(h('div', { class: 'session-page' },
+    h('div', { class: 'toolbar' },
+      h('a', { href: '#/sessions', class: 'btn ghost small' }, '← Sessions'),
+      h('span', { class: 'muted small grow', style: 'flex:1' }, data.session.workdir),
+      h('button', { onclick: sessionDialog }, '▶ New session')),
+    c.el));
+  every(2000, async () => {
+    const upd = await api('GET', `/api/sessions/${id}?after=${c.lastId()}`);
+    if (upd.messages.length || upd.session.status !== c.session.status || upd.session.updated_at !== c.session.updated_at) {
+      c.update(upd.session, upd.messages);
+    }
+  });
+}
+
+function sessionDialog() {
+  const dlg = document.getElementById('dialog');
+  const prompt = h('textarea', { rows: 6, placeholder: 'What should the agent do? Skills work too, e.g. /p-dev:review 123' });
+  const [workdir, workdirList] = workdirInput(recall('session.workdir'), state.meta.workdir);
+  const [model, modelList] = modelInput(recall('session.model'));
+  const mode = select(modeOptions(false), recall('session.mode') || state.meta.default_mode);
+  const start = async () => {
+    if (!prompt.value.trim()) return;
+    const s = await api('POST', '/api/sessions', { prompt: prompt.value, workdir: workdir.value, model: model.value, mode: mode.value });
+    remember('session.workdir', workdir.value);
+    remember('session.model', model.value);
+    remember('session.mode', mode.value);
+    dlg.close();
+    location.hash = `#/session/${s.id}`;
+  };
+  prompt.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) start(); });
+  dlg.replaceChildren(h('h2', {}, 'New agent session'),
+    h('label', {}, 'Prompt'), prompt,
+    h('label', {}, 'Directory'), workdir, workdirList,
+    h('div', { class: 'row' },
+      h('div', { class: 'grow' }, h('label', {}, 'Model'), model, modelList),
+      h('div', { class: 'grow' }, h('label', {}, 'Mode'), mode)),
+    h('div', { class: 'dialog-actions' }, h('button', { class: 'ghost', onclick: () => dlg.close() }, 'Cancel'), h('button', { onclick: start }, 'Start ⌘↵')));
+  dlg.showModal();
+  prompt.focus();
 }
 
 // ---------- settings ----------
@@ -749,12 +826,14 @@ async function toggleNotifications() {
   state.meta = await api('GET', '/api/meta');
   document.getElementById('new-task-btn').addEventListener('click', newTaskDialog);
   document.getElementById('reminder-btn').addEventListener('click', reminderDialog);
-  // "r" anywhere outside a text field opens the quick reminder.
+  document.getElementById('new-session-btn').addEventListener('click', sessionDialog);
+  // "r" (reminder) and "s" (session) anywhere outside a text field.
+  const shortcuts = { r: reminderDialog, s: sessionDialog };
   document.addEventListener('keydown', e => {
-    if (e.key !== 'r' || e.metaKey || e.ctrlKey || e.altKey || document.getElementById('dialog').open) return;
+    if (!shortcuts[e.key] || e.metaKey || e.ctrlKey || e.altKey || document.getElementById('dialog').open) return;
     if (e.target.closest('input, textarea, select, [contenteditable]')) return;
     e.preventDefault();
-    reminderDialog();
+    shortcuts[e.key]();
   });
   document.getElementById('notif-btn').addEventListener('click', toggleNotifications);
   window.addEventListener('hashchange', route);

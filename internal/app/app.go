@@ -57,19 +57,24 @@ func (a *App) Shutdown() {
 }
 
 type StartOpts struct {
-	TaskID  int64
+	TaskID  int64 // 0 starts a standalone session
 	Prompt  string
 	Title   string
 	Mode    string
+	Model   string
 	Workdir string
 	Trigger string // manual | rule:<name> | schedule:<id>
 }
 
-// StartSession creates a session for the task and runs its first turn in the background.
+// StartSession creates a session, for the task if one is given, and runs its
+// first turn in the background.
 func (a *App) StartSession(ctx context.Context, o StartOpts) (store.Session, error) {
-	task, err := a.Store.Task(ctx, o.TaskID)
-	if err != nil {
-		return store.Session{}, err
+	var task store.Task
+	if o.TaskID != 0 {
+		var err error
+		if task, err = a.Store.Task(ctx, o.TaskID); err != nil {
+			return store.Session{}, err
+		}
 	}
 	if strings.TrimSpace(o.Prompt) == "" {
 		return store.Session{}, errors.New("prompt is required")
@@ -90,7 +95,7 @@ func (a *App) StartSession(ctx context.Context, o StartOpts) (store.Session, err
 		o.Title = firstLine(o.Prompt, 80)
 	}
 	sess, err := a.Store.CreateSession(ctx, store.Session{
-		TaskID: o.TaskID, Title: o.Title, Mode: o.Mode, Workdir: o.Workdir, Trigger: o.Trigger,
+		TaskID: o.TaskID, Title: o.Title, Mode: o.Mode, Model: o.Model, Workdir: o.Workdir, Trigger: o.Trigger,
 	})
 	if err != nil {
 		return sess, err
@@ -154,7 +159,7 @@ func (a *App) launch(sess store.Session, prompt, resumeID string) error {
 			cancel()
 		}()
 		bg := context.Background()
-		req := agent.Request{Prompt: prompt, Workdir: sess.Workdir, Mode: sess.Mode, ResumeID: resumeID}
+		req := agent.Request{Prompt: prompt, Workdir: sess.Workdir, Mode: sess.Mode, Model: sess.Model, ResumeID: resumeID}
 		failed := false
 		err := a.Runner.Run(ctx, req, func(ev agent.Event) {
 			if ev.ClaudeSessionID != "" && ev.ClaudeSessionID != sess.ClaudeSessionID {

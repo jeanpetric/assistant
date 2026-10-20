@@ -30,6 +30,7 @@ type Request struct {
 	Prompt   string
 	Workdir  string
 	Mode     string // claude --permission-mode value; empty uses CLI default
+	Model    string // claude --model value; empty uses CLI default
 	ResumeID string // continue an existing claude session
 }
 
@@ -40,6 +41,9 @@ type Runner interface {
 
 // Permission modes understood by the claude CLI.
 var Modes = []string{"bypassPermissions", "acceptEdits", "plan", "default"}
+
+// Models are suggestions for --model; any alias or full model name is accepted.
+var Models = []string{"opus", "sonnet", "haiku", "fable"}
 
 type ClaudeRunner struct {
 	Command   string   // defaults to "claude"
@@ -54,7 +58,12 @@ func (r ClaudeRunner) Args(req Request) []string {
 	if req.Mode != "" && req.Mode != "default" {
 		args = append(args, "--permission-mode", req.Mode)
 	}
-	return append(args, r.ExtraArgs...)
+	args = append(args, r.ExtraArgs...)
+	// After ExtraArgs so a per-session model beats one from the config.
+	if req.Model != "" {
+		args = append(args, "--model", req.Model)
+	}
+	return args
 }
 
 func (r ClaudeRunner) Run(ctx context.Context, req Request, emit func(Event)) error {

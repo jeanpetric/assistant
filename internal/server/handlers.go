@@ -3,6 +3,8 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -38,7 +40,9 @@ func (s *Server) board(w http.ResponseWriter, r *http.Request) {
 	}
 	runningByTask := map[int64]int{}
 	for _, x := range running {
-		runningByTask[x.TaskID]++
+		if x.TaskID != 0 {
+			runningByTask[x.TaskID]++
+		}
 	}
 	writeJSON(w, 200, map[string]any{"lanes": lanes, "tasks": tasks, "fields": fields, "running": runningByTask})
 }
@@ -46,6 +50,7 @@ func (s *Server) board(w http.ResponseWriter, r *http.Request) {
 func (s *Server) meta(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{
 		"modes":        agent.Modes,
+		"models":       agent.Models,
 		"default_mode": s.app.DefaultMode,
 		"workdir":      s.app.DefaultWorkdir,
 		"kinds":        []string{"task", "coding", "research", "discussion", "reminder"},
@@ -330,29 +335,97 @@ func (s *Server) moveTask(w http.ResponseWriter, r *http.Request) {
 
 // ---- sessions ----
 
+type sessionInput struct {
+	Prompt         string `json:"prompt"`
+	Title          string `json:"title"`
+	Mode           string `json:"mode"`
+	Model          string `json:"model"`
+	Workdir        string `json:"workdir"`
+	IncludeContext bool   `json:"include_context"`
+}
+
+func (in *sessionInput) validate() error {
+	if !validMode(in.Mode) {
+		return badRequest{"unknown mode"}
+	}
+	if strings.TrimSpace(in.Prompt) == "" {
+		return badRequest{"prompt is required"}
+	}
+	in.Model = strings.TrimSpace(in.Model)
+	if strings.ContainsAny(in.Model, " \t\n") || strings.HasPrefix(in.Model, "-") {
+		return badRequest{"invalid model"}
+	}
+	dir, err := resolveWorkdir(in.Workdir)
+	in.Workdir = dir
+	return err
+}
+
+// resolveWorkdir expands a leading ~ and checks the directory exists.
+// Empty stays empty so the app default applies.
+func resolveWorkdir(dir string) (string, error) {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return "", nil
+	}
+	if dir == "~" || strings.HasPrefix(dir, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		dir = filepath.Join(home, dir[1:])
+	}
+	if !filepath.IsAbs(dir) {
+		return "", badRequest{"workdir must be an absolute path"}
+	}
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		return "", badRequest{"workdir is not a directory: " + dir}
+	}
+	return filepath.Clean(dir), nil
+}
+
+// startStandaloneSession runs an agent session that belongs to no task.
+func (s *Server) startStandaloneSession(w http.ResponseWriter, r *http.Request) {
+	var in sessionInput
+	if err := decode(r, &in); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := in.validate(); err != nil {
+		writeErr(w, err)
+		return
+	}
+	sess, err := s.app.StartSession(r.Context(), app.StartOpts{
+		Prompt: in.Prompt, Title: in.Title, Mode: in.Mode, Model: in.Model, Workdir: in.Workdir,
+	})
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 201, sess)
+}
+
+func (s *Server) recentWorkdirs(w http.ResponseWriter, r *http.Request) {
+	dirs, err := s.app.Store.RecentWorkdirs(r.Context(), 30)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, dirs)
+}
+
 func (s *Server) startSession(w http.ResponseWriter, r *http.Request) {
 	id, err := pathID(r)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	var in struct {
-		Prompt         string `json:"prompt"`
-		Title          string `json:"title"`
-		Mode           string `json:"mode"`
-		Workdir        string `json:"workdir"`
-		IncludeContext bool   `json:"include_context"`
-	}
+	var in sessionInput
 	if err := decode(r, &in); err != nil {
 		writeErr(w, err)
 		return
 	}
-	if !validMode(in.Mode) {
-		writeErr(w, badRequest{"unknown mode"})
-		return
-	}
-	if strings.TrimSpace(in.Prompt) == "" {
-		writeErr(w, badRequest{"prompt is required"})
+	if err := in.validate(); err != nil {
+		writeErr(w, err)
 		return
 	}
 	prompt := in.Prompt
@@ -365,7 +438,7 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request) {
 		prompt = app.TaskContext(t) + "\n\n---\n\n" + prompt
 	}
 	sess, err := s.app.StartSession(r.Context(), app.StartOpts{
-		TaskID: id, Prompt: prompt, Title: in.Title, Mode: in.Mode, Workdir: in.Workdir,
+		TaskID: id, Prompt: prompt, Title: in.Title, Mode: in.Mode, Model: in.Model, Workdir: in.Workdir,
 	})
 	if err != nil {
 		writeErr(w, err)

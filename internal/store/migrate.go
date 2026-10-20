@@ -103,6 +103,30 @@ ALTER TABLE tasks ADD COLUMN due_at INTEGER;
 ALTER TABLE tasks ADD COLUMN reminded_at INTEGER;
 CREATE INDEX tasks_due ON tasks(due_at) WHERE reminded_at IS NULL;
 `,
+	// Sessions without a task (task_id NULL) and a per-session model.
+	// SQLite can't drop NOT NULL in place, so the table is rebuilt.
+	`
+CREATE TABLE sessions_new (
+	id INTEGER PRIMARY KEY,
+	task_id INTEGER REFERENCES tasks(id) ON DELETE CASCADE,
+	title TEXT NOT NULL DEFAULT '',
+	status TEXT NOT NULL,
+	mode TEXT NOT NULL,
+	model TEXT NOT NULL DEFAULT '',
+	workdir TEXT NOT NULL DEFAULT '',
+	trigger TEXT NOT NULL DEFAULT 'manual',
+	claude_session_id TEXT NOT NULL DEFAULT '',
+	cost_usd REAL NOT NULL DEFAULT 0,
+	error TEXT NOT NULL DEFAULT '',
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL
+);
+INSERT INTO sessions_new (id, task_id, title, status, mode, workdir, trigger, claude_session_id, cost_usd, error, created_at, updated_at)
+	SELECT id, task_id, title, status, mode, workdir, trigger, claude_session_id, cost_usd, error, created_at, updated_at FROM sessions;
+DROP TABLE sessions;
+ALTER TABLE sessions_new RENAME TO sessions;
+CREATE INDEX sessions_task ON sessions(task_id);
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {
@@ -110,12 +134,31 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
 		return err
 	}
+	if version == len(migrations) {
+		return nil
+	}
+	// Table rebuilds drop the old table; with foreign keys on that would cascade
+	// (e.g. dropping sessions deletes all messages). The pragma is a no-op inside
+	// a transaction, so toggle it around the migrations and check afterwards.
+	if _, err := s.db.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
+		return err
+	}
+	defer s.db.ExecContext(ctx, `PRAGMA foreign_keys = ON`)
 	for i := version; i < len(migrations); i++ {
 		err := s.tx(ctx, func(tx *sql.Tx) error {
 			if _, err := tx.ExecContext(ctx, migrations[i]); err != nil {
 				return err
 			}
-			_, err := tx.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version = %d`, i+1))
+			rows, err := tx.QueryContext(ctx, `PRAGMA foreign_key_check`)
+			if err != nil {
+				return err
+			}
+			broken := rows.Next()
+			rows.Close()
+			if broken {
+				return fmt.Errorf("foreign key violations")
+			}
+			_, err = tx.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version = %d`, i+1))
 			return err
 		})
 		if err != nil {

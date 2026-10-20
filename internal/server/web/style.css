@@ -204,6 +204,7 @@ dialog {
 }
 dialog::backdrop { background: rgba(0, 0, 0, .35); }
 .presets { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.session-page { max-width: 1000px; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 .toast {
   position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);

@@ -259,3 +259,41 @@ func itoa(n int64) string {
 	b, _ := json.Marshal(n)
 	return string(b)
 }
+
+func TestStandaloneSession(t *testing.T) {
+	c := newClient(t)
+	dir := t.TempDir()
+	var sess store.Session
+	c.do("POST", "/api/sessions", map[string]any{"prompt": "hello", "model": "sonnet", "workdir": dir + "/"}, 201, &sess)
+	c.app.Wait()
+	if sess.TaskID != 0 || sess.Model != "sonnet" || sess.Workdir != dir {
+		t.Fatalf("session = %+v", sess)
+	}
+	var got struct {
+		Session  store.Session   `json:"session"`
+		Messages []store.Message `json:"messages"`
+	}
+	c.do("GET", "/api/sessions/"+itoa(sess.ID), nil, 200, &got)
+	if got.Session.Status != store.StatusIdle || len(got.Messages) != 3 || got.Messages[1].Content != "did: hello" {
+		t.Fatalf("got = %+v", got)
+	}
+
+	var b struct {
+		Running map[string]int `json:"running"`
+	}
+	c.do("GET", "/api/board", nil, 200, &b)
+	if len(b.Running) != 0 {
+		t.Fatalf("standalone sessions must not count on the board: %v", b.Running)
+	}
+	var dirs []string
+	c.do("GET", "/api/workdirs", nil, 200, &dirs)
+	if len(dirs) != 1 || dirs[0] != dir {
+		t.Fatalf("workdirs = %v", dirs)
+	}
+
+	c.do("POST", "/api/sessions", map[string]any{"prompt": " "}, 400, nil)
+	c.do("POST", "/api/sessions", map[string]any{"prompt": "x", "workdir": dir + "/missing"}, 400, nil)
+	c.do("POST", "/api/sessions", map[string]any{"prompt": "x", "workdir": "relative/dir"}, 400, nil)
+	c.do("POST", "/api/sessions", map[string]any{"prompt": "x", "model": "--dangerously-skip"}, 400, nil)
+	c.do("POST", "/api/sessions", map[string]any{"prompt": "x", "mode": "yolo"}, 400, nil)
+}

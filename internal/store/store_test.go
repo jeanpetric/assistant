@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -271,5 +272,73 @@ func TestDueTasks(t *testing.T) {
 	s.UpdateTask(ctx, got)
 	if due, _ := s.DueTasks(ctx, *at(16)); len(due) != 1 || due[0].Title != "late" {
 		t.Fatalf("after clearing = %+v", due)
+	}
+}
+
+func TestStandaloneSessionsAndWorkdirs(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	task, _ := s.CreateTask(ctx, Task{Title: "one", Workdir: "/task/dir"})
+	s.CreateSession(ctx, Session{TaskID: task.ID, Mode: "plan", Workdir: "/a"})
+	x, err := s.CreateSession(ctx, Session{Mode: "plan", Model: "opus", Workdir: "/b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if x.TaskID != 0 || x.TaskTitle != "" || x.Model != "opus" {
+		t.Fatalf("standalone = %+v", x)
+	}
+	all, _ := s.Sessions(ctx, 0, "")
+	if len(all) != 2 {
+		t.Fatalf("all = %d", len(all))
+	}
+	dirs, _ := s.RecentWorkdirs(ctx, 10)
+	if len(dirs) != 3 {
+		t.Fatalf("dirs = %v", dirs)
+	}
+	if dirs, _ := s.RecentWorkdirs(ctx, 1); len(dirs) != 1 {
+		t.Fatalf("limit: %v", dirs)
+	}
+}
+
+// Rebuilding the sessions table must keep messages and the cascade from tasks.
+func TestSessionsMigrationKeepsData(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range migrations[:2] {
+		if _, err := db.Exec(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, q := range []string{
+		`PRAGMA user_version = 2`,
+		`INSERT INTO tasks (id, title, lane_id, position, created_at, updated_at) VALUES (1, 'old', 1, 0, 0, 0)`,
+		`INSERT INTO sessions (id, task_id, status, mode, created_at, updated_at) VALUES (7, 1, 'idle', 'plan', 0, 0)`,
+		`INSERT INTO messages (session_id, role, kind, content, created_at) VALUES (7, 'user', 'text', 'hi', 0)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(q, err)
+		}
+	}
+	db.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	x, err := s.Session(ctx, 7)
+	if err != nil || x.TaskTitle != "old" || x.Model != "" {
+		t.Fatalf("session = %+v, %v", x, err)
+	}
+	if msgs, _ := s.Messages(ctx, 7, 0); len(msgs) != 1 {
+		t.Fatalf("messages = %d", len(msgs))
+	}
+	s.DeleteTask(ctx, 1)
+	if _, err := s.Session(ctx, 7); !errors.Is(err, ErrNotFound) {
+		t.Fatal("session should cascade")
 	}
 }

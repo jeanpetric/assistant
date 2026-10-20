@@ -56,6 +56,10 @@ func TestArgs(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v", got)
 	}
+	got = r.Args(Request{Prompt: "hi", Model: "sonnet"})
+	if want := []string{"-p", "hi", "--output-format", "stream-json", "--verbose", "--model", "opus", "--model", "sonnet"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("session model should come last: %v", got)
+	}
 	if got := r.Args(Request{Prompt: "hi", Mode: "default"}); strings.Contains(strings.Join(got, " "), "permission-mode") {
 		t.Fatalf("default mode should not pass a flag: %v", got)
 	}

@@ -55,6 +55,8 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/tasks/{id}/schedules", s.createSchedule)
 
 	m.HandleFunc("GET /api/sessions", s.listSessions)
+	m.HandleFunc("POST /api/sessions", s.startStandaloneSession)
+	m.HandleFunc("GET /api/workdirs", s.recentWorkdirs)
 	m.HandleFunc("GET /api/sessions/{id}", s.getSession)
 	m.HandleFunc("POST /api/sessions/{id}/messages", s.sendMessage)
 	m.HandleFunc("POST /api/sessions/{id}/cancel", s.cancelSession)

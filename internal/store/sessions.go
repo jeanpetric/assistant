@@ -17,11 +17,12 @@ const (
 
 type Session struct {
 	ID              int64     `json:"id"`
-	TaskID          int64     `json:"task_id"`
+	TaskID          int64     `json:"task_id"` // 0: standalone session
 	TaskTitle       string    `json:"task_title,omitempty"`
 	Title           string    `json:"title"`
 	Status          string    `json:"status"`
 	Mode            string    `json:"mode"`
+	Model           string    `json:"model"` // empty: CLI default
 	Workdir         string    `json:"workdir"`
 	Trigger         string    `json:"trigger"`
 	ClaudeSessionID string    `json:"claude_session_id"`
@@ -41,14 +42,14 @@ type Message struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-const sessionCols = `s.id, s.task_id, t.title, s.title, s.status, s.mode, s.workdir, s.trigger, s.claude_session_id,
+const sessionCols = `s.id, COALESCE(s.task_id, 0), COALESCE(t.title, ''), s.title, s.status, s.mode, s.model, s.workdir, s.trigger, s.claude_session_id,
 	s.cost_usd, s.error, s.created_at, s.updated_at,
 	COALESCE((SELECT content FROM messages m WHERE m.session_id = s.id AND m.kind IN ('text', 'result', 'error') ORDER BY m.id DESC LIMIT 1), '')`
 
 func scanSession(sc interface{ Scan(...any) error }) (Session, error) {
 	var x Session
 	var created, updated int64
-	err := sc.Scan(&x.ID, &x.TaskID, &x.TaskTitle, &x.Title, &x.Status, &x.Mode, &x.Workdir, &x.Trigger,
+	err := sc.Scan(&x.ID, &x.TaskID, &x.TaskTitle, &x.Title, &x.Status, &x.Mode, &x.Model, &x.Workdir, &x.Trigger,
 		&x.ClaudeSessionID, &x.CostUSD, &x.Error, &created, &updated, &x.LastMessage)
 	x.CreatedAt, x.UpdatedAt = fromMillis(created), fromMillis(updated)
 	return x, err
@@ -57,9 +58,9 @@ func scanSession(sc interface{ Scan(...any) error }) (Session, error) {
 func (s *Store) CreateSession(ctx context.Context, x Session) (Session, error) {
 	now := s.ts()
 	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO sessions (task_id, title, status, mode, workdir, trigger, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		x.TaskID, x.Title, StatusRunning, x.Mode, x.Workdir, x.Trigger, now, now)
+		INSERT INTO sessions (task_id, title, status, mode, model, workdir, trigger, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		sql.NullInt64{Int64: x.TaskID, Valid: x.TaskID != 0}, x.Title, StatusRunning, x.Mode, x.Model, x.Workdir, x.Trigger, now, now)
 	if err != nil {
 		return Session{}, err
 	}
@@ -69,7 +70,7 @@ func (s *Store) CreateSession(ctx context.Context, x Session) (Session, error) {
 
 func (s *Store) Session(ctx context.Context, id int64) (Session, error) {
 	x, err := scanSession(s.db.QueryRowContext(ctx,
-		`SELECT `+sessionCols+` FROM sessions s JOIN tasks t ON t.id = s.task_id WHERE s.id = ?`, id))
+		`SELECT `+sessionCols+` FROM sessions s LEFT JOIN tasks t ON t.id = s.task_id WHERE s.id = ?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return x, ErrNotFound
 	}
@@ -79,7 +80,7 @@ func (s *Store) Session(ctx context.Context, id int64) (Session, error) {
 // Sessions lists sessions, newest activity first. taskID 0 means all tasks;
 // an empty status means any status.
 func (s *Store) Sessions(ctx context.Context, taskID int64, status string) ([]Session, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+sessionCols+` FROM sessions s JOIN tasks t ON t.id = s.task_id
+	rows, err := s.db.QueryContext(ctx, `SELECT `+sessionCols+` FROM sessions s LEFT JOIN tasks t ON t.id = s.task_id
 		WHERE (? = 0 OR s.task_id = ?) AND (? = '' OR s.status = ?)
 		ORDER BY s.updated_at DESC, s.id DESC`, taskID, taskID, status, status)
 	if err != nil {
@@ -93,6 +94,28 @@ func (s *Store) Sessions(ctx context.Context, taskID int64, status string) ([]Se
 			return nil, err
 		}
 		out = append(out, x)
+	}
+	return out, rows.Err()
+}
+
+// RecentWorkdirs returns distinct working directories of sessions and tasks,
+// most recently used first.
+func (s *Store) RecentWorkdirs(ctx context.Context, limit int) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT workdir FROM (
+			SELECT workdir, updated_at FROM sessions UNION ALL SELECT workdir, updated_at FROM tasks
+		) WHERE workdir != '' GROUP BY workdir ORDER BY MAX(updated_at) DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var d string
+		if err := rows.Scan(&d); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
 	}
 	return out, rows.Err()
 }

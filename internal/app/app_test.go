@@ -154,6 +154,32 @@ func TestStartSessionValidation(t *testing.T) {
 	a.Wait()
 }
 
+func TestStandaloneSession(t *testing.T) {
+	a, r := newApp(t)
+	ctx := context.Background()
+	sess, err := a.StartSession(ctx, StartOpts{Prompt: "hello", Model: "sonnet", Workdir: "/elsewhere"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Wait()
+	if err := a.SendMessage(ctx, sess.ID, "more"); err != nil {
+		t.Fatal(err)
+	}
+	a.Wait()
+	got, _ := a.Store.Session(ctx, sess.ID)
+	if got.TaskID != 0 || got.Status != store.StatusIdle || got.Model != "sonnet" || got.Workdir != "/elsewhere" {
+		t.Fatalf("session = %+v", got)
+	}
+	reqs := r.requests()
+	if len(reqs) != 2 || reqs[0].Model != "sonnet" || reqs[1].Model != "sonnet" || reqs[1].Workdir != "/elsewhere" {
+		t.Fatalf("model and workdir should carry over to resumed turns: %+v", reqs)
+	}
+	if got, _ := a.StartSession(ctx, StartOpts{Prompt: "x"}); got.Workdir != "/default/dir" || got.Model != "" {
+		t.Fatalf("defaults: %+v", got)
+	}
+	a.Wait()
+}
+
 func TestMoveTaskFiresRules(t *testing.T) {
 	a, r := newApp(t)
 	ctx := context.Background()
