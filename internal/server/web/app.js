@@ -1096,7 +1096,9 @@ async function sessionDialog() {
     remember('session.model', model.value);
     remember('session.mode', mode.value);
     dlg.close();
-    location.hash = `#/session/${s.id}`;
+    const next = afterSessionStart(location.hash, s.id);
+    if (next) go(next);
+    else toast('Session started');
   };
   prompt.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) start(); });
   dlg.replaceChildren(h('h2', {}, 'New agent session'),
@@ -1108,6 +1110,14 @@ async function sessionDialog() {
     h('div', { class: 'dialog-actions' }, cancelButton(dlg), h('button', { onclick: start }, 'Start', hint('⌘↵'))));
   dlg.showModal();
   prompt.focus();
+}
+
+// A new session starts in the background: the Sessions list redraws with it, a
+// standalone session's page opens it, and any other page stays as it is (null).
+function afterSessionStart(hash, id) {
+  if (/^#\/sessions\b/.test(hash)) return '#/sessions';
+  if (/^#\/session\//.test(hash)) return `#/session/${id}`;
+  return null;
 }
 
 // ---------- memory ----------
