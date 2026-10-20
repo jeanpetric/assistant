@@ -153,9 +153,11 @@ async function renderBoard() {
         lane.name, h('span', { class: 'count' }, tasks.length)),
       cards,
       h('div', { class: 'lane-add' }, h('input', {
-        placeholder: '+ Add task', onkeydown: async e => {
+        placeholder: '+ Add task', 'data-lane': lane.id, onkeydown: async e => {
           if (e.key !== 'Enter' || !e.target.value.trim()) return;
-          await api('POST', '/api/tasks', { title: e.target.value.trim(), lane_id: lane.id });
+          const title = e.target.value.trim();
+          e.target.value = '';
+          await api('POST', '/api/tasks', { title, lane_id: lane.id });
           renderBoardInPlace();
         },
       })));
@@ -168,12 +170,16 @@ async function renderBoard() {
 
 async function renderBoardInPlace() {
   const scroll = view.querySelector('.board')?.scrollLeft || 0;
-  const focused = document.activeElement && document.activeElement.closest('.lane-add');
-  if (focused && document.activeElement.value) return; // don't clobber typing
+  const active = document.activeElement;
+  const focusedLane = active && active.closest('.lane-add') ? active.dataset.lane : null;
+  if (focusedLane && active.value) return; // don't clobber typing
   state.timers.forEach(clearInterval);
   state.timers = [];
   await renderBoard();
   view.querySelector('.board').scrollLeft = scroll;
+  // The re-render replaces the inputs; keep the cursor in the lane's add box.
+  const input = focusedLane && view.querySelector(`.lane-add input[data-lane="${focusedLane}"]`);
+  if (input) { input.value = active.value; input.focus(); }
 }
 
 function card(t) {
