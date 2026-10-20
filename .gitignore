@@ -1,0 +1,4 @@
+/assistant
+*.db
+*.db-wal
+*.db-shm

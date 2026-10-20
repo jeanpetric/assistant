@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Assistant</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#/board">Assistant</a>
+    <nav>
+      <a href="#/board" data-nav="board">Board</a>
+      <a href="#/list" data-nav="list">List</a>
+      <a href="#/sessions" data-nav="sessions">Sessions <span id="running-count" class="pill hidden"></span></a>
+      <a href="#/settings" data-nav="settings">Settings</a>
+    </nav>
+    <div class="spacer"></div>
+    <button id="notif-btn" class="ghost" title="Notifications">🔔 <span id="notif-count" class="pill hidden"></span></button>
+    <button id="new-task-btn">+ New task</button>
+  </header>
+  <div id="notif-panel" class="notif-panel hidden"></div>
+  <main id="view"></main>
+  <dialog id="dialog"></dialog>
+  <script src="app.js"></script>
+</body>
+</html>
