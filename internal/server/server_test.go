@@ -407,7 +407,7 @@ func TestStandaloneSession(t *testing.T) {
 	var sess store.Session
 	c.do("POST", "/api/sessions", map[string]any{"prompt": "hello", "model": "sonnet", "workdir": dir + "/"}, 201, &sess)
 	c.app.Wait()
-	if sess.TaskID != 0 || sess.Model != "sonnet" || sess.Workdir != dir {
+	if sess.TaskID == 0 || sess.Model != "sonnet" || sess.Workdir != dir {
 		t.Fatalf("session = %+v", sess)
 	}
 	var got struct {
@@ -419,13 +419,6 @@ func TestStandaloneSession(t *testing.T) {
 		t.Fatalf("got = %+v", got)
 	}
 
-	var b struct {
-		Running map[string]int `json:"running"`
-	}
-	c.do("GET", "/api/board", nil, 200, &b)
-	if len(b.Running) != 0 {
-		t.Fatalf("standalone sessions must not count on the board: %v", b.Running)
-	}
 	c.do("POST", "/api/sessions/"+itoa(sess.ID)+"/resume", nil, 202, nil)
 	c.app.Wait()
 	c.do("GET", "/api/sessions/"+itoa(sess.ID), nil, 200, &got)
@@ -466,6 +459,48 @@ func TestStandaloneSession(t *testing.T) {
 	}
 }
 
+// A session started without a task (⌥P) gets a new task made from its prompt.
+func TestSessionCreatesTask(t *testing.T) {
+	c := newClient(t)
+	var p store.Project
+	c.do("POST", "/api/projects", map[string]any{"name": "Web"}, 201, &p)
+	var sess store.Session
+	prompt := "  Fix the login bug\n\nUsers get a 500 after resetting their password.\n"
+	c.do("POST", "/api/sessions", map[string]any{"prompt": prompt, "project_id": p.ID}, 201, &sess)
+	c.app.Wait()
+	task, err := c.app.Store.Task(context.Background(), sess.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Title != "Fix the login bug" || task.Description != "Fix the login bug\n\nUsers get a 500 after resetting their password." ||
+		task.ProjectID != p.ID || sess.ProjectID != p.ID || sess.Title != "Fix the login bug" {
+		t.Fatalf("task = %+v, session = %+v", task, sess)
+	}
+
+	// A one-line prompt is the title alone; a long one is cut in the title and kept whole in the description.
+	c.do("POST", "/api/sessions", map[string]any{"prompt": "/p-dev:review 123"}, 201, &sess)
+	c.app.Wait()
+	if task, _ = c.app.Store.Task(context.Background(), sess.TaskID); task.Title != "/p-dev:review 123" || task.Description != "" {
+		t.Fatalf("one-line task = %+v", task)
+	}
+	long := strings.Repeat("word ", 30)
+	c.do("POST", "/api/sessions", map[string]any{"prompt": long}, 201, &sess)
+	c.app.Wait()
+	if task, _ = c.app.Store.Task(context.Background(), sess.TaskID); !strings.HasSuffix(task.Title, "…") || task.Description != strings.TrimSpace(long) {
+		t.Fatalf("long task = %+v", task)
+	}
+
+	// An invalid request leaves no task behind.
+	var before, after []store.Task
+	c.do("GET", "/api/tasks", nil, 200, &before)
+	c.do("POST", "/api/sessions", map[string]any{"prompt": " "}, 400, nil)
+	c.do("POST", "/api/sessions", map[string]any{"prompt": "x", "mode": "yolo"}, 400, nil)
+	c.do("GET", "/api/tasks", nil, 200, &after)
+	if len(after) != len(before) {
+		t.Fatalf("tasks %d -> %d after invalid requests", len(before), len(after))
+	}
+}
+
 func TestDoneLane(t *testing.T) {
 	c := newClient(t)
 	var b board
@@ -499,8 +534,12 @@ func TestDoneLane(t *testing.T) {
 	c.do("PATCH", "/api/sessions/"+itoa(sess.ID), map[string]any{"done_lane_id": 999}, 400, nil)
 	c.do("PATCH", "/api/sessions/999", map[string]any{"done_lane_id": nil}, 404, nil)
 
-	var standalone store.Session
-	c.do("POST", "/api/sessions", map[string]any{"prompt": "p"}, 201, &standalone)
+	// Sessions from before every session had a task.
+	standalone, err := c.app.StartSession(context.Background(), app.StartOpts{Prompt: "p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.app.Wait()
 	c.do("PATCH", "/api/sessions/"+itoa(standalone.ID), map[string]any{"done_lane_id": lane["Review"]}, 400, nil)
 
 	var rule store.Rule

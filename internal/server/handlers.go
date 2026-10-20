@@ -904,7 +904,7 @@ func resolveWorkdirs(in []string) ([]string, error) {
 	return out, nil
 }
 
-// startStandaloneSession runs an agent session that belongs to no task.
+// startStandaloneSession runs an agent session in a new task made from its prompt.
 func (s *Server) startStandaloneSession(w http.ResponseWriter, r *http.Request) {
 	var in sessionInput
 	if err := decode(r, &in); err != nil {
@@ -919,7 +919,7 @@ func (s *Server) startStandaloneSession(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, err)
 		return
 	}
-	sess, err := s.app.StartSession(r.Context(), app.StartOpts{
+	sess, err := s.app.StartSessionInNewTask(r.Context(), app.StartOpts{
 		Prompt: in.Prompt, Title: in.Title, Mode: in.Mode, Model: in.Model, Workdir: in.Workdir, ProjectID: in.ProjectID,
 	})
 	if err != nil {

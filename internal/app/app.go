@@ -155,6 +155,30 @@ func (a *App) StartSession(ctx context.Context, o StartOpts) (store.Session, err
 	return sess, a.launch(sess, o.Prompt, "", nil)
 }
 
+// StartSessionInNewTask creates a task for the prompt in o.ProjectID's first
+// lane and starts the session on it, so no session is left without a task. The
+// task's title is the prompt's first line; its description is the whole
+// prompt unless that is the title already.
+func (a *App) StartSessionInNewTask(ctx context.Context, o StartOpts) (store.Session, error) {
+	if strings.TrimSpace(o.Prompt) == "" {
+		return store.Session{}, errors.New("prompt is required")
+	}
+	t := store.Task{Title: firstLine(o.Prompt, 80), ProjectID: o.ProjectID}
+	if desc := strings.TrimSpace(o.Prompt); desc != t.Title {
+		t.Description = desc
+	}
+	t, err := a.Store.CreateTask(ctx, t)
+	if err != nil {
+		return store.Session{}, err
+	}
+	o.TaskID = t.ID
+	sess, err := a.StartSession(ctx, o)
+	if err != nil && sess.ID == 0 {
+		_ = a.Store.DeleteTask(ctx, t.ID)
+	}
+	return sess, err
+}
+
 // SendMessage continues an idle session with a follow-up prompt.
 func (a *App) SendMessage(ctx context.Context, sessionID int64, text string) error {
 	sess, err := a.Store.Session(ctx, sessionID)

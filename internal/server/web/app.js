@@ -1191,11 +1191,12 @@ async function sessionDialog() {
     dlg.close();
     const next = afterSessionStart(location.hash, s.id);
     if (next) go(next);
-    else toast('Session started');
+    else toast(`Task #${s.task_id} created, session started`);
   };
   prompt.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) start(); });
   dlg.replaceChildren(h('h2', {}, 'New agent session'),
     h('label', {}, 'Prompt'), prompt,
+    h('p', { class: 'muted small' }, 'A new task holds the session: its title is the first line of the prompt, its description the whole prompt.'),
     where,
     h('div', { class: 'row' },
       h('div', { class: 'grow' }, h('label', {}, 'Model'), model, modelList),
@@ -1469,7 +1470,8 @@ async function renderSettings() {
   const laneLabel = id => id == null ? 'Any lane' : (b.lanes.find(l => l.id === id) || {}).name || '?';
   const rulesPanel = h('div', { class: 'panel' },
     h('div', { class: 'row' }, h('h2', { class: 'grow' }, 'Transition rules'), h('button', { onclick: () => ruleDialog(null, b, skills, rerender) }, '+ Add rule')),
-    h('p', { class: 'muted small' }, 'When a task moves between lanes, start an agent session automatically, or run a skill in the task\'s latest session.'),
+    h('p', { class: 'muted small' }, 'When a task moves between lanes, start an agent session automatically, or run a skill in the task\'s latest session. ' +
+      'A project\'s rule replaces any-project rules for the same transition.'),
     rules.length ? h('table', {}, h('thead', {}, h('tr', {}, ['', 'Rule', 'Project', 'Transition', 'Action', 'Mode', 'When done', ''].map(x => h('th', {}, x)))),
       h('tbody', {}, rules.map(r => h('tr', {},
         h('td', {}, h('input', { type: 'checkbox', checked: r.enabled, onchange: async e => { await api('PUT', `/api/rules/${r.id}`, { ...r, enabled: e.target.checked }); } })),
@@ -1929,7 +1931,7 @@ async function toggleNotifications() {
 const shortcuts = [
   { keys: '⌥T', code: 'KeyT', label: 'New task', run: newTaskDialog },
   { keys: '⌥R', code: 'KeyR', label: 'Quick reminder', run: reminderDialog },
-  { keys: '⌥P', code: 'KeyP', label: 'Agent session without a task', run: sessionDialog },
+  { keys: '⌥P', code: 'KeyP', label: 'Agent session in a new task', run: sessionDialog },
   { keys: '⌥C', code: 'KeyC', label: 'Copy the open task\'s link', run: () => copyTaskLink(shownTaskId(location.hash, taskDialog.id)) },
   { keys: '⌥M', code: 'KeyM', label: 'Notifications', run: toggleNotifications },
   { keys: '⌥K', code: 'KeyK', label: 'Pick a project', run: projectPicker },
