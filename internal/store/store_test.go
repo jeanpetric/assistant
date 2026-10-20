@@ -1159,8 +1159,25 @@ func TestRulesPerProjectAndSkill(t *testing.T) {
 	if got, _ := s.MatchingRules(ctx, 1, 2, 3); len(got) != 1 || got[0].ID != any.ID {
 		t.Fatalf("other project matches %+v", got)
 	}
-	if got, _ := s.MatchingRules(ctx, p.ID, 2, 3); len(got) != 2 {
+	if got, _ := s.MatchingRules(ctx, p.ID, 2, 3); len(got) != 1 || got[0].ID != mine.ID {
+		t.Fatalf("own project's rule should override the any-project one: %+v", got)
+	}
+	// Only for the same transition: an any-project rule from a specific lane still fires.
+	two := int64(2)
+	fromTwo, _ := s.SaveRule(ctx, Rule{Name: "from two", FromLaneID: &two, ToLaneID: 3, Prompt: "p", Enabled: true})
+	if got, _ := s.MatchingRules(ctx, p.ID, 2, 3); len(got) != 2 || got[0].ID != mine.ID || got[1].ID != fromTwo.ID {
 		t.Fatalf("own project matches %+v", got)
+	}
+	// A disabled project rule overrides nothing.
+	mine.Enabled = false
+	if _, err := s.SaveRule(ctx, mine); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.MatchingRules(ctx, p.ID, 2, 3); len(got) != 2 || got[0].ID != any.ID {
+		t.Fatalf("disabled project rule matches %+v", got)
+	}
+	if err := s.DeleteRule(ctx, fromTwo.ID); err != nil {
+		t.Fatal(err)
 	}
 
 	// A rule goes with its skill, and with its project.

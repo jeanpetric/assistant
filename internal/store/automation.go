@@ -89,10 +89,14 @@ func (s *Store) Rules(ctx context.Context) ([]Rule, error) {
 }
 
 // MatchingRules returns enabled rules for a move from -> to of a task in the project.
+// A project's rule overrides any-project rules for the same transition (same
+// from and to lanes), so the move doesn't start both.
 func (s *Store) MatchingRules(ctx context.Context, projectID, from, to int64) ([]Rule, error) {
-	return s.queryRules(ctx, `SELECT `+ruleCols+` FROM transition_rules
+	return s.queryRules(ctx, `SELECT `+ruleCols+` FROM transition_rules r
 		WHERE enabled = 1 AND to_lane_id = ? AND (from_lane_id IS NULL OR from_lane_id = ?)
-			AND (project_id IS NULL OR project_id = ?) ORDER BY id`, to, from, projectID)
+			AND (project_id = ? OR project_id IS NULL AND NOT EXISTS (SELECT 1 FROM transition_rules o
+				WHERE o.enabled = 1 AND o.project_id = ? AND o.to_lane_id = r.to_lane_id AND o.from_lane_id IS r.from_lane_id))
+		ORDER BY id`, to, from, projectID, projectID)
 }
 
 func (s *Store) Rule(ctx context.Context, id int64) (Rule, error) {
