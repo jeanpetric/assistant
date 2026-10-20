@@ -459,7 +459,7 @@ async function renderTask(id, focusSession) {
 
 // ---------- task dialog: the board opens a task here first ----------
 
-const taskDialog = { el: null, timers: [] };
+const taskDialog = { el: null, timers: [], id: 0 };
 
 async function openTaskDialog(id) {
   closeTaskDialog();
@@ -469,6 +469,7 @@ async function openTaskDialog(id) {
     dlg.addEventListener('close', () => {
       taskDialog.timers.forEach(clearInterval);
       taskDialog.timers = [];
+      taskDialog.id = 0;
       dlg.replaceChildren();
       if (location.hash === '' || location.hash.startsWith('#/board')) renderBoardInPlace();
     });
@@ -483,6 +484,7 @@ async function openTaskDialog(id) {
     leave: () => dlg.close(),
     reload: () => openTaskDialog(id),
   });
+  taskDialog.id = id;
   dlg.replaceChildren(
     h('div', { class: 'task-dialog-bar' },
       h('a', { class: 'btn ghost small', href: `#/task/${id}`, title: 'Open the task as a full page' }, '⤢ Full page'),
@@ -576,6 +578,8 @@ async function taskView(id, { every, leave, reload }) {
     buildsOn.el,
     h('div', { class: 'row', style: 'margin-top:14px' },
       h('span', { class: 'muted small grow' }, 'Created ' + fmtTime(t.created_at)),
+      h('button', { class: 'ghost', title: 'Copy a link to this task, to paste wherever you refer to it', onclick: () => copyTaskLink(id) },
+        'Copy link', hint('⌥C')),
       t.archived_at ? null : h('button', {
         class: 'ghost', title: 'Take it off the board; find it under Archive',
         onclick: async () => { await api('POST', `/api/tasks/${id}/archive`); leave(); },
@@ -1803,6 +1807,7 @@ const shortcuts = [
   { keys: '⌥T', code: 'KeyT', label: 'New task', run: newTaskDialog },
   { keys: '⌥R', code: 'KeyR', label: 'Quick reminder', run: reminderDialog },
   { keys: '⌥P', code: 'KeyP', label: 'Agent session without a task', run: sessionDialog },
+  { keys: '⌥C', code: 'KeyC', label: 'Copy the open task\'s link', run: () => copyTaskLink(shownTaskId(location.hash, taskDialog.id)) },
   { keys: '⌥M', code: 'KeyM', label: 'Notifications', run: toggleNotifications },
   { keys: '⌥K', code: 'KeyK', label: 'Pick a project', run: projectPicker },
   { keys: '⌥[', code: 'BracketLeft', label: 'Previous project', run: () => stepProject(-1) },
@@ -1823,6 +1828,23 @@ function shortcutFor(e, inField) {
   if (e.altKey) return e.shiftKey ? null : shortcuts.find(s => s.code === e.code) || null;
   if (inField) return null;
   return shortcuts.find(s => !s.code && s.keys === e.key) || null;
+}
+
+// The task on screen: the one in the board's dialog, else the task page's (#/task/7, #/task/7/s/3).
+function shownTaskId(hash, dialogId) {
+  if (dialogId) return dialogId;
+  const m = /^#\/task\/(\d+)\b/.exec(hash);
+  return m ? Number(m[1]) : 0;
+}
+
+// The link that opens a task, e.g. http://localhost:6767/#/task/7.
+function taskLink(origin, id) {
+  return `${origin}/#/task/${id}`;
+}
+
+function copyTaskLink(id) {
+  if (!id) { toast('Open a task to copy its link'); return; }
+  navigator.clipboard.writeText(taskLink(location.origin, id)).then(() => toast('Task link copied'));
 }
 
 // Where a project picked with ⌥K opens: the list when on the list, else the board.
