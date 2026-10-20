@@ -511,6 +511,19 @@ func (s *Server) cancelSession(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(202)
 }
 
+func (s *Server) resumeSession(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.app.Resume(r.Context(), id); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(202)
+}
+
 // ---- rules ----
 
 func (s *Server) listRules(w http.ResponseWriter, r *http.Request) {

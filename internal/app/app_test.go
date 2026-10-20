@@ -324,3 +324,52 @@ func TestTaskContext(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestShutdownInterruptsAndResume(t *testing.T) {
+	a, r := newApp(t)
+	ctx := context.Background()
+	r.block = make(chan struct{})
+	sess, _ := a.StartSession(ctx, StartOpts{Prompt: "long job"})
+	a.Shutdown()
+	got, _ := a.Store.Session(ctx, sess.ID)
+	if got.Status != store.StatusInterrupted {
+		t.Fatalf("shutdown should mark interrupted, got %+v", got)
+	}
+
+	// A fresh process picks the session up again.
+	b := New(a.Store, r, "/default/dir", "bypassPermissions")
+	close(r.block)
+	if err := b.Resume(ctx, sess.ID); err != nil {
+		t.Fatal(err)
+	}
+	b.Wait()
+	reqs := r.requests()
+	if last := reqs[len(reqs)-1]; last.ResumeID != "claude-1" || last.Prompt != ResumePrompt {
+		t.Fatalf("resume should continue the agent session: %+v", last)
+	}
+	if got, _ := b.Store.Session(ctx, sess.ID); got.Status != store.StatusIdle {
+		t.Fatalf("after resume: %+v", got)
+	}
+}
+
+func TestResumeWithoutAgentSessionReruns(t *testing.T) {
+	a, r := newApp(t)
+	ctx := context.Background()
+	sess, _ := a.Store.CreateSession(ctx, store.Session{Title: "t", Workdir: "/w"})
+	if err := a.Resume(ctx, sess.ID); !errors.Is(err, ErrNoResume) {
+		t.Fatalf("no prompt to rerun: got %v", err)
+	}
+	a.Store.AddMessage(ctx, store.Message{SessionID: sess.ID, Role: "user", Kind: "text", Content: "first prompt"})
+	a.Store.SetSessionStatus(ctx, sess.ID, store.StatusInterrupted, "")
+	if err := a.Resume(ctx, sess.ID); err != nil {
+		t.Fatal(err)
+	}
+	a.Wait()
+	reqs := r.requests()
+	if len(reqs) != 1 || reqs[0].ResumeID != "" || reqs[0].Prompt != "first prompt" || reqs[0].Workdir != "/w" {
+		t.Fatalf("should rerun the first prompt: %+v", reqs)
+	}
+	if err := a.Resume(ctx, 999); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("expected not found, got %v", err)
+	}
+}

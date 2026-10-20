@@ -291,6 +291,14 @@ func TestStandaloneSession(t *testing.T) {
 		t.Fatalf("workdirs = %v", dirs)
 	}
 
+	c.do("POST", "/api/sessions/"+itoa(sess.ID)+"/resume", nil, 202, nil)
+	c.app.Wait()
+	c.do("GET", "/api/sessions/"+itoa(sess.ID), nil, 200, &got)
+	if n := len(got.Messages); n != 6 || got.Messages[3].Content != app.ResumePrompt {
+		t.Fatalf("resume transcript = %+v", got.Messages)
+	}
+	c.do("POST", "/api/sessions/999/resume", nil, 404, nil)
+
 	c.do("POST", "/api/sessions", map[string]any{"prompt": " "}, 400, nil)
 	c.do("POST", "/api/sessions", map[string]any{"prompt": "x", "workdir": dir + "/missing"}, 400, nil)
 	c.do("POST", "/api/sessions", map[string]any{"prompt": "x", "workdir": "relative/dir"}, 400, nil)

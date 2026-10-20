@@ -33,9 +33,10 @@ type App struct {
 	DefaultMode    string
 	Now            func() time.Time
 
-	mu      sync.Mutex
-	running map[int64]context.CancelFunc
-	wg      sync.WaitGroup
+	mu       sync.Mutex
+	running  map[int64]context.CancelFunc
+	stopping bool // set by Shutdown: cancelled turns end as interrupted, not cancelled
+	wg       sync.WaitGroup
 }
 
 func New(s *store.Store, r agent.Runner, workdir, mode string) *App {
@@ -46,9 +47,11 @@ func New(s *store.Store, r agent.Runner, workdir, mode string) *App {
 // Wait blocks until all agent turns started so far have finished.
 func (a *App) Wait() { a.wg.Wait() }
 
-// Shutdown cancels running turns and waits for them.
+// Shutdown cancels running turns and waits for them. The turns are marked
+// interrupted so they can be resumed after the next start.
 func (a *App) Shutdown() {
 	a.mu.Lock()
+	a.stopping = true
 	for _, cancel := range a.running {
 		cancel()
 	}
@@ -121,6 +124,32 @@ func (a *App) SendMessage(ctx context.Context, sessionID int64, text string) err
 	return a.launch(sess, text, sess.ClaudeSessionID)
 }
 
+// ResumePrompt is sent to an agent whose turn was cut short.
+const ResumePrompt = "Your previous run was interrupted before it finished. Continue from where you left off."
+
+// Resume restarts a session whose last turn did not finish (interrupted,
+// cancelled or failed). With an agent session it continues that conversation;
+// without one (the agent died before starting) it reruns the first prompt.
+func (a *App) Resume(ctx context.Context, sessionID int64) error {
+	sess, err := a.Store.Session(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if sess.ClaudeSessionID != "" {
+		return a.launch(sess, ResumePrompt, sess.ClaudeSessionID)
+	}
+	msgs, err := a.Store.Messages(ctx, sessionID, 0)
+	if err != nil {
+		return err
+	}
+	for _, m := range msgs {
+		if m.Role == "user" {
+			return a.launch(sess, m.Content, "")
+		}
+	}
+	return ErrNoResume
+}
+
 // Cancel stops a running turn. It is a no-op for sessions that are not running.
 func (a *App) Cancel(sessionID int64) {
 	a.mu.Lock()
@@ -181,6 +210,11 @@ func (a *App) launch(sess store.Session, prompt, resumeID string) error {
 		switch {
 		case ctx.Err() != nil:
 			status = store.StatusCancelled
+			a.mu.Lock()
+			if a.stopping {
+				status = store.StatusInterrupted
+			}
+			a.mu.Unlock()
 		case err != nil:
 			status, msg = store.StatusError, err.Error()
 			a.Store.AddMessage(bg, store.Message{SessionID: sess.ID, Role: "system", Kind: "error", Content: msg})

@@ -454,6 +454,12 @@ function sessionComponent(session, messages) {
   const el = h('div', { class: 'session' }, head, body, foot);
   const c = { el, session, lastId: () => last };
 
+  const doResume = async () => {
+    await api('POST', `/api/sessions/${c.session.id}/resume`);
+    c.session.status = 'running';
+    drawHead();
+  };
+
   const doSend = async () => {
     if (!input.value.trim()) return;
     await api('POST', `/api/sessions/${c.session.id}/messages`, { text: input.value });
@@ -467,6 +473,7 @@ function sessionComponent(session, messages) {
   function drawHead() {
     const s = c.session;
     const running = s.status === 'running';
+    const resumable = ['interrupted', 'cancelled', 'error'].includes(s.status);
     const resumeCmd = s.claude_session_id ? `cd ${JSON.stringify(s.workdir)} && claude --resume ${s.claude_session_id}` : '';
     head.replaceChildren(...[
       h('span', { class: 'title' }, s.title || `Session ${s.id}`),
@@ -481,6 +488,7 @@ function sessionComponent(session, messages) {
         onclick: () => navigator.clipboard.writeText(resumeCmd).then(() => toast('Resume command copied')),
       }, 'Copy resume cmd') : null,
       running ? h('button', { class: 'danger small', onclick: () => api('POST', `/api/sessions/${s.id}/cancel`) }, 'Stop') : null,
+      resumable ? h('button', { class: 'small', title: 'Continue this session where it stopped', onclick: doResume }, 'Resume') : null,
       h('button', { class: 'ghost small', onclick: () => el.classList.toggle('collapsed') }, '▾'),
     ].filter(Boolean));
     send.disabled = running || !s.claude_session_id;

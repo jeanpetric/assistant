@@ -60,6 +60,7 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/sessions/{id}", s.getSession)
 	m.HandleFunc("POST /api/sessions/{id}/messages", s.sendMessage)
 	m.HandleFunc("POST /api/sessions/{id}/cancel", s.cancelSession)
+	m.HandleFunc("POST /api/sessions/{id}/resume", s.resumeSession)
 
 	m.HandleFunc("GET /api/rules", s.listRules)
 	m.HandleFunc("POST /api/rules", s.saveRule)
