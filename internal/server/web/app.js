@@ -375,9 +375,9 @@ async function renderList() {
   }
   draw();
   view.replaceChildren(h('div', { class: 'panel' },
-    h('div', { class: 'toolbar' }, filter, hint('/'), laneSel),
+    h('div', { class: 'toolbar' }, filter, hint('/'), hint('Esc'), laneSel),
     h('table', {}, h('thead', {}, h('tr', {}, ['Task', 'Lane', 'Kind', 'Due', 'Links', 'Updated'].map(x => h('th', {}, x)))), tbody)));
-  filter.focus();
+  if (filterOnOpen) { filterOnOpen = false; filter.focus(); }
 }
 
 // ---------- archive ----------
@@ -409,11 +409,10 @@ async function renderArchive() {
   }
   draw();
   view.replaceChildren(h('div', { class: 'panel' },
-    h('div', { class: 'toolbar' }, h('h2', { class: 'grow', style: 'flex:1' }, 'Archive'), filter, hint('/')),
+    h('div', { class: 'toolbar' }, h('h2', { class: 'grow', style: 'flex:1' }, 'Archive'), filter, hint('/'), hint('Esc')),
     tasks.length
       ? h('table', {}, h('thead', {}, h('tr', {}, ['Task', 'Lane', 'Kind', 'Links', 'Archived', ''].map(x => h('th', {}, x)))), tbody)
       : h('p', { class: 'muted' }, 'Nothing archived yet.')));
-  filter.focus();
 }
 
 // ---------- task page ----------
@@ -1165,6 +1164,7 @@ async function toggleNotifications() {
 // ---------- keyboard shortcuts ----------
 
 // Single keys work anywhere outside a text field; "g" starts a two-key jump to a page.
+// Inside a text field every key types, except Esc, which leaves the field so shortcuts work again.
 const shortcuts = [
   { keys: 'n', label: 'New task', run: newTaskDialog },
   { keys: 'r', label: 'Quick reminder', run: reminderDialog },
@@ -1179,14 +1179,16 @@ const shortcuts = [
   { keys: 'g a', label: 'Go to Archive', run: () => { location.hash = '#/archive'; } },
   { keys: 'g ,', label: 'Go to Settings', run: () => { location.hash = '#/settings'; } },
   { keys: '?', label: 'Show these shortcuts', run: shortcutsDialog },
+  { keys: 'Esc', label: 'Leave a text field; close the notifications', run: closeNotifications },
 ];
 let pendingKey = null; // first key of a two-key shortcut, cleared after a moment
 
 function onShortcut(e) {
   if (e.metaKey || e.ctrlKey || e.altKey || e.repeat || document.getElementById('dialog').open) return;
-  if (e.target.closest('input, textarea, select, [contenteditable]')) return;
-  if (e.key === 'Escape') { document.getElementById('notif-panel').classList.add('hidden'); return; }
-  const keys = pendingKey ? `${pendingKey.key} ${e.key}` : e.key;
+  const field = e.target.closest('input, textarea, select, [contenteditable]');
+  if (field) { if (e.key === 'Escape') field.blur(); return; }
+  const key = e.key === 'Escape' ? 'Esc' : e.key;
+  const keys = pendingKey ? `${pendingKey.key} ${key}` : key;
   if (pendingKey) { clearTimeout(pendingKey.timer); pendingKey = null; }
   const sc = shortcuts.find(s => s.keys === keys);
   if (sc) { e.preventDefault(); sc.run(); return; }
@@ -1196,10 +1198,16 @@ function onShortcut(e) {
   }
 }
 
+let filterOnOpen = false; // "/" away from the list opens it with the filter focused
+
 function focusFilter() {
   const f = view.querySelector('.toolbar input');
   if (f) f.focus();
-  else location.hash = '#/list'; // the list focuses its filter on open
+  else { filterOnOpen = true; location.hash = '#/list'; }
+}
+
+function closeNotifications() {
+  document.getElementById('notif-panel').classList.add('hidden');
 }
 
 function stepProject(by) {
@@ -1216,7 +1224,7 @@ function shortcutsDialog() {
   dlg.replaceChildren(h('h2', {}, 'Keyboard shortcuts'),
     h('table', { class: 'shortcuts' }, shortcuts.map(s => h('tr', {},
       h('td', {}, s.keys.split(' ').map(k => h('kbd', {}, k))), h('td', {}, s.label)))),
-    h('p', { class: 'muted small' }, '⌘/Ctrl+Enter sends a prompt or reply. Esc closes a dialog or the notifications. ',
+    h('p', { class: 'muted small' }, '⌘/Ctrl+Enter sends a prompt or reply. Esc also closes a dialog. ',
       'Greyed keys next to buttons and links show their shortcut.'),
     h('div', { class: 'dialog-actions' }, h('button', { onclick: () => dlg.close() }, 'Close', hint('Esc'))));
   dlg.showModal();

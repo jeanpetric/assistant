@@ -325,11 +325,18 @@ func TestStaticUI(t *testing.T) {
 		// Shortcut hints are drawn greyed next to the controls they trigger.
 		"function hint(keys)", "drawHeaderHints();", "'Cancel', hint('Esc')", "'Create', hint('↵')", "filter, hint('/')",
 		"addEventListener('click', shortcutsDialog)",
+		// Esc leaves a text field, so a focused filter never traps the page-jump shortcuts.
+		"if (field) { if (e.key === 'Escape') field.blur(); return; }", "{ keys: 'Esc', label: 'Leave a text field",
+		"filter, hint('/'), hint('Esc')", "if (filterOnOpen) { filterOnOpen = false; filter.focus(); }",
 		// A project's directory is picked in Settings and shown as the default for its tasks.
 		"function taskWorkdir(t)", "workdir.addEventListener('change', saveProject)", "`Default (${taskWorkdir(task)})`"} {
 		if !bytes.Contains(js, []byte(want)) {
 			t.Fatalf("app.js lacks %q", want)
 		}
+	}
+	// List and Archive leave their filter alone on open; only "/" focuses it.
+	if n := bytes.Count(js, []byte("filter.focus()")); n != 1 {
+		t.Fatalf("app.js focuses a filter %d times, want only the one behind \"/\"", n)
 	}
 	// Every header hint names a real shortcut (or, like "[ ]", each key of one), so a hint never lies.
 	hints := regexp.MustCompile(`data-shortcut="([^"]+)"`).FindAllSubmatch(body, -1)

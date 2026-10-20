@@ -45,8 +45,10 @@ One Go binary, one SQLite file, no JavaScript build step.
   notifications while the board is open in a browser tab (allow them when asked).
 - **Keyboard shortcuts** outside text fields: `n` new task, `r` reminder, `s` session, `/` filter,
   `[` / `]` previous / next project, `g` then `b` `l` `s` `a` `,` to jump to Board, List,
-  Sessions, Archive or Settings, `i` notifications. Each shortcut shows as a greyed key next to
-  its button or link; press `?` (or the `?` button) for the full list.
+  Sessions, Archive or Settings, `i` notifications. In a text field keys type as usual; `Esc`
+  leaves the field so the shortcuts work again (List and Archive don't focus their filter on
+  open — `/` does). Each shortcut shows as a greyed key next to its button or link; press `?`
+  (or the `?` button) for the full list.
 
 ## Run
 
