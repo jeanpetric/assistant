@@ -525,3 +525,47 @@ func TestResumeWithoutAgentSessionReruns(t *testing.T) {
 		t.Fatalf("expected not found, got %v", err)
 	}
 }
+
+func TestAutoArchive(t *testing.T) {
+	a, _ := newApp(t)
+	ctx := context.Background()
+	now := time.Date(2026, 10, 20, 9, 0, 0, 0, time.Local)
+	a.Now = func() time.Time { return now }
+	a.Store.SetClock(func() time.Time { return now })
+	lane := lanesByName(t, a)
+	task, _ := a.Store.CreateTask(ctx, store.Task{Title: "T", LaneID: lane["In progress"]})
+	a.Store.SaveSettings(ctx, store.Settings{ArchiveLaneID: ptr(lane["Done"]), ArchiveAfterMinutes: 60})
+
+	archived := func() bool {
+		t.Helper()
+		if err := a.RunAutoArchive(ctx); err != nil {
+			t.Fatal(err)
+		}
+		got, _ := a.Store.Task(ctx, task.ID)
+		return got.ArchivedAt != nil
+	}
+	now = now.Add(2 * time.Hour) // time in other lanes doesn't count
+	a.MoveTask(ctx, task.ID, lane["Done"], -1)
+	now = now.Add(59 * time.Minute)
+	if archived() {
+		t.Fatal("archived too early")
+	}
+	now = now.Add(time.Minute)
+	if !archived() {
+		t.Fatal("not archived after an hour in Done")
+	}
+
+	// Off: no lane, or no duration.
+	a.Store.UnarchiveTask(ctx, task.ID)
+	now = now.Add(24 * time.Hour)
+	a.Store.SaveSettings(ctx, store.Settings{ArchiveAfterMinutes: 60})
+	if archived() {
+		t.Fatal("archived with no lane")
+	}
+	a.Store.SaveSettings(ctx, store.Settings{ArchiveLaneID: ptr(lane["Done"])})
+	if archived() {
+		t.Fatal("archived with no duration")
+	}
+}
+
+func ptr(id int64) *int64 { return &id }

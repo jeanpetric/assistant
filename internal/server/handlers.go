@@ -64,6 +64,38 @@ func (s *Server) limits(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, s.app.Limits())
 }
 
+// ---- settings ----
+
+func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
+	x, err := s.app.Store.Settings(r.Context())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, x)
+}
+
+func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) {
+	var x store.Settings
+	if err := decode(r, &x); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if x.ArchiveAfterMinutes < 0 {
+		writeErr(w, badRequest{"archive_after_minutes must not be negative"})
+		return
+	}
+	if err := s.checkLane(r.Context(), x.ArchiveLaneID, "archive_lane_id"); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.app.Store.SaveSettings(r.Context(), x); err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, x)
+}
+
 // ---- lanes ----
 
 type laneInput struct {
@@ -340,6 +372,41 @@ func (s *Server) moveTask(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"started": started})
 }
 
+func (s *Server) archivedTasks(w http.ResponseWriter, r *http.Request) {
+	tasks, err := s.app.Store.ArchivedTasks(r.Context())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, tasks)
+}
+
+func (s *Server) archiveTask(w http.ResponseWriter, r *http.Request) {
+	s.setArchived(w, r, s.app.Store.ArchiveTask)
+}
+
+func (s *Server) unarchiveTask(w http.ResponseWriter, r *http.Request) {
+	s.setArchived(w, r, s.app.Store.UnarchiveTask)
+}
+
+func (s *Server) setArchived(w http.ResponseWriter, r *http.Request, fn func(context.Context, int64) error) {
+	id, err := pathID(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := fn(r.Context(), id); err != nil {
+		writeErr(w, err)
+		return
+	}
+	t, err := s.app.Store.Task(r.Context(), id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, t)
+}
+
 // ---- sessions ----
 
 type sessionInput struct {
@@ -445,7 +512,7 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request) {
 		}
 		prompt = app.TaskContext(t) + "\n\n---\n\n" + prompt
 	}
-	if err := s.checkLane(r.Context(), in.DoneLaneID); err != nil {
+	if err := s.checkLane(r.Context(), in.DoneLaneID, "done_lane_id"); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -537,7 +604,7 @@ func (s *Server) updateSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, badRequest{"a session without a task has no lane to move"})
 		return
 	}
-	if err := s.checkLane(r.Context(), in.DoneLaneID); err != nil {
+	if err := s.checkLane(r.Context(), in.DoneLaneID, "done_lane_id"); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -553,14 +620,14 @@ func (s *Server) updateSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, sess)
 }
 
-// checkLane rejects a lane id that doesn't exist; nil is fine.
-func (s *Server) checkLane(ctx context.Context, id *int64) error {
+// checkLane rejects a lane id that doesn't exist; nil is fine. field names it in the error.
+func (s *Server) checkLane(ctx context.Context, id *int64, field string) error {
 	if id == nil {
 		return nil
 	}
 	_, err := s.app.Store.Lane(ctx, *id)
 	if errors.Is(err, store.ErrNotFound) {
-		return badRequest{"unknown done_lane_id"}
+		return badRequest{"unknown " + field}
 	}
 	return err
 }
@@ -622,7 +689,7 @@ func (s *Server) saveRule(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, badRequest{"unknown mode"})
 		return
 	}
-	if err := s.checkLane(r.Context(), rule.DoneLaneID); err != nil {
+	if err := s.checkLane(r.Context(), rule.DoneLaneID, "done_lane_id"); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -711,7 +778,7 @@ func (s *Server) saveSchedule(w http.ResponseWriter, r *http.Request, x store.Sc
 		writeErr(w, badRequest{"unknown mode"})
 		return
 	}
-	if err := s.checkLane(r.Context(), x.DoneLaneID); err != nil {
+	if err := s.checkLane(r.Context(), x.DoneLaneID, "done_lane_id"); err != nil {
 		writeErr(w, err)
 		return
 	}

@@ -26,8 +26,11 @@ type Task struct {
 	Fields      map[string]string `json:"fields"`
 	DueAt       *time.Time        `json:"due_at"`      // notify when reached
 	RemindedAt  *time.Time        `json:"reminded_at"` // set once the due notification fired
-	CreatedAt   time.Time         `json:"created_at"`
-	UpdatedAt   time.Time         `json:"updated_at"`
+	ArchivedAt  *time.Time        `json:"archived_at"` // archived tasks are off the board
+	// When the task entered its lane; auto-archive counts from here.
+	LaneChangedAt time.Time `json:"lane_changed_at"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 type FieldDef struct {
@@ -83,15 +86,34 @@ func (s *Store) UpdateLane(ctx context.Context, id int64, name, color string) er
 	return affected(s.db.ExecContext(ctx, `UPDATE lanes SET name = ?, color = ? WHERE id = ?`, name, color, id))
 }
 
+// DeleteLane deletes a lane without tasks on the board. Archived tasks in it
+// move to the first remaining lane, which is where a restore puts them.
 func (s *Store) DeleteLane(ctx context.Context, id int64) error {
-	var n int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tasks WHERE lane_id = ?`, id).Scan(&n); err != nil {
-		return err
-	}
-	if n > 0 {
-		return ErrLaneNotEmpty
-	}
-	return affected(s.db.ExecContext(ctx, `DELETE FROM lanes WHERE id = ?`, id))
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		var active, archived int
+		err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FILTER (WHERE archived_at IS NULL), COUNT(*) FILTER (WHERE archived_at IS NOT NULL)
+			FROM tasks WHERE lane_id = ?`, id).Scan(&active, &archived)
+		if err != nil {
+			return err
+		}
+		if active > 0 {
+			return ErrLaneNotEmpty
+		}
+		if archived > 0 {
+			var other int64
+			err := tx.QueryRowContext(ctx, `SELECT id FROM lanes WHERE id != ? ORDER BY position, id LIMIT 1`, id).Scan(&other)
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrLaneNotEmpty
+			}
+			if err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE tasks SET lane_id = ? WHERE lane_id = ?`, other, id); err != nil {
+				return err
+			}
+		}
+		return affected(tx.ExecContext(ctx, `DELETE FROM lanes WHERE id = ?`, id))
+	})
 }
 
 // ReorderLanes sets lane positions to the order of ids.
@@ -140,21 +162,33 @@ func (s *Store) DeleteFieldDef(ctx context.Context, key string) error {
 
 // ---- tasks ----
 
-const taskCols = `id, title, description, kind, lane_id, position, workdir, due_at, reminded_at, created_at, updated_at`
+const taskCols = `id, title, description, kind, lane_id, position, workdir, due_at, reminded_at, archived_at, lane_changed_at, created_at, updated_at`
 
 func scanTask(sc interface{ Scan(...any) error }) (Task, error) {
 	var t Task
-	var created, updated int64
-	var due, reminded sql.NullInt64
-	err := sc.Scan(&t.ID, &t.Title, &t.Description, &t.Kind, &t.LaneID, &t.Position, &t.Workdir, &due, &reminded, &created, &updated)
-	t.CreatedAt, t.UpdatedAt = fromMillis(created), fromMillis(updated)
-	t.DueAt, t.RemindedAt = fromNullMillis(due), fromNullMillis(reminded)
+	var laneChanged, created, updated int64
+	var due, reminded, archived sql.NullInt64
+	err := sc.Scan(&t.ID, &t.Title, &t.Description, &t.Kind, &t.LaneID, &t.Position, &t.Workdir, &due, &reminded, &archived,
+		&laneChanged, &created, &updated)
+	t.CreatedAt, t.UpdatedAt, t.LaneChangedAt = fromMillis(created), fromMillis(updated), fromMillis(laneChanged)
+	t.DueAt, t.RemindedAt, t.ArchivedAt = fromNullMillis(due), fromNullMillis(reminded), fromNullMillis(archived)
 	t.Fields = map[string]string{}
 	return t, err
 }
 
+// Tasks returns the tasks on the board, i.e. not archived.
 func (s *Store) Tasks(ctx context.Context) ([]Task, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+taskCols+` FROM tasks ORDER BY lane_id, position, id`)
+	return s.queryTasks(ctx, `SELECT `+taskCols+` FROM tasks WHERE archived_at IS NULL ORDER BY lane_id, position, id`)
+}
+
+// ArchivedTasks returns archived tasks, most recently archived first.
+func (s *Store) ArchivedTasks(ctx context.Context) ([]Task, error) {
+	return s.queryTasks(ctx, `SELECT `+taskCols+` FROM tasks WHERE archived_at IS NOT NULL ORDER BY archived_at DESC, id DESC`)
+}
+
+// queryTasks runs a task query and loads the fields of the tasks it returns.
+func (s *Store) queryTasks(ctx context.Context, q string, args ...any) ([]Task, error) {
+	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -229,9 +263,9 @@ func (s *Store) CreateTask(ctx context.Context, t Task) (Task, error) {
 		}
 		now := s.ts()
 		res, err := tx.ExecContext(ctx, `
-			INSERT INTO tasks (title, description, kind, lane_id, position, workdir, due_at, created_at, updated_at)
-			VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(position), -1) + 1 FROM tasks WHERE lane_id = ?), ?, ?, ?, ?)`,
-			t.Title, t.Description, t.Kind, t.LaneID, t.LaneID, t.Workdir, toNullMillis(t.DueAt), now, now)
+			INSERT INTO tasks (title, description, kind, lane_id, position, workdir, due_at, lane_changed_at, created_at, updated_at)
+			VALUES (?, ?, ?, ?, `+nextPosition+`, ?, ?, ?, ?, ?)`,
+			t.Title, t.Description, t.Kind, t.LaneID, t.LaneID, t.Workdir, toNullMillis(t.DueAt), now, now, now)
 		if err != nil {
 			return err
 		}
@@ -306,11 +340,16 @@ func (s *Store) DeleteTask(ctx context.Context, id int64) error {
 	return affected(s.db.ExecContext(ctx, `DELETE FROM tasks WHERE id = ?`, id))
 }
 
+// nextPosition is the end of a lane's board tasks; its parameter is the lane id.
+const nextPosition = `(SELECT COALESCE(MAX(position), -1) + 1 FROM tasks WHERE lane_id = ? AND archived_at IS NULL)`
+
 // MoveTask places the task at index within laneID (clamped) and renumbers both lanes.
+// Moving an archived task brings it back to the board.
 // It returns the lane the task came from.
 func (s *Store) MoveTask(ctx context.Context, id, laneID int64, index int) (fromLane int64, err error) {
 	err = s.tx(ctx, func(tx *sql.Tx) error {
-		if err := tx.QueryRowContext(ctx, `SELECT lane_id FROM tasks WHERE id = ?`, id).Scan(&fromLane); err != nil {
+		var archived bool
+		if err := tx.QueryRowContext(ctx, `SELECT lane_id, archived_at IS NOT NULL FROM tasks WHERE id = ?`, id).Scan(&fromLane, &archived); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return ErrNotFound
 			}
@@ -331,7 +370,10 @@ func (s *Store) MoveTask(ctx context.Context, id, laneID int64, index int) (from
 			index = len(ids)
 		}
 		ids = append(ids[:index], append([]int64{id}, ids[index:]...)...)
-		if _, err := tx.ExecContext(ctx, `UPDATE tasks SET lane_id = ?, updated_at = ? WHERE id = ?`, laneID, s.ts(), id); err != nil {
+		now := s.ts()
+		laneChanged := fromLane != laneID || archived
+		if _, err := tx.ExecContext(ctx, `UPDATE tasks SET lane_id = ?, archived_at = NULL, updated_at = ?,
+			lane_changed_at = CASE WHEN ? THEN ? ELSE lane_changed_at END WHERE id = ?`, laneID, now, laneChanged, now, id); err != nil {
 			return err
 		}
 		if err := renumber(ctx, tx, ids); err != nil {
@@ -350,7 +392,7 @@ func (s *Store) MoveTask(ctx context.Context, id, laneID int64, index int) (from
 }
 
 func laneTaskIDs(ctx context.Context, tx *sql.Tx, laneID, exclude int64) ([]int64, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT id FROM tasks WHERE lane_id = ? AND id != ? ORDER BY position, id`, laneID, exclude)
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM tasks WHERE lane_id = ? AND id != ? AND archived_at IS NULL ORDER BY position, id`, laneID, exclude)
 	if err != nil {
 		return nil, err
 	}

@@ -37,6 +37,9 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/board", s.board)
 	m.HandleFunc("GET /api/meta", s.meta)
 	m.HandleFunc("GET /api/limits", s.limits)
+	m.HandleFunc("GET /api/settings", s.getSettings)
+	m.HandleFunc("PUT /api/settings", s.saveSettings)
+	m.HandleFunc("GET /api/archive", s.archivedTasks)
 
 	m.HandleFunc("POST /api/lanes", s.createLane)
 	m.HandleFunc("PATCH /api/lanes/{id}", s.updateLane)
@@ -51,6 +54,8 @@ func (s *Server) routes() {
 	m.HandleFunc("PATCH /api/tasks/{id}", s.updateTask)
 	m.HandleFunc("DELETE /api/tasks/{id}", s.deleteTask)
 	m.HandleFunc("POST /api/tasks/{id}/move", s.moveTask)
+	m.HandleFunc("POST /api/tasks/{id}/archive", s.archiveTask)
+	m.HandleFunc("POST /api/tasks/{id}/unarchive", s.unarchiveTask)
 	m.HandleFunc("POST /api/tasks/{id}/sessions", s.startSession)
 	m.HandleFunc("GET /api/tasks/{id}/schedules", s.listSchedules)
 	m.HandleFunc("POST /api/tasks/{id}/schedules", s.createSchedule)

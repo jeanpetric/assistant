@@ -134,6 +134,22 @@ ALTER TABLE sessions ADD COLUMN done_lane_id INTEGER REFERENCES lanes(id) ON DEL
 ALTER TABLE transition_rules ADD COLUMN done_lane_id INTEGER REFERENCES lanes(id) ON DELETE SET NULL;
 ALTER TABLE schedules ADD COLUMN done_lane_id INTEGER REFERENCES lanes(id) ON DELETE SET NULL;
 `,
+	// Archive: archived tasks leave the board but keep their lane. lane_changed_at
+	// tells how long a task has sat in its lane (best guess for existing rows:
+	// their last update). App settings live in a single row; auto-archive
+	// starts on for a lane named Done, after a week.
+	`
+ALTER TABLE tasks ADD COLUMN archived_at INTEGER;
+ALTER TABLE tasks ADD COLUMN lane_changed_at INTEGER NOT NULL DEFAULT 0;
+UPDATE tasks SET lane_changed_at = updated_at;
+CREATE TABLE settings (
+	id INTEGER PRIMARY KEY CHECK (id = 1),
+	archive_lane_id INTEGER REFERENCES lanes(id) ON DELETE SET NULL,
+	archive_after_minutes INTEGER NOT NULL DEFAULT 0
+);
+INSERT INTO settings (id, archive_lane_id, archive_after_minutes)
+	VALUES (1, (SELECT id FROM lanes WHERE lower(name) = 'done' ORDER BY position, id LIMIT 1), 10080);
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

@@ -23,6 +23,10 @@ One Go binary, one SQLite file, no JavaScript build step.
   finishes a turn successfully. Pick it when starting a session or change it on the session;
   rules and schedules set it for the sessions they start (new rules default to *Review*). A
   failed turn, or a task you moved by hand meanwhile, stays put.
+- **Archive**: tasks that sit in a chosen lane (*Done* by default) for a set time (a week by
+  default) are archived automatically; both are in *Settings → Archive* (pick *Off* to stop it).
+  A task can also be archived by hand from its page. Archived tasks leave the board and are
+  listed under *Archive* in the top menu; *Restore* (or moving it to a lane) puts one back.
 - **Due times & quick reminders**: any task can have a due time; when it's reached you get a
   notification. *⏰ Reminder* (or press `r`) creates a reminder task in two keystrokes, with
   presets like *15 min* or *Tomorrow 9:00*.

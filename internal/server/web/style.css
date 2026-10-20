@@ -222,3 +222,5 @@ dialog::backdrop { background: rgba(0, 0, 0, .35); }
   .task-page { grid-template-columns: 1fr; }
   .task-side { position: static; max-height: none; }
 }
+
+.archived-note { background: var(--surface-2); border-radius: var(--radius); padding: 6px 10px; margin-bottom: 10px; }

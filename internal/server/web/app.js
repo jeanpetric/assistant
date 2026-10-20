@@ -146,6 +146,7 @@ function route() {
     task: () => renderTask(Number(parts[1]), Number(parts[3]) || 0),
     sessions: renderSessions,
     session: () => renderSession(Number(parts[1])),
+    archive: renderArchive,
     settings: renderSettings,
   }[parts[0]] || renderBoard;
   r().catch(err => view.replaceChildren(h('div', { class: 'panel' }, 'Error: ' + err.message)));
@@ -316,6 +317,41 @@ async function renderList() {
   filter.focus();
 }
 
+// ---------- archive ----------
+
+async function renderArchive() {
+  const [b, tasks] = await Promise.all([loadBoard(), api('GET', '/api/archive')]);
+  const filter = h('input', { placeholder: 'Filter…', oninput: draw });
+  const tbody = h('tbody');
+  function draw() {
+    const q = filter.value.toLowerCase();
+    const rows = tasks.filter(t => !q || (t.title + ' ' + t.description).toLowerCase().includes(q));
+    tbody.replaceChildren(...rows.map(t => h('tr', { class: 'clickable', onclick: () => { location.hash = `#/task/${t.id}`; } },
+      h('td', {}, h('div', {}, t.title), t.description ? h('div', { class: 'muted small' }, trunc(t.description, 120)) : null),
+      h('td', {}, laneName(t.lane_id)),
+      h('td', {}, kindBadge(t.kind) || 'task'),
+      h('td', {}, fieldLinks(t)),
+      h('td', { class: 'muted small', title: fmtTime(t.archived_at) }, ago(t.archived_at)),
+      h('td', {}, h('button', {
+        class: 'ghost small', title: 'Back to the end of its lane',
+        onclick: async e => {
+          e.stopPropagation();
+          await api('POST', `/api/tasks/${t.id}/unarchive`);
+          tasks.splice(tasks.indexOf(t), 1);
+          toast(`Restored to ${laneName(t.lane_id)}`);
+          draw();
+        },
+      }, 'Restore')))));
+  }
+  draw();
+  view.replaceChildren(h('div', { class: 'panel' },
+    h('div', { class: 'toolbar' }, h('h2', { class: 'grow', style: 'flex:1' }, 'Archive'), filter),
+    tasks.length
+      ? h('table', {}, h('thead', {}, h('tr', {}, ['Task', 'Lane', 'Kind', 'Links', 'Archived', ''].map(x => h('th', {}, x)))), tbody)
+      : h('p', { class: 'muted' }, 'Nothing archived yet.')));
+  filter.focus();
+}
+
 // ---------- task page ----------
 
 async function renderTask(id, focusSession) {
@@ -341,7 +377,12 @@ async function renderTask(id, focusSession) {
   const due = h('input', { type: 'datetime-local', value: toLocalInput(t.due_at), onchange: () => save({ due_at: fromLocalInput(due.value) }) });
   const clearDue = h('button', { class: 'ghost small', title: 'No due time', onclick: async () => { due.value = ''; await save({ due_at: null }); } }, '✕');
 
+  const archived = t.archived_at
+    ? h('div', { class: 'row archived-note' }, h('span', { class: 'grow' }, 'Archived ' + ago(t.archived_at)),
+      h('button', { class: 'small', onclick: async () => { await api('POST', `/api/tasks/${id}/unarchive`); route(); } }, 'Restore'))
+    : null;
   side.append(h('div', { class: 'panel' },
+    archived,
     h('input', { class: 'title-input', value: t.title, onchange: e => save({ title: e.target.value }) }),
     h('label', {}, 'Lane'),
     select(state.board.lanes.map(l => [l.id, l.name]), t.lane_id, {
@@ -361,6 +402,10 @@ async function renderTask(id, focusSession) {
     fields,
     h('div', { class: 'row', style: 'margin-top:14px' },
       h('span', { class: 'muted small grow' }, 'Created ' + fmtTime(t.created_at)),
+      t.archived_at ? null : h('button', {
+        class: 'ghost', title: 'Take it off the board; find it under Archive',
+        onclick: async () => { await api('POST', `/api/tasks/${id}/archive`); location.hash = '#/board'; },
+      }, 'Archive'),
       h('button', {
         class: 'danger', onclick: async () => {
           if (!confirm('Delete this task and all its sessions?')) return;
@@ -639,7 +684,7 @@ function sessionDialog() {
 
 async function renderSettings() {
   const b = await loadBoard();
-  const rules = await api('GET', '/api/rules');
+  const [rules, settings] = await Promise.all([api('GET', '/api/rules'), api('GET', '/api/settings')]);
   const rerender = () => renderSettings();
 
   const lanes = h('div', { class: 'panel' }, h('h2', {}, 'Lanes'),
@@ -698,7 +743,29 @@ async function renderSettings() {
           h('button', { class: 'danger small', onclick: async () => { await api('DELETE', `/api/rules/${r.id}`); rerender(); } }, 'Delete'))))))
       : h('p', { class: 'muted' }, 'No rules yet.'));
 
-  view.replaceChildren(h('div', { style: 'max-width:900px' }, lanes, rulesPanel, fields));
+  view.replaceChildren(h('div', { style: 'max-width:900px' }, lanes, rulesPanel, archivePanel(b.lanes, settings), fields));
+}
+
+// Auto-archive: which lane, and how long a task stays there first.
+function archivePanel(lanes, settings) {
+  const units = [[1440, 'days'], [60, 'hours'], [1, 'minutes']];
+  const mins = settings.archive_after_minutes;
+  const [unit] = units.find(([u]) => mins > 0 && mins % u === 0) || units[0];
+  const lane = select([['', 'Off — never archive automatically'], ...lanes.map(l => [l.id, l.name])], settings.archive_lane_id ?? '');
+  const amount = h('input', { type: 'number', min: 1, step: 1, value: mins > 0 ? mins / unit : 7, style: 'width:90px' });
+  const unitSel = select(units, unit, { style: 'width:auto' });
+  const save = async () => {
+    const n = Math.round(Number(amount.value));
+    if (!(n > 0)) { toast('Enter a positive number'); return; }
+    await api('PUT', '/api/settings', { archive_lane_id: lane.value ? Number(lane.value) : null, archive_after_minutes: n * Number(unitSel.value) });
+    toast('Saved');
+  };
+  [lane, amount, unitSel].forEach(el => el.addEventListener('change', save));
+  return h('div', { class: 'panel' }, h('h2', {}, 'Archive'),
+    h('p', { class: 'muted small' }, 'Tasks that stay in this lane long enough move to the Archive (top menu). Restore brings one back.'),
+    h('div', { class: 'row' },
+      h('div', { class: 'grow' }, h('label', {}, 'Lane'), lane),
+      h('div', {}, h('label', {}, 'After'), h('div', { class: 'row' }, amount, unitSel))));
 }
 
 function ruleDialog(rule, lanes, done) {

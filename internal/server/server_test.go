@@ -377,3 +377,64 @@ func TestDoneLane(t *testing.T) {
 	}
 	c.do("POST", path+"/schedules", map[string]any{"cron": "@daily", "action": "agent", "prompt": "p", "done_lane_id": 999}, 400, nil)
 }
+
+func TestArchive(t *testing.T) {
+	c := newClient(t)
+	var b board
+	c.do("GET", "/api/board", nil, 200, &b)
+	lane := map[string]int64{}
+	for _, l := range b.Lanes {
+		lane[l.Name] = l.ID
+	}
+
+	var set store.Settings
+	c.do("GET", "/api/settings", nil, 200, &set)
+	if set.ArchiveLaneID == nil || *set.ArchiveLaneID != lane["Done"] || set.ArchiveAfterMinutes != 7*24*60 {
+		t.Fatalf("default settings = %+v", set)
+	}
+	c.do("PUT", "/api/settings", map[string]any{"archive_lane_id": lane["Review"], "archive_after_minutes": 30}, 200, &set)
+	c.do("GET", "/api/settings", nil, 200, &set)
+	if *set.ArchiveLaneID != lane["Review"] || set.ArchiveAfterMinutes != 30 {
+		t.Fatalf("saved settings = %+v", set)
+	}
+	c.do("PUT", "/api/settings", map[string]any{"archive_lane_id": 999, "archive_after_minutes": 30}, 400, nil)
+	c.do("PUT", "/api/settings", map[string]any{"archive_lane_id": nil, "archive_after_minutes": -1}, 400, nil)
+	c.do("PUT", "/api/settings", map[string]any{"archive_lane_id": nil, "archive_after_minutes": 0}, 200, nil)
+
+	var task store.Task
+	c.do("POST", "/api/tasks", map[string]any{"title": "T", "lane_id": lane["Done"]}, 201, &task)
+	path := "/api/tasks/" + itoa(task.ID)
+	var got store.Task
+	c.do("POST", path+"/archive", nil, 200, &got)
+	if got.ArchivedAt == nil {
+		t.Fatalf("archive = %+v", got)
+	}
+	c.do("GET", "/api/board", nil, 200, &b)
+	if len(b.Tasks) != 0 {
+		t.Fatalf("archived task on the board: %+v", b.Tasks)
+	}
+	var arch []store.Task
+	c.do("GET", "/api/archive", nil, 200, &arch)
+	if len(arch) != 1 || arch[0].ID != task.ID {
+		t.Fatalf("archive list = %+v", arch)
+	}
+	var detail struct {
+		Task store.Task `json:"task"`
+	}
+	c.do("GET", path, nil, 200, &detail)
+	if detail.Task.ArchivedAt == nil {
+		t.Fatal("task page should see archived_at")
+	}
+
+	c.do("POST", path+"/unarchive", nil, 200, &got)
+	if got.ArchivedAt != nil || got.LaneID != lane["Done"] {
+		t.Fatalf("unarchive = %+v", got)
+	}
+	c.do("GET", "/api/archive", nil, 200, &arch)
+	c.do("GET", "/api/board", nil, 200, &b)
+	if len(arch) != 0 || len(b.Tasks) != 1 {
+		t.Fatalf("after restore: archive %d, board %d", len(arch), len(b.Tasks))
+	}
+	c.do("POST", "/api/tasks/999/archive", nil, 404, nil)
+	c.do("POST", "/api/tasks/999/unarchive", nil, 404, nil)
+}

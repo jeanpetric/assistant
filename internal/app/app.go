@@ -409,7 +409,19 @@ func (a *App) RunDueReminders(ctx context.Context) error {
 	return nil
 }
 
-// RunScheduler checks schedules and due reminders every interval until ctx is done.
+// RunAutoArchive archives the tasks that have sat in the archive lane longer
+// than the configured time. It does nothing while auto-archive is off.
+func (a *App) RunAutoArchive(ctx context.Context) error {
+	set, err := a.Store.Settings(ctx)
+	if err != nil || set.ArchiveLaneID == nil || set.ArchiveAfterMinutes <= 0 {
+		return err
+	}
+	cutoff := a.Now().Add(-time.Duration(set.ArchiveAfterMinutes) * time.Minute)
+	_, err = a.Store.ArchiveStale(ctx, *set.ArchiveLaneID, cutoff)
+	return err
+}
+
+// RunScheduler checks schedules, due reminders and auto-archive every interval until ctx is done.
 func (a *App) RunScheduler(ctx context.Context, interval time.Duration) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
@@ -419,6 +431,9 @@ func (a *App) RunScheduler(ctx context.Context, interval time.Duration) {
 		}
 		if err := a.RunDueReminders(ctx); err != nil {
 			log.Printf("reminders: %v", err)
+		}
+		if err := a.RunAutoArchive(ctx); err != nil {
+			log.Printf("archive: %v", err)
 		}
 		select {
 		case <-ctx.Done():
