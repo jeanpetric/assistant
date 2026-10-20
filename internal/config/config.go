@@ -17,6 +17,10 @@ type Config struct {
 	ClaudeArgs string `json:"claude_args"`
 	Workdir    string `json:"workdir"`
 	Mode       string `json:"mode"`
+	// Trello API key and token (https://trello.com/power-ups/admin); both
+	// set turns the Trello sync on.
+	TrelloKey   string `json:"trello_key"`
+	TrelloToken string `json:"trello_token"`
 }
 
 func Defaults(home string) Config {

@@ -48,13 +48,18 @@ type App struct {
 	memorizeAgain map[int64]bool
 	memoryLocks   map[int64]*sync.Mutex        // one update of a memory at a time
 	filling       map[int64]context.CancelFunc // memories being written from a task's sessions (see FillMemory)
+
+	Trello       TrelloClient // nil: Trello sync off
+	trelloMu     sync.Mutex   // one sync at a time
+	trelloKick   chan struct{}
+	trelloStatus TrelloStatus
 }
 
 func New(s *store.Store, r agent.Runner, workdir, mode string) *App {
 	return &App{Store: s, Runner: r, DefaultWorkdir: workdir, DefaultMode: mode, Now: time.Now,
 		running: map[int64]context.CancelFunc{}, limits: map[int64]agent.RateLimits{}, summarizing: map[int64]context.CancelFunc{},
 		memorizing: map[int64]context.CancelFunc{}, memorizeAgain: map[int64]bool{}, memoryLocks: map[int64]*sync.Mutex{},
-		filling: map[int64]context.CancelFunc{}}
+		filling: map[int64]context.CancelFunc{}, trelloKick: make(chan struct{}, 1)}
 }
 
 // Wait blocks until all agent turns started so far have finished.
@@ -653,6 +658,7 @@ func (a *App) MoveTask(ctx context.Context, taskID, laneID int64, index int) ([]
 	if err != nil || from == laneID {
 		return nil, err
 	}
+	a.KickTrello() // the task's card may need archiving, or bringing back
 	rules, err := a.Store.MatchingRules(ctx, from, laneID)
 	if err != nil {
 		return nil, err
