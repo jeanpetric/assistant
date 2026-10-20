@@ -327,14 +327,14 @@ func TestStaticUI(t *testing.T) {
 		"document.addEventListener('keydown', onShortcut)", "{ keys: '⌥T', code: 'KeyT', label: 'New task', run: newTaskDialog }",
 		"{ keys: '⌥B', code: 'KeyB', label: 'Go to Board'", "{ keys: '?', label: 'Show these shortcuts', run: shortcutsDialog }",
 		// Shortcut hints are drawn greyed next to the controls they trigger.
-		"function hint(keys)", "drawHeaderHints();", "'Cancel', hint('Esc')", "'Create', hint('↵')", "filter, hint('/')",
+		"function hint(keys)", "drawHeaderHints();", "'Cancel', hint('Esc')", "'Create', hint('⌘↵')", "submitOnCmdEnter([title, desc, kind, project, lane, due], create)", "filter, hint('/')",
 		"addEventListener('click', shortcutsDialog)",
 		// Esc is left to the dialogs (the task dialog included) and closes the notifications.
 		"if (e.key === 'Escape' && !inField) { closeNotifications(); return; }",
 		// A project's directory is picked in Settings and shown as the default for its tasks.
 		"function taskWorkdir(t)", "workdir.addEventListener('change', saveProject)", "`Default (${taskWorkdir(task)})`",
 		// The new task dialog drops its missing "Builds on" line instead of drawing "null".
-		"dlg.replaceChildren(...[h('h2', {}, from ? 'New follow-up task' : 'New task')", "hint('↵')))].filter(Boolean));"} {
+		"dlg.replaceChildren(...[h('h2', {}, from ? 'New follow-up task' : 'New task')", "hint('⌘↵')))].filter(Boolean));"} {
 		if !bytes.Contains(js, []byte(want)) {
 			t.Fatalf("app.js lacks %q", want)
 		}

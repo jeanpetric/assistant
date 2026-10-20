@@ -1306,7 +1306,8 @@ async function newTaskDialog(opts = {}) {
     closeTaskDialog();
     location.hash = `#/task/${t.id}`;
   };
-  title.addEventListener('keydown', e => { if (e.key === 'Enter') create(); });
+  title.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey) create(); });
+  submitOnCmdEnter([title, desc, kind, project, lane, due], create);
   // replaceChildren would draw a null as the text "null", unlike h().
   dlg.replaceChildren(...[h('h2', {}, from ? 'New follow-up task' : 'New task'),
     from ? h('p', { class: 'muted small' }, `Builds on #${from.id} ${from.title}: its agents' results go into this task's agent context.`) : null,
@@ -1314,7 +1315,7 @@ async function newTaskDialog(opts = {}) {
     h('label', {}, 'Project'), project,
     h('div', { class: 'row' }, h('div', { class: 'grow' }, h('label', {}, 'Kind'), kind), h('div', { class: 'grow' }, h('label', {}, 'Lane'), lane)),
     h('label', {}, 'Due (optional) — you get a notification at this time'), due,
-    h('div', { class: 'dialog-actions' }, cancelButton(dlg), h('button', { onclick: create }, 'Create', hint('↵')))].filter(Boolean));
+    h('div', { class: 'dialog-actions' }, cancelButton(dlg), h('button', { onclick: create }, 'Create', hint('⌘↵')))].filter(Boolean));
   dlg.showModal();
   title.focus();
 }
@@ -1401,6 +1402,15 @@ function shortcutFor(e, inField) {
 // Where a project picked with ⌥K opens: the list when on the list, else the board.
 function pickedProjectHash(hash) {
   return /^#\/list\b/.test(hash) ? '#/list' : '#/board';
+}
+
+// Makes ⌘↵ (Ctrl↵ elsewhere) in any of the fields call submit, e.g. from a dialog's textarea.
+function submitOnCmdEnter(fields, submit) {
+  for (const f of fields) {
+    f.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.repeat) { e.preventDefault(); submit(); }
+    });
+  }
 }
 
 function onShortcut(e) {

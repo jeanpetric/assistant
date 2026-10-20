@@ -28,9 +28,9 @@ func TestShortcutKeys(t *testing.T) {
 	// The table names functions defined elsewhere in app.js; a proxy stands in for them.
 	script := `
 const src = require('fs').readFileSync(process.argv.at(-1), 'utf8');
-const own = new Set(['src', 'shortcuts', 'shortcutFor', 'pickedProjectHash']);
+const own = new Set(['src', 'shortcuts', 'shortcutFor', 'pickedProjectHash', 'submitOnCmdEnter']);
 const stubs = new Proxy({}, { has: (_, k) => !own.has(k) && !(k in globalThis), get: () => () => {} });
-const api = (function () { with (stubs) return eval(src + '; ({ shortcutFor, pickedProjectHash })'); })();
+const api = (function () { with (stubs) return eval(src + '; ({ shortcutFor, pickedProjectHash, submitOnCmdEnter })'); })();
 const key = (code, key, mods = {}) => ({ code, key, altKey: false, shiftKey: false, metaKey: false, ctrlKey: false, repeat: false, ...mods });
 const cases = [
   [key('KeyB', '∫', { altKey: true }), true, '⌥B'],
@@ -61,6 +61,20 @@ for (const [hash, want] of [['#/list', '#/list'], ['#/board', '#/board'], ['', '
   const got = api.pickedProjectHash(hash);
   if (got !== want) {
     console.log(JSON.stringify({ hash, want, got }));
+    process.exitCode = 1;
+  }
+}
+// submitOnCmdEnter: only ⌘↵ / Ctrl↵ submit, once per press, and the newline is not typed.
+let listener, submits = 0;
+api.submitOnCmdEnter([{ addEventListener: (type, fn) => { if (type === 'keydown') listener = fn; } }], () => submits++);
+for (const [e, want] of [[key('Enter', 'Enter', { metaKey: true }), 1], [key('Enter', 'Enter', { ctrlKey: true }), 1],
+    [key('Enter', 'Enter'), 0], [key('Enter', 'Enter', { shiftKey: true }), 0], [key('KeyA', 'a', { metaKey: true }), 0],
+    [key('Enter', 'Enter', { metaKey: true, repeat: true }), 0]]) {
+  let prevented = false;
+  submits = 0;
+  listener({ ...e, preventDefault: () => { prevented = true; } });
+  if (submits !== want || prevented !== (want === 1)) {
+    console.log(JSON.stringify({ e, want, submits, prevented }));
     process.exitCode = 1;
   }
 }
