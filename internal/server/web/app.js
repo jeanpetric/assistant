@@ -137,6 +137,7 @@ function every(ms, fn) {
 function route() {
   state.timers.forEach(clearInterval);
   state.timers = [];
+  closeTaskDialog();
   const parts = (location.hash.replace(/^#\/?/, '') || 'board').split('/');
   document.querySelectorAll('[data-nav]').forEach(a => a.classList.toggle('active', a.dataset.nav === parts[0]));
   view.replaceChildren();
@@ -230,7 +231,11 @@ async function renderBoardInPlace() {
 }
 
 function card(t) {
-  const el = h('article', { class: 'card', draggable: 'true', onclick: () => { location.hash = `#/task/${t.id}`; } },
+  // A click opens the task in a dialog over the board; ⌘/Ctrl-click goes straight to its full page.
+  const el = h('article', {
+    class: 'card', draggable: 'true',
+    onclick: e => { if (e.metaKey || e.ctrlKey) location.hash = `#/task/${t.id}`; else openTaskDialog(t.id); },
+  },
     h('div', { class: 'card-title' }, t.title),
     h('div', { class: 'card-meta' }, kindBadge(t.kind), dueBadge(t), runningBadge(state.board.running[t.id]), fieldLinks(t)));
   el.dataset.id = t.id;
@@ -355,6 +360,57 @@ async function renderArchive() {
 // ---------- task page ----------
 
 async function renderTask(id, focusSession) {
+  const page = await taskView(id, {
+    every,
+    leave: () => { location.hash = '#/board'; },
+    reload: route,
+  });
+  view.replaceChildren(page.el);
+  page.focus(focusSession);
+}
+
+// ---------- task dialog: the board opens a task here first ----------
+
+const taskDialog = { el: null, timers: [] };
+
+async function openTaskDialog(id) {
+  closeTaskDialog();
+  const dlg = taskDialog.el || (taskDialog.el = document.getElementById('task-dialog'));
+  if (!dlg.dataset.wired) {
+    dlg.dataset.wired = '1';
+    dlg.addEventListener('close', () => {
+      taskDialog.timers.forEach(clearInterval);
+      taskDialog.timers = [];
+      dlg.replaceChildren();
+      if (location.hash === '' || location.hash.startsWith('#/board')) renderBoardInPlace();
+    });
+    // A click on the backdrop, outside the dialog's box, closes it.
+    dlg.addEventListener('click', e => {
+      const r = dlg.getBoundingClientRect();
+      if (e.target === dlg && (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom)) dlg.close();
+    });
+  }
+  const page = await taskView(id, {
+    every: (ms, fn) => taskDialog.timers.push(setInterval(fn, ms)),
+    leave: () => dlg.close(),
+    reload: () => openTaskDialog(id),
+  });
+  dlg.replaceChildren(
+    h('div', { class: 'task-dialog-bar' },
+      h('a', { class: 'btn ghost small', href: `#/task/${id}`, title: 'Open the task as a full page' }, '⤢ Full page'),
+      h('button', { class: 'ghost small', title: 'Close (Esc)', onclick: () => dlg.close() }, '✕')),
+    page.el);
+  if (!dlg.open) dlg.showModal();
+}
+
+function closeTaskDialog() {
+  if (taskDialog.el && taskDialog.el.open) taskDialog.el.close();
+}
+
+// The task's editor and its sessions, for the full page or the board's dialog.
+// `every` polls for as long as the host shows it, `leave` runs once the task is
+// archived or deleted, and `reload` redraws it after a restore.
+async function taskView(id, { every, leave, reload }) {
   await loadBoard();
   const data = await api('GET', `/api/tasks/${id}`);
   const t = data.task;
@@ -379,7 +435,7 @@ async function renderTask(id, focusSession) {
 
   const archived = t.archived_at
     ? h('div', { class: 'row archived-note' }, h('span', { class: 'grow' }, 'Archived ' + ago(t.archived_at)),
-      h('button', { class: 'small', onclick: async () => { await api('POST', `/api/tasks/${id}/unarchive`); route(); } }, 'Restore'))
+      h('button', { class: 'small', onclick: async () => { await api('POST', `/api/tasks/${id}/unarchive`); reload(); } }, 'Restore'))
     : null;
   side.append(h('div', { class: 'panel' },
     archived,
@@ -404,13 +460,13 @@ async function renderTask(id, focusSession) {
       h('span', { class: 'muted small grow' }, 'Created ' + fmtTime(t.created_at)),
       t.archived_at ? null : h('button', {
         class: 'ghost', title: 'Take it off the board; find it under Archive',
-        onclick: async () => { await api('POST', `/api/tasks/${id}/archive`); location.hash = '#/board'; },
+        onclick: async () => { await api('POST', `/api/tasks/${id}/archive`); leave(); },
       }, 'Archive'),
       h('button', {
         class: 'danger', onclick: async () => {
           if (!confirm('Delete this task and all its sessions?')) return;
           await api('DELETE', `/api/tasks/${id}`);
-          location.hash = '#/board';
+          leave();
         },
       }, 'Delete'))));
 
@@ -428,10 +484,6 @@ async function renderTask(id, focusSession) {
 
   const main = h('div', {}, newSessionPanel(t, addSession), sessionsEl,
     data.sessions.length ? null : h('p', { class: 'muted' }, 'No agent sessions yet.'));
-  view.replaceChildren(h('div', { class: 'task-page' }, side, main));
-
-  if (focusSession && components.has(focusSession)) components.get(focusSession).el.scrollIntoView();
-
   every(2000, async () => {
     const list = await api('GET', `/api/sessions?task_id=${id}`);
     for (const s of list) {
@@ -445,6 +497,11 @@ async function renderTask(id, focusSession) {
       }
     }
   });
+
+  return {
+    el: h('div', { class: 'task-page' }, side, main),
+    focus: sessionId => { if (sessionId && components.has(sessionId)) components.get(sessionId).el.scrollIntoView(); },
+  };
 }
 
 function newSessionPanel(task, onStarted) {

@@ -273,6 +273,21 @@ func TestStaticUI(t *testing.T) {
 	if res.StatusCode != 200 || !bytes.Contains(body, []byte("app.js")) {
 		t.Fatalf("index: %d %s", res.StatusCode, body)
 	}
+	// The board opens a task in this dialog first; app.js looks it up by id.
+	if !bytes.Contains(body, []byte(`<dialog id="task-dialog"`)) {
+		t.Fatalf("index has no task dialog: %s", body)
+	}
+	res, err = http.Get(c.srv.URL + "/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	js, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	for _, want := range []string{"getElementById('task-dialog')", "onclick: e => { if (e.metaKey || e.ctrlKey) location.hash = `#/task/${t.id}`; else openTaskDialog(t.id); }"} {
+		if !bytes.Contains(js, []byte(want)) {
+			t.Fatalf("app.js lacks %q", want)
+		}
+	}
 }
 
 func itoa(n int64) string {

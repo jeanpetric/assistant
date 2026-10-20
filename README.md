@@ -9,6 +9,8 @@ One Go binary, one SQLite file, no JavaScript build step.
 ## Features
 
 - **Kanban board** with user-defined lanes and drag & drop; a **list view** with filtering.
+  Clicking a card opens the task in a dialog over the board; *⤢ Full page* (or ⌘/Ctrl-click on
+  the card) opens its full task page.
 - **Flexible tasks**: title, description, kind (task / coding / research / discussion / reminder),
   working directory, and **custom fields** (Productive task, pull request, Slack thread out of
   the box — add more in Settings).

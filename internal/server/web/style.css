@@ -210,6 +210,9 @@ dialog {
   width: min(560px, 92vw); padding: 18px;
 }
 dialog::backdrop { background: rgba(0, 0, 0, .35); }
+.task-dialog { width: min(1200px, 94vw); max-height: 90vh; overflow-y: auto; padding: 12px 18px 18px; }
+.task-dialog-bar { position: sticky; top: -12px; z-index: 1; display: flex; justify-content: flex-end; gap: 6px; margin: -12px -18px 8px; padding: 8px 12px; background: var(--surface); border-bottom: 1px solid var(--border); }
+.task-dialog .task-side { position: static; max-height: none; }
 .presets { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .session-page { max-width: 1000px; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
