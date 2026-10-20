@@ -145,3 +145,23 @@ func TestClaudeRunnerFailure(t *testing.T) {
 		t.Fatalf("expected stderr in error, got %v", err)
 	}
 }
+
+func TestParseContextUsage(t *testing.T) {
+	got := parseAll(`{"type":"system","subtype":"init","session_id":"s","model":"claude-opus-5-5"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Hi."}],"usage":{"input_tokens":2,"cache_creation_input_tokens":300,"cache_read_input_tokens":4000,"output_tokens":50}},"parent_tool_use_id":null}
+{"type":"assistant","message":{"content":[{"type":"text","text":"sub"}],"usage":{"input_tokens":9000}},"parent_tool_use_id":"t1"}
+{"type":"user","message":{"content":"x","usage":{"input_tokens":9000}}}
+{"type":"result","subtype":"success","result":"Hi.","session_id":"s","modelUsage":{"claude-opus-5-5":{"contextWindow":200000},"claude-haiku-5-5":{"contextWindow":1000000},"other":{}}}`)
+	want := []Event{
+		{Role: "system", Kind: "init", ClaudeSessionID: "s", Model: "claude-opus-5-5"},
+		{Role: "assistant", Kind: "text", Content: "Hi."},
+		{Role: "system", Kind: "usage", ContextTokens: 4352},
+		{Role: "assistant", Kind: "text", Content: "sub"},
+		{Role: "user", Kind: "context", Content: "x"},
+		{Role: "system", Kind: "result", Content: "Hi.", ClaudeSessionID: "s",
+			ContextWindows: map[string]int{"claude-opus-5-5": 200000, "claude-haiku-5-5": 1000000}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got  %+v\nwant %+v", got, want)
+	}
+}

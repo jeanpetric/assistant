@@ -337,6 +337,11 @@ ALTER TABLE sessions ADD COLUMN project_id INTEGER REFERENCES projects(id) ON DE
 UPDATE sessions SET project_id = (SELECT p.id FROM projects p WHERE p.workdir != '' AND p.workdir = sessions.workdir ORDER BY p.position, p.id LIMIT 1)
 	WHERE task_id IS NULL;
 `,
+	// How full the session's context is: tokens in it, and the model's window (0: unknown).
+	`
+ALTER TABLE sessions ADD COLUMN context_tokens INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE sessions ADD COLUMN context_window INTEGER NOT NULL DEFAULT 0;
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

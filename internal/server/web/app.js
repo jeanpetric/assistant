@@ -270,6 +270,18 @@ function limitsEl(lim) {
     part('5h', lim && lim.five_hour), ' · ', part('7d', lim && lim.seven_day));
 }
 
+// How full an agent's context is: tokens in it and, once its model's window is known, the share used.
+function contextEl(tokens, window) {
+  if (!tokens) return null;
+  const k = n => n >= 1e6 ? (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M' : Math.round(n / 1000) + 'k';
+  if (!window) return h('span', { class: 'context small muted', title: 'Tokens in the agent\'s context' }, `ctx ${k(tokens)}`);
+  const pct = Math.min(100, Math.round(tokens / window * 100));
+  const cls = pct >= 90 ? 'danger' : pct >= 70 ? 'warn' : null;
+  return h('span', { class: 'context small muted', title: `Context: ${tokens.toLocaleString()} of ${window.toLocaleString()} tokens` },
+    'ctx ', h('span', { class: 'meter' }, h('span', { class: cls, style: `width:${pct}%` })), h('span', { class: cls }, `${pct}%`),
+    h('span', {}, ` ${k(tokens)}/${k(window)}`));
+}
+
 // ---------- board ----------
 
 let dragId = null;
@@ -315,6 +327,12 @@ async function renderBoardInPlace() {
   if (input) { input.value = active.value; input.focus(); }
 }
 
+// Under a card whose agent runs: how full its context is and the usage left.
+function runningMeta(ctx, lim) {
+  const parts = [ctx && contextEl(ctx.tokens, ctx.window), lim && limitsEl(lim)].filter(Boolean);
+  return parts.length ? h('div', { class: 'card-meta' }, ...parts) : null;
+}
+
 function card(t) {
   // A click opens the task in a dialog over the board; ⌘/Ctrl-click goes straight to its full page.
   const el = h('article', {
@@ -323,7 +341,7 @@ function card(t) {
   },
     h('div', { class: 'card-title' }, t.title),
     h('div', { class: 'card-meta' }, kindBadge(t.kind), dueBadge(t), buildsOnBadge(t), needsInputBadge(state.board.needs_input[t.id]), runningBadge(state.board.running[t.id]), outcomeBadge(t.id, state.board.agent_status[t.id]), fieldLinks(t)),
-    state.board.running_limits[t.id] ? h('div', { class: 'card-meta' }, limitsEl(state.board.running_limits[t.id])) : null);
+    runningMeta(state.board.running_context[t.id], state.board.running_limits[t.id]));
   el.dataset.id = t.id;
   el.addEventListener('dragstart', e => {
     dragId = t.id;
@@ -975,7 +993,8 @@ function sessionComponent(session, messages, task) {
   function drawLimits() {
     const s = c.session;
     const known = s.limits && (s.limits.five_hour || s.limits.seven_day);
-    limits.replaceChildren(...(s.status === 'running' || known ? [limitsEl(s.limits)] : []));
+    limits.replaceChildren(...[contextEl(s.context_tokens, s.context_window),
+      s.status === 'running' || known ? limitsEl(s.limits) : null].filter(Boolean));
   }
 
   function drawWorking() {
@@ -1080,7 +1099,8 @@ async function renderSessions() {
     const xs = await api('GET', '/api/sessions' + (statusSel.value ? `?status=${statusSel.value}` : ''));
     tbody.replaceChildren(...xs.map(s => h('tr', { class: 'clickable', onclick: () => openFromSessions(s) },
       h('td', {}, h('span', { class: 'badge status-' + s.status }, s.status === 'running' ? h('span', { class: 'pulse' }) : null, s.status),
-        needsInputBadge(s.needs_input ? 1 : 0, 'The agent ' + s.needs_input)),
+        needsInputBadge(s.needs_input ? 1 : 0, 'The agent ' + s.needs_input),
+        s.context_tokens ? h('div', {}, contextEl(s.context_tokens, s.context_window)) : null),
       h('td', { class: 'small', title: s.workdir }, s.project_id ? projectName(s.project_id) : h('span', { class: 'muted' }, '—')),
       h('td', {}, s.task_id ? h('div', {}, s.task_title) : h('div', { class: 'muted' }, 'No task'), h('div', { class: 'muted small' }, s.title)),
       h('td', { class: 'small' }, trunc(s.last_message, 220)),
