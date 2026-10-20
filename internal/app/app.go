@@ -37,11 +37,12 @@ type App struct {
 	running  map[int64]context.CancelFunc
 	stopping bool // set by Shutdown: cancelled turns end as interrupted, not cancelled
 	wg       sync.WaitGroup
+	limits   map[int64]agent.RateLimits // per session, last reported; in memory only
 }
 
 func New(s *store.Store, r agent.Runner, workdir, mode string) *App {
 	return &App{Store: s, Runner: r, DefaultWorkdir: workdir, DefaultMode: mode, Now: time.Now,
-		running: map[int64]context.CancelFunc{}}
+		running: map[int64]context.CancelFunc{}, limits: map[int64]agent.RateLimits{}}
 }
 
 // Wait blocks until all agent turns started so far have finished.
@@ -216,7 +217,7 @@ func (a *App) launch(sess store.Session, prompt, resumeID string) error {
 				failed = true
 			}
 			if ev.Kind == "rate_limit" {
-				a.Store.SetSessionLimits(bg, sess.ID, sessionLimits(ev.Limits))
+				a.recordLimits(sess.ID, ev.Limits)
 				return
 			}
 			if ev.Kind == "init" {
@@ -247,14 +248,27 @@ func (a *App) launch(sess store.Session, prompt, resumeID string) error {
 	return nil
 }
 
-func sessionLimits(l *agent.RateLimits) store.Limits {
-	conv := func(w *agent.LimitWindow) *store.LimitWindow {
-		if w == nil {
-			return nil
-		}
-		return &store.LimitWindow{UsedPercent: w.UsedPercent, ResetsAt: w.ResetsAt}
+// recordLimits keeps the usage windows a session's turn reported. A window
+// not reported keeps its previous value.
+func (a *App) recordLimits(sessionID int64, l *agent.RateLimits) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	cur := a.limits[sessionID]
+	if l.FiveHour != nil {
+		cur.FiveHour = l.FiveHour
 	}
-	return store.Limits{FiveHour: conv(l.FiveHour), SevenDay: conv(l.SevenDay)}
+	if l.SevenDay != nil {
+		cur.SevenDay = l.SevenDay
+	}
+	a.limits[sessionID] = cur
+}
+
+// Limits returns the usage windows last reported by the session's turns since
+// this process started. They are live data and never stored.
+func (a *App) Limits(sessionID int64) agent.RateLimits {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.limits[sessionID]
 }
 
 // moveWhenDone moves the session's task to its done lane after a successful

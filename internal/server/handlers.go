@@ -43,14 +43,17 @@ func (s *Server) board(w http.ResponseWriter, r *http.Request) {
 	// Per task: how many agents run, and the usage limits last reported by the
 	// most recently active of them.
 	runningByTask := map[int64]int{}
-	limitsByTask := map[int64]store.Limits{}
+	limitsByTask := map[int64]agent.RateLimits{}
 	for _, x := range running {
 		if x.TaskID == 0 {
 			continue
 		}
 		runningByTask[x.TaskID]++
-		if _, ok := limitsByTask[x.TaskID]; !ok && (x.Limits.FiveHour != nil || x.Limits.SevenDay != nil) {
-			limitsByTask[x.TaskID] = x.Limits
+		if _, ok := limitsByTask[x.TaskID]; ok {
+			continue
+		}
+		if l := s.app.Limits(x.ID); l.FiveHour != nil || l.SevenDay != nil {
+			limitsByTask[x.TaskID] = l
 		}
 	}
 	writeJSON(w, 200, map[string]any{"lanes": lanes, "tasks": tasks, "fields": fields,
@@ -273,7 +276,7 @@ func (s *Server) getTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type sessionWithMessages struct {
-		store.Session
+		sessionOut
 		Messages []store.Message `json:"messages"`
 	}
 	out := make([]sessionWithMessages, 0, len(sessions))
@@ -283,7 +286,7 @@ func (s *Server) getTask(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, err)
 			return
 		}
-		out = append(out, sessionWithMessages{sessions[i], msgs})
+		out = append(out, sessionWithMessages{s.withLimits(sessions[i]), msgs})
 	}
 	schedules, err := s.app.Store.Schedules(ctx, id)
 	if err != nil {
@@ -562,7 +565,21 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, 200, xs)
+	out := make([]sessionOut, len(xs))
+	for i, x := range xs {
+		out[i] = s.withLimits(x)
+	}
+	writeJSON(w, 200, out)
+}
+
+// sessionOut is a session with its live usage limits, which are never stored.
+type sessionOut struct {
+	store.Session
+	Limits agent.RateLimits `json:"limits"`
+}
+
+func (s *Server) withLimits(x store.Session) sessionOut {
+	return sessionOut{x, s.app.Limits(x.ID)}
 }
 
 func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
@@ -582,7 +599,7 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"session": sess, "messages": msgs})
+	writeJSON(w, 200, map[string]any{"session": s.withLimits(sess), "messages": msgs})
 }
 
 func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
@@ -645,7 +662,7 @@ func (s *Server) updateSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, 200, sess)
+	writeJSON(w, 200, s.withLimits(sess))
 }
 
 // checkLane rejects a lane id that doesn't exist; nil is fine. field names it in the error.

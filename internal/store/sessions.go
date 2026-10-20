@@ -30,21 +30,8 @@ type Session struct {
 	CostUSD         float64   `json:"cost_usd"`
 	Error           string    `json:"error"`
 	LastMessage     string    `json:"last_message,omitempty"`
-	Limits          Limits    `json:"limits"`
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
-}
-
-// Limits is the account's Claude usage as last reported by the session's
-// turns. A nil window has not been reported.
-type Limits struct {
-	FiveHour *LimitWindow `json:"five_hour"`
-	SevenDay *LimitWindow `json:"seven_day"`
-}
-
-type LimitWindow struct {
-	UsedPercent float64   `json:"used_percent"` // 0–100
-	ResetsAt    time.Time `json:"resets_at"`
 }
 
 type Message struct {
@@ -58,28 +45,17 @@ type Message struct {
 
 const sessionCols = `s.id, COALESCE(s.task_id, 0), COALESCE(t.title, ''), s.title, s.status, s.mode, s.model, s.workdir, s.trigger, s.done_lane_id, s.claude_session_id,
 	s.cost_usd, s.error, s.created_at, s.updated_at,
-	s.limit_5h_used, s.limit_5h_resets_at, s.limit_7d_used, s.limit_7d_resets_at,
 	COALESCE((SELECT content FROM messages m WHERE m.session_id = s.id AND m.kind IN ('text', 'result', 'error') ORDER BY m.id DESC LIMIT 1), '')`
 
 func scanSession(sc interface{ Scan(...any) error }) (Session, error) {
 	var x Session
 	var created, updated int64
-	var doneLane, reset5h, reset7d sql.NullInt64
-	var used5h, used7d sql.NullFloat64
+	var doneLane sql.NullInt64
 	err := sc.Scan(&x.ID, &x.TaskID, &x.TaskTitle, &x.Title, &x.Status, &x.Mode, &x.Model, &x.Workdir, &x.Trigger,
-		&doneLane, &x.ClaudeSessionID, &x.CostUSD, &x.Error, &created, &updated,
-		&used5h, &reset5h, &used7d, &reset7d, &x.LastMessage)
+		&doneLane, &x.ClaudeSessionID, &x.CostUSD, &x.Error, &created, &updated, &x.LastMessage)
 	x.DoneLaneID = fromNullID(doneLane)
-	x.Limits = Limits{FiveHour: limitWindow(used5h, reset5h), SevenDay: limitWindow(used7d, reset7d)}
 	x.CreatedAt, x.UpdatedAt = fromMillis(created), fromMillis(updated)
 	return x, err
-}
-
-func limitWindow(used sql.NullFloat64, resets sql.NullInt64) *LimitWindow {
-	if !used.Valid || !resets.Valid {
-		return nil
-	}
-	return &LimitWindow{UsedPercent: used.Float64, ResetsAt: fromMillis(resets.Int64)}
 }
 
 func (s *Store) CreateSession(ctx context.Context, x Session) (Session, error) {
@@ -146,30 +122,6 @@ func (s *Store) SetClaudeSessionID(ctx context.Context, id int64, claudeID strin
 func (s *Store) AddSessionCost(ctx context.Context, id int64, usd float64) error {
 	return affected(s.db.ExecContext(ctx,
 		`UPDATE sessions SET cost_usd = cost_usd + ?, updated_at = ? WHERE id = ?`, usd, s.ts(), id))
-}
-
-// SetSessionLimits records the usage windows a turn reported. A nil window
-// keeps the session's previous value for it.
-func (s *Store) SetSessionLimits(ctx context.Context, id int64, l Limits) error {
-	used := func(w *LimitWindow) any {
-		if w == nil {
-			return nil
-		}
-		return w.UsedPercent
-	}
-	resets := func(w *LimitWindow) any {
-		if w == nil {
-			return nil
-		}
-		return w.ResetsAt.UnixMilli()
-	}
-	return affected(s.db.ExecContext(ctx, `
-		UPDATE sessions SET
-			limit_5h_used = COALESCE(?, limit_5h_used), limit_5h_resets_at = COALESCE(?, limit_5h_resets_at),
-			limit_7d_used = COALESCE(?, limit_7d_used), limit_7d_resets_at = COALESCE(?, limit_7d_resets_at),
-			updated_at = ?
-		WHERE id = ?`,
-		used(l.FiveHour), resets(l.FiveHour), used(l.SevenDay), resets(l.SevenDay), s.ts(), id))
 }
 
 // MarkInterrupted flags sessions left running by a previous process.

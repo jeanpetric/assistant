@@ -150,8 +150,8 @@ CREATE TABLE settings (
 INSERT INTO settings (id, archive_lane_id, archive_after_minutes)
 	VALUES (1, (SELECT id FROM lanes WHERE lower(name) = 'done' ORDER BY position, id LIMIT 1), 10080);
 `,
-	// The last Claude usage windows reported by a session's turns (5-hour and
-	// weekly): percent used and reset time, NULL until the CLI reports them.
+	// Unused: usage limits are live, kept in memory only. Databases that went
+	// through an earlier build have a rate_limits table at this version instead.
 	`
 ALTER TABLE sessions ADD COLUMN limit_5h_used REAL;
 ALTER TABLE sessions ADD COLUMN limit_5h_resets_at INTEGER;

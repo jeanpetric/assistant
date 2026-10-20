@@ -181,10 +181,9 @@ func TestRateLimits(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.Wait()
-	got, _ := a.Store.Session(ctx, sess.ID)
-	if l := got.Limits; l.FiveHour == nil || l.FiveHour.UsedPercent != 30 || l.SevenDay == nil ||
+	if l := a.Limits(sess.ID); l.FiveHour == nil || l.FiveHour.UsedPercent != 30 || l.SevenDay == nil ||
 		l.SevenDay.UsedPercent != 17 || !l.SevenDay.ResetsAt.Equal(week.ResetsAt) {
-		t.Fatalf("limits = %+v", got.Limits)
+		t.Fatalf("limits = %+v", l)
 	}
 	msgs, _ := a.Store.Messages(ctx, sess.ID, 0)
 	for _, m := range msgs {
@@ -199,8 +198,8 @@ func TestRateLimits(t *testing.T) {
 	r.mu.Unlock()
 	other, _ := a.StartSession(ctx, StartOpts{Prompt: "other"})
 	a.Wait()
-	if got, _ := a.Store.Session(ctx, other.ID); got.Limits.FiveHour != nil || got.Limits.SevenDay != nil {
-		t.Fatalf("other session limits = %+v", got.Limits)
+	if l := a.Limits(other.ID); l.FiveHour != nil || l.SevenDay != nil {
+		t.Fatalf("other session limits = %+v", l)
 	}
 }
 

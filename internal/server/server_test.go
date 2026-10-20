@@ -257,7 +257,7 @@ func TestSessionLimits(t *testing.T) {
 
 	// While it runs, the board shows the session's limits on its task's card.
 	var b struct {
-		RunningLimits map[string]store.Limits `json:"running_limits"`
+		RunningLimits map[string]agent.RateLimits `json:"running_limits"`
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for {
@@ -275,7 +275,10 @@ func TestSessionLimits(t *testing.T) {
 	c.do("POST", "/api/sessions/"+itoa(sess.ID)+"/cancel", nil, 202, nil)
 	c.app.Wait()
 	var got struct {
-		Session store.Session `json:"session"`
+		Session struct {
+			store.Session
+			Limits agent.RateLimits `json:"limits"`
+		} `json:"session"`
 	}
 	c.do("GET", "/api/sessions/"+itoa(sess.ID), nil, 200, &got)
 	if w := got.Session.Limits.FiveHour; got.Session.Status != store.StatusCancelled || w == nil || w.UsedPercent != 28 || w.ResetsAt.Before(time.Now()) {
