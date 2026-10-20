@@ -683,6 +683,7 @@ type sessionInput struct {
 	Workdir        string `json:"workdir"`
 	IncludeContext bool   `json:"include_context"`
 	DoneLaneID     *int64 `json:"done_lane_id"` // task sessions only
+	ProjectID      int64  `json:"project_id"`   // standalone sessions only: runs in the project's directory
 }
 
 func (in *sessionInput) validate() error {
@@ -757,8 +758,12 @@ func (s *Server) startStandaloneSession(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, err)
 		return
 	}
+	if err := s.checkProject(r.Context(), in.ProjectID); err != nil {
+		writeErr(w, err)
+		return
+	}
 	sess, err := s.app.StartSession(r.Context(), app.StartOpts{
-		Prompt: in.Prompt, Title: in.Title, Mode: in.Mode, Model: in.Model, Workdir: in.Workdir,
+		Prompt: in.Prompt, Title: in.Title, Mode: in.Mode, Model: in.Model, Workdir: in.Workdir, ProjectID: in.ProjectID,
 	})
 	if err != nil {
 		writeErr(w, err)

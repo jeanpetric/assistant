@@ -443,6 +443,16 @@ func TestStandaloneSession(t *testing.T) {
 	c.do("POST", "/api/sessions", map[string]any{"prompt": "x", "workdir": "relative/dir"}, 400, nil)
 	c.do("POST", "/api/sessions", map[string]any{"prompt": "x", "model": "--dangerously-skip"}, 400, nil)
 	c.do("POST", "/api/sessions", map[string]any{"prompt": "x", "mode": "yolo"}, 400, nil)
+	c.do("POST", "/api/sessions", map[string]any{"prompt": "x", "project_id": 999}, 400, nil)
+
+	var p store.Project
+	c.do("POST", "/api/projects", map[string]any{"name": "Web", "workdir": dir}, 201, &p)
+	var inProject store.Session
+	c.do("POST", "/api/sessions", map[string]any{"prompt": "x", "project_id": p.ID}, 201, &inProject)
+	c.app.Wait()
+	if inProject.Workdir != dir {
+		t.Fatalf("standalone session should run in its project's directory: %+v", inProject)
+	}
 }
 
 func TestDoneLane(t *testing.T) {

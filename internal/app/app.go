@@ -81,13 +81,16 @@ func (a *App) Shutdown() {
 }
 
 type StartOpts struct {
-	TaskID  int64 // 0 starts a standalone session
-	Prompt  string
-	Title   string
-	Mode    string
-	Model   string
-	Workdir string
-	Trigger string // manual | rule:<name> | schedule:<id>
+	TaskID int64 // 0 starts a standalone session
+	// ProjectID gives a standalone session its project's working directory;
+	// a task's session uses the task's project.
+	ProjectID int64
+	Prompt    string
+	Title     string
+	Mode      string
+	Model     string
+	Workdir   string
+	Trigger   string // manual | rule:<name> | schedule:<id>
 	// DoneLaneID moves the task to this lane when a turn finishes successfully
 	// (see moveWhenDone). Nil leaves the task where it is.
 	DoneLaneID *int64
@@ -113,8 +116,11 @@ func (a *App) StartSession(ctx context.Context, o StartOpts) (store.Session, err
 	if o.Workdir == "" {
 		o.Workdir = task.Workdir
 	}
-	if o.Workdir == "" && task.ProjectID != 0 {
-		p, err := a.Store.Project(ctx, task.ProjectID)
+	if o.TaskID != 0 {
+		o.ProjectID = task.ProjectID
+	}
+	if o.Workdir == "" && o.ProjectID != 0 {
+		p, err := a.Store.Project(ctx, o.ProjectID)
 		if err != nil {
 			return store.Session{}, err
 		}

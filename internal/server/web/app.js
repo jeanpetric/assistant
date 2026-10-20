@@ -1081,17 +1081,18 @@ async function renderSession(id) {
   });
 }
 
-function sessionDialog() {
+async function sessionDialog() {
+  if (!state.board) await loadBoard();
   const dlg = document.getElementById('dialog');
   const prompt = h('textarea', { rows: 6, placeholder: 'What should the agent do? Skills work too, e.g. /p-dev:review 123' });
-  const lastDir = recall('session.workdir');
-  const workdir = workdirSelect(state.workdirs.includes(lastDir) ? lastDir : '', `App default (${state.meta.workdir})`);
+  // Runs in the current project's directory, like its tasks' agents.
+  const projectId = state.projectId;
+  const where = h('p', { class: 'muted small' }, `Project ${projectName(projectId)} · ${taskWorkdir({ project_id: projectId })}`);
   const [model, modelList] = modelInput(recall('session.model'));
   const mode = select(modeOptions(false), recall('session.mode') || state.meta.default_mode);
   const start = async () => {
     if (!prompt.value.trim()) return;
-    const s = await api('POST', '/api/sessions', { prompt: prompt.value, workdir: workdir.value, model: model.value, mode: mode.value });
-    remember('session.workdir', workdir.value);
+    const s = await api('POST', '/api/sessions', { prompt: prompt.value, project_id: projectId, model: model.value, mode: mode.value });
     remember('session.model', model.value);
     remember('session.mode', mode.value);
     dlg.close();
@@ -1100,7 +1101,7 @@ function sessionDialog() {
   prompt.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) start(); });
   dlg.replaceChildren(h('h2', {}, 'New agent session'),
     h('label', {}, 'Prompt'), prompt,
-    h('label', {}, 'Directory'), workdir,
+    where,
     h('div', { class: 'row' },
       h('div', { class: 'grow' }, h('label', {}, 'Model'), model, modelList),
       h('div', { class: 'grow' }, h('label', {}, 'Mode'), mode)),
