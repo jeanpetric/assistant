@@ -290,7 +290,8 @@ async function renderBoard() {
   const b = await loadBoard();
   const board = h('div', { class: 'board' });
   for (const lane of b.lanes) {
-    const tasks = b.tasks.filter(t => t.lane_id === lane.id).sort((a, c) => a.position - c.position);
+    // The server orders each lane: by due time, then the rest as dragged.
+    const tasks = b.tasks.filter(t => t.lane_id === lane.id);
     const cards = h('div', { class: 'lane-cards' }, tasks.map(card));
     const laneEl = h('section', { class: 'lane' },
       h('div', { class: 'lane-head' },
@@ -410,7 +411,7 @@ async function renderList() {
     const rows = b.tasks
       .filter(t => !laneSel.value || t.lane_id === Number(laneSel.value))
       .filter(t => !q || (t.title + ' ' + t.description).toLowerCase().includes(q))
-      .sort((a, c) => laneOrder[a.lane_id] - laneOrder[c.lane_id] || a.position - c.position);
+      .sort((a, c) => laneOrder[a.lane_id] - laneOrder[c.lane_id]); // stable: keeps the server's order within a lane
     tbody.replaceChildren(...rows.map(t => h('tr', { class: 'clickable', onclick: () => { location.hash = `#/task/${t.id}`; } },
       h('td', {}, h('div', {}, t.title), t.description ? h('div', { class: 'muted small' }, trunc(t.description, 120)) : null),
       h('td', {}, laneName(t.lane_id)),

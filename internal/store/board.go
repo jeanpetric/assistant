@@ -190,11 +190,15 @@ func scanTask(sc interface{ Scan(...any) error }) (Task, error) {
 	return t, err
 }
 
+// laneSort is the order of tasks within a lane: those with a due time first,
+// soonest first, then the rest in their manual order.
+const laneSort = `due_at IS NULL, due_at, position, id`
+
 // Tasks returns the tasks on the board, i.e. not archived, of one project
-// (projectID 0: of all projects).
+// (projectID 0: of all projects), each lane's in laneSort.
 func (s *Store) Tasks(ctx context.Context, projectID int64) ([]Task, error) {
 	return s.queryTasks(ctx, `SELECT `+taskCols+` FROM tasks WHERE archived_at IS NULL AND (? = 0 OR project_id = ?)
-		ORDER BY lane_id, position, id`, projectID, projectID)
+		ORDER BY lane_id, `+laneSort, projectID, projectID)
 }
 
 // ArchivedTasks returns archived tasks of one project (projectID 0: of all),
@@ -526,8 +530,9 @@ func (s *Store) DeleteTask(ctx context.Context, id int64) error {
 // parameters are the project and lane ids.
 const nextPosition = `(SELECT COALESCE(MAX(position), -1) + 1 FROM tasks WHERE project_id = ? AND lane_id = ? AND archived_at IS NULL)`
 
-// MoveTask places the task at index among its project's tasks in laneID (clamped)
-// and renumbers both lanes.
+// MoveTask places the task at index among its project's tasks in laneID (clamped,
+// counted in laneSort) and renumbers both lanes. Tasks with a due time still
+// show in due order, so the index matters for the order of the rest.
 // Moving an archived task brings it back to the board.
 // It returns the lane the task came from.
 func (s *Store) MoveTask(ctx context.Context, id, laneID int64, index int) (fromLane int64, err error) {
@@ -577,10 +582,10 @@ func (s *Store) MoveTask(ctx context.Context, id, laneID int64, index int) (from
 	return fromLane, err
 }
 
-// laneTaskIDs returns the board tasks of a project's lane in order, without exclude.
+// laneTaskIDs returns the board tasks of a project's lane in laneSort, without exclude.
 func laneTaskIDs(ctx context.Context, tx *sql.Tx, projectID, laneID, exclude int64) ([]int64, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT id FROM tasks WHERE project_id = ? AND lane_id = ? AND id != ? AND archived_at IS NULL
-		ORDER BY position, id`, projectID, laneID, exclude)
+		ORDER BY `+laneSort, projectID, laneID, exclude)
 	if err != nil {
 		return nil, err
 	}

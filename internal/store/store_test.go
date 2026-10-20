@@ -143,6 +143,40 @@ func TestMoveTask(t *testing.T) {
 	}
 }
 
+func TestLaneOrderByDue(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	lanes, _ := s.Lanes(ctx)
+	l0 := lanes[0].ID
+	at := func(d int) *time.Time { x := time.Date(2026, 10, d, 9, 0, 0, 0, time.Local); return &x }
+	s.CreateTask(ctx, Task{Title: "a", LaneID: l0})
+	s.CreateTask(ctx, Task{Title: "late", LaneID: l0, DueAt: at(25)})
+	b, _ := s.CreateTask(ctx, Task{Title: "b", LaneID: l0})
+	soon, _ := s.CreateTask(ctx, Task{Title: "soon", LaneID: l0, DueAt: at(21)})
+
+	if got := fmt.Sprint(laneOrder(t, s, l0)); got != "[soon late a b]" {
+		t.Fatalf("due first: %v", got)
+	}
+	// A drop index counts in the shown order: b to just after the dated tasks.
+	if _, err := s.MoveTask(ctx, b.ID, l0, 2); err != nil {
+		t.Fatal(err)
+	}
+	if got := fmt.Sprint(laneOrder(t, s, l0)); got != "[soon late b a]" {
+		t.Fatalf("manual order of the rest: %v", got)
+	}
+	// Dragging a dated task doesn't take it out of due order.
+	s.MoveTask(ctx, soon.ID, l0, 3)
+	if got := fmt.Sprint(laneOrder(t, s, l0)); got != "[soon late b a]" {
+		t.Fatalf("dated task moved: %v", got)
+	}
+	// Clearing the due time puts it among the rest, by its position.
+	soon.DueAt = nil
+	s.UpdateTask(ctx, soon)
+	if got := fmt.Sprint(laneOrder(t, s, l0)); got != "[late b a soon]" {
+		t.Fatalf("cleared due: %v", got)
+	}
+}
+
 func TestLanes(t *testing.T) {
 	s := open(t)
 	ctx := context.Background()
