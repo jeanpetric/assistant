@@ -234,6 +234,12 @@ func (s *Server) mcpTools() []mcpTool {
 			call:        list("/api/tasks", "q", "limit"),
 		},
 		{
+			Name:        "list_watched_tasks",
+			Description: "Watched tasks on the board, of every project: by project, then lane. Done ends watching a task.",
+			InputSchema: schema(nil, map[string]any{}),
+			call:        list("/api/watched"),
+		},
+		{
 			Name:        "list_archived_tasks",
 			Description: "Archived tasks of one project, or of all projects if project_id is left out.",
 			InputSchema: schema(nil, map[string]any{"project_id": pProjectID}),

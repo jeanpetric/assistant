@@ -204,6 +204,14 @@ func (s *Store) Tasks(ctx context.Context, projectID int64) ([]Task, error) {
 		ORDER BY lane_id, `+laneSort, projectID, projectID)
 }
 
+// WatchedTasks returns the watched tasks on the board of every project, by
+// project, then lane, then laneSort within the lane.
+func (s *Store) WatchedTasks(ctx context.Context) ([]Task, error) {
+	return s.queryTasks(ctx, `SELECT `+taskCols+` FROM tasks WHERE watched AND archived_at IS NULL
+		ORDER BY (SELECT position FROM projects WHERE projects.id = project_id), project_id,
+		(SELECT position FROM lanes WHERE lanes.id = lane_id), lane_id, `+laneSort)
+}
+
 // ArchivedTasks returns archived tasks of one project (projectID 0: of all),
 // most recently archived first.
 func (s *Store) ArchivedTasks(ctx context.Context, projectID int64) ([]Task, error) {

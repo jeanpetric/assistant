@@ -835,6 +835,16 @@ func (s *Server) searchTasks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, tasks)
 }
 
+// watchedTasks lists the watched tasks on the board, of every project.
+func (s *Server) watchedTasks(w http.ResponseWriter, r *http.Request) {
+	tasks, err := s.app.Store.WatchedTasks(r.Context())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, tasks)
+}
+
 // archivedTasks lists one project's archived tasks (?project_id=), or all of them.
 func (s *Server) archivedTasks(w http.ResponseWriter, r *http.Request) {
 	projectID, err := queryID(r, "project_id")

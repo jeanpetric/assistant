@@ -1154,3 +1154,24 @@ func TestWatchTask(t *testing.T) {
 		t.Fatalf("unwatch kept it: %+v", task)
 	}
 }
+
+func TestWatchedTasksAPIAndTool(t *testing.T) {
+	c := newClient(t)
+	var a, b store.Task
+	c.do("POST", "/api/tasks", map[string]any{"title": "Watched"}, 201, &a)
+	c.do("POST", "/api/tasks", map[string]any{"title": "Not watched"}, 201, &b)
+	var got []store.Task
+	c.do("GET", "/api/watched", nil, 200, &got)
+	if got == nil || len(got) != 0 {
+		t.Fatalf("none watched = %+v", got)
+	}
+	c.do("PATCH", "/api/tasks/"+itoa(a.ID), map[string]any{"watched": true}, 200, nil)
+	c.do("GET", "/api/watched", nil, 200, &got)
+	if len(got) != 1 || got[0].ID != a.ID {
+		t.Fatalf("watched = %+v", got)
+	}
+	text, isErr := c.tool("list_watched_tasks", map[string]any{})
+	if isErr || json.Unmarshal([]byte(text), &got) != nil || len(got) != 1 || got[0].ID != a.ID {
+		t.Fatalf("list_watched_tasks: %s", text)
+	}
+}

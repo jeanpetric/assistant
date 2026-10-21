@@ -245,7 +245,7 @@ function dueBadge(t) {
 }
 
 function watchedBadge(t) {
-  return t.watched ? h('span', { class: 'badge watched', title: 'Watched — counted in the project picker (⌥K)' }, '👁') : null;
+  return t.watched ? h('span', { class: 'badge watched', title: 'Watched — listed in ⌥J, counted in the project picker (⌥K)' }, '👁') : null;
 }
 
 function buildsOnBadge(t) {
@@ -634,7 +634,7 @@ async function taskView(id, { every, leave, reload }) {
     class: 'ghost small watch-toggle', onclick: async () => { await save({ watched: !t.watched }); drawWatch(); },
   }, '👁');
   const drawWatch = () => {
-    watch.title = t.watched ? 'Watched — click to stop watching (⌥W)' : 'Watch: count this task in the project picker (⌥K) until it reaches Done (⌥W)';
+    watch.title = t.watched ? 'Watched — click to stop watching (⌥W)' : 'Watch: list this task in ⌥J and count it in the project picker (⌥K) until it reaches Done (⌥W)';
     watch.setAttribute('aria-pressed', String(!!t.watched));
     watch.classList.toggle('on', !!t.watched);
   };
@@ -2161,6 +2161,7 @@ const shortcuts = [
   { keys: '⌥W', code: 'KeyW', label: 'Watch or unwatch the open task', run: toggleWatch },
   { keys: '⌥M', code: 'KeyM', label: 'Notifications', run: toggleNotifications },
   { keys: '⌥K', code: 'KeyK', label: 'Pick a project', run: projectPicker },
+  { keys: '⌥J', code: 'KeyJ', label: 'Watched tasks', run: watchedPicker },
   { keys: '⌥[', code: 'BracketLeft', label: 'Previous project', run: () => stepProject(-1) },
   { keys: '⌥]', code: 'BracketRight', label: 'Next project', run: () => stepProject(1) },
   { keys: '⌥B', code: 'KeyB', label: 'Go to Board', run: () => go('#/board') },
@@ -2272,15 +2273,41 @@ async function projectPicker() {
   const ps = state.board.projects;
   if (!ps.length) return;
   const hash = pickedProjectHash(location.hash);
+  pickerDialog({
+    title: 'Open project', items: ps, start: ps.findIndex(p => p.id === state.projectId), label: p => [pickerLabel(p)],
+    help: `↑/↓ to choose, Enter opens its ${hash === '#/list' ? 'list' : 'board'}, Esc closes.`,
+    onPick: p => { state.projectId = p.id; remember('project', p.id); go(hash); },
+  });
+}
+
+// How the ⌥J picker names a watched task: its id and title, then its project and lane.
+function watchedLabel(t, projects, lanes) {
+  const where = [projects.find(p => p.id === t.project_id)?.name, lanes.find(l => l.id === t.lane_id)?.name].filter(Boolean);
+  return [`#${t.id} ${t.title}`, where.length ? ' · ' + where.join(' · ') : ''];
+}
+
+// ⌥J: the watched tasks of every project; ↑/↓ move, Enter (or a click) opens the chosen one's page.
+async function watchedPicker() {
+  const [tasks] = await Promise.all([api('GET', '/api/watched'), state.board ? null : loadBoard()]);
+  if (!tasks.length) { toast('No watched tasks — ⌥W watches the open task'); return; }
+  pickerDialog({
+    title: 'Watched tasks', items: tasks, start: tasks.findIndex(t => t.id === shownTaskId(location.hash, taskDialog.id)),
+    label: t => {
+      const [name, where] = watchedLabel(t, state.board.projects, state.board.lanes);
+      return [name, where ? h('span', { class: 'small task-search-note' }, where) : null];
+    },
+    help: '↑/↓ to choose, Enter opens the task, Esc closes.',
+    onPick: t => go(`#/task/${t.id}`),
+  });
+}
+
+// A dialog listing items (label(x) draws one) with the one at start chosen; ↑/↓ move, Enter (or a
+// click) closes it and calls onPick with the chosen item.
+function pickerDialog({ title, items: xs, start, label, help, onPick }) {
   const dlg = document.getElementById('dialog');
-  let i = Math.max(0, ps.findIndex(p => p.id === state.projectId));
-  const pick = p => {
-    dlg.close();
-    state.projectId = p.id;
-    remember('project', p.id);
-    go(hash);
-  };
-  const items = ps.map((p, j) => h('li', { onclick: () => pick(p), onmousemove: () => { i = j; draw(); } }, pickerLabel(p)));
+  let i = Math.max(0, start);
+  const pick = x => { dlg.close(); onPick(x); };
+  const items = xs.map((x, j) => h('li', { onclick: () => pick(x), onmousemove: () => { i = j; draw(); } }, ...label(x)));
   function draw() {
     items.forEach((el, j) => el.classList.toggle('selected', j === i));
     items[i].scrollIntoView({ block: 'nearest' });
@@ -2288,12 +2315,11 @@ async function projectPicker() {
   const list = h('ul', {
     class: 'picker', tabindex: 0, onkeydown: e => {
       const by = { ArrowDown: 1, ArrowUp: -1 }[e.key];
-      if (by) { e.preventDefault(); i = (i + by + ps.length) % ps.length; draw(); }
-      else if (e.key === 'Enter') { e.preventDefault(); pick(ps[i]); }
+      if (by) { e.preventDefault(); i = (i + by + xs.length) % xs.length; draw(); }
+      else if (e.key === 'Enter') { e.preventDefault(); pick(xs[i]); }
     },
   }, items);
-  dlg.replaceChildren(h('h2', {}, 'Open project'), list,
-    h('p', { class: 'muted small' }, `↑/↓ to choose, Enter opens its ${hash === '#/list' ? 'list' : 'board'}, Esc closes.`));
+  dlg.replaceChildren(h('h2', {}, title), list, h('p', { class: 'muted small' }, help));
   dlg.showModal();
   list.focus();
   draw();

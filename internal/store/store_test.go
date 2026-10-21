@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 )
@@ -1382,6 +1383,32 @@ func TestWatchedTasksCountPerProjectAndEndInDone(t *testing.T) {
 	s.SetWatched(ctx, a.ID, false)
 	if w := watched(); w[a.ProjectID] != 0 {
 		t.Fatalf("watched after unwatch = %v", w)
+	}
+}
+
+func TestWatchedTasksListsEveryProjectsByProjectThenLane(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	other, _ := s.CreateProject(ctx, Project{Name: "Other"})
+	inOther, _ := s.CreateTask(ctx, Task{Title: "other", LaneID: 1, ProjectID: other.ID})
+	later, _ := s.CreateTask(ctx, Task{Title: "in progress", LaneID: 3})
+	first, _ := s.CreateTask(ctx, Task{Title: "backlog", LaneID: 1})
+	s.CreateTask(ctx, Task{Title: "not watched", LaneID: 1})
+	archived, _ := s.CreateTask(ctx, Task{Title: "archived", LaneID: 1})
+	for _, id := range []int64{inOther.ID, later.ID, first.ID, archived.ID} {
+		s.SetWatched(ctx, id, true)
+	}
+	s.ArchiveTask(ctx, archived.ID)
+	got, err := s.WatchedTasks(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []int64
+	for _, task := range got {
+		ids = append(ids, task.ID)
+	}
+	if want := []int64{first.ID, later.ID, inOther.ID}; !slices.Equal(ids, want) {
+		t.Fatalf("watched = %v, want %v", ids, want)
 	}
 }
 
