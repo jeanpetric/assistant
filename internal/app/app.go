@@ -495,7 +495,7 @@ func (a *App) Limits(sessionID int64) agent.RateLimits {
 
 // afterTurn follows a successful turn: the skills whose automations match the
 // task run in the session, one turn each, then the task moves to its done lane
-// and, if other tasks build on it, the session's summary is written; the
+// (or, without one, as a turn rule says) and, if other tasks build on it, the session's summary is written; the
 // task's memories are updated from the session.
 // A skill turn that does not finish successfully ends the chain there.
 func (a *App) afterTurn(ctx context.Context, sessionID, startLane int64) {
@@ -513,6 +513,7 @@ func (a *App) afterTurn(ctx context.Context, sessionID, startLane int64) {
 	}
 	a.runSkills(ctx, sess, skills, func(ctx context.Context) {
 		a.moveWhenDone(ctx, sessionID, startLane)
+		a.applyTurnRule(ctx, sess, startLane)
 		a.summarizeForUsers(ctx, sess)
 		a.memorizeAfterTurn(ctx, sess)
 	})
@@ -706,6 +707,33 @@ func (a *App) moveDone(ctx context.Context, sess store.Session, startLane, doneL
 	}
 	lane, _ := a.Store.Lane(ctx, doneLane)
 	a.Store.Notify(ctx, &taskID, fmt.Sprintf("Agent finished %q — moved to %s", sess.Title, lane.Name))
+}
+
+// applyTurnRule moves the session's task as the turn rule for its lane says.
+// It does nothing if the task left startLane during the turn, by hand or to
+// the session's done lane.
+func (a *App) applyTurnRule(ctx context.Context, sess store.Session, startLane int64) {
+	if sess.TaskID == 0 {
+		return
+	}
+	task, err := a.Store.Task(ctx, sess.TaskID)
+	if err != nil || task.LaneID != startLane {
+		return
+	}
+	r, err := a.Store.TurnRule(ctx, task.ProjectID, task.LaneID)
+	if err != nil {
+		log.Printf("session %d: turn rule: %v", sess.ID, err)
+	}
+	if r == nil || r.ToLaneID == task.LaneID {
+		return
+	}
+	taskID := task.ID
+	if _, err := a.MoveTask(ctx, taskID, r.ToLaneID, -1); err != nil {
+		a.Store.Notify(ctx, &taskID, fmt.Sprintf("Rule %q: %v", r.Name, err))
+		return
+	}
+	lane, _ := a.Store.Lane(ctx, r.ToLaneID)
+	a.Store.Notify(ctx, &taskID, fmt.Sprintf("Agent finished %q — rule %q moved it to %s", sess.Title, r.Name, lane.Name))
 }
 
 // MoveTask moves a task on the board and fires matching transition rules.

@@ -397,6 +397,11 @@ ALTER TABLE sessions ADD COLUMN agent TEXT NOT NULL DEFAULT 'claude';
 ALTER TABLE settings ADD COLUMN session_prompt TEXT NOT NULL DEFAULT '';
 UPDATE settings SET session_prompt = '` + strings.ReplaceAll(DefaultSessionPrompt, "'", "''") + `';
 `,
+	// What fires a rule: a task moving into its lane (every rule so far), or an
+	// agent turn finishing on a task in its from lane, which moves the task.
+	`
+ALTER TABLE transition_rules ADD COLUMN trigger TEXT NOT NULL DEFAULT 'move';
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {
