@@ -513,7 +513,7 @@ async function renderTask(id, focusSession) {
     leave: () => { location.hash = '#/board'; },
     reload: route,
   });
-  view.replaceChildren(page.el);
+  view.replaceChildren(h('div', { class: 'task-page-bar' }, page.watch), page.el);
   page.focus(focusSession);
 }
 
@@ -574,6 +574,7 @@ async function openTaskDialog(id) {
   taskDialog.id = id;
   dlg.replaceChildren(
     h('div', { class: 'task-dialog-bar' },
+      page.watch,
       h('a', { class: 'btn ghost small', href: `#/task/${id}`, title: 'Open the task as a full page' }, '⤢ Full page'),
       h('button', { class: 'ghost small', title: 'Close (Esc)', onclick: () => dlg.close() }, '✕')),
     page.el);
@@ -627,13 +628,15 @@ async function taskView(id, { every, leave, reload }) {
   const due = h('input', { type: 'datetime-local', value: toLocalInput(t.due_at), onchange: () => save({ due_at: fromLocalInput(due.value) }) });
   const clearDue = h('button', { class: 'ghost small', title: 'No due time', onclick: async () => { due.value = ''; await save({ due_at: null }); } }, '✕');
 
-  // Watching a task counts it in the ⌥K picker until it reaches Done; ⌥W clicks this button.
+  // Watching a task counts it in the ⌥K picker until it reaches Done; ⌥W clicks this icon. The host puts
+  // it in its top bar, beside Full page.
   const watch = h('button', {
-    class: 'ghost watch-toggle', onclick: async () => { await save({ watched: !t.watched }); drawWatch(); },
-  });
+    class: 'ghost small watch-toggle', onclick: async () => { await save({ watched: !t.watched }); drawWatch(); },
+  }, '👁');
   const drawWatch = () => {
-    watch.title = t.watched ? 'Stop watching this task' : 'Count this task in the project picker (⌥K) until it reaches Done';
-    watch.replaceChildren(t.watched ? 'Unwatch' : 'Watch', hint('⌥W'));
+    watch.title = t.watched ? 'Watched — click to stop watching (⌥W)' : 'Watch: count this task in the project picker (⌥K) until it reaches Done (⌥W)';
+    watch.setAttribute('aria-pressed', String(!!t.watched));
+    watch.classList.toggle('on', !!t.watched);
   };
   drawWatch();
 
@@ -674,7 +677,6 @@ async function taskView(id, { every, leave, reload }) {
     buildsOn.el,
     h('div', { class: 'row', style: 'margin-top:14px' },
       h('span', { class: 'muted small grow' }, 'Created ' + fmtTime(t.created_at)),
-      watch,
       h('button', { class: 'ghost', title: 'Copy a link to this task, to paste wherever you refer to it', onclick: () => copyTaskLink(id) },
         'Copy link', hint('⌥C')),
       t.archived_at ? null : h('button', {
@@ -727,6 +729,7 @@ async function taskView(id, { every, leave, reload }) {
 
   return {
     el: h('div', { class: 'task-page' }, side, main),
+    watch,
     focus: sessionId => {
       const c = sessionId && components.get(sessionId);
       if (!c) return;
