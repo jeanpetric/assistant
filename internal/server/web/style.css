@@ -354,3 +354,4 @@ pre.diff { font-family: var(--mono); font-size: 12px; max-height: 60vh; overflow
 .desc-view { max-height: 360px; overflow-y: auto; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2); cursor: text; }
 dialog.wide { width: min(900px, 94vw); max-height: 88vh; overflow-y: auto; }
 .desc-dialog { font-size: 15px; line-height: 1.55; }
+.badge.watched { color: var(--accent); border-color: var(--accent); }

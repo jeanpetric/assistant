@@ -244,6 +244,10 @@ function dueBadge(t) {
   return h('span', { class: 'badge due' + (overdue ? ' overdue' : ''), title: 'Due ' + fmtTime(t.due_at) }, '⏰ ' + ago(t.due_at));
 }
 
+function watchedBadge(t) {
+  return t.watched ? h('span', { class: 'badge watched', title: 'Watched — counted in the project picker (⌥K)' }, '👁') : null;
+}
+
 function buildsOnBadge(t) {
   if (!t.context_from.length) return null;
   const ids = t.context_from.map(i => '#' + i).join(' ');
@@ -379,7 +383,7 @@ function card(t) {
     onclick: e => { if (e.metaKey || e.ctrlKey) location.hash = `#/task/${t.id}`; else openTaskDialog(t.id); },
   },
     h('div', { class: 'card-title' }, t.title),
-    h('div', { class: 'card-meta' }, kindBadge(t.kind), dueBadge(t), buildsOnBadge(t), needsInputBadge(state.board.needs_input[t.id]), runningBadge(state.board.running[t.id]), outcomeBadge(t.id, state.board.agent_status[t.id]), fieldLinks(t)),
+    h('div', { class: 'card-meta' }, watchedBadge(t), kindBadge(t.kind), dueBadge(t), buildsOnBadge(t), needsInputBadge(state.board.needs_input[t.id]), runningBadge(state.board.running[t.id]), outcomeBadge(t.id, state.board.agent_status[t.id]), fieldLinks(t)),
     runningMeta(state.board.running_context[t.id], state.board.running_limits[t.id]));
   el.dataset.id = t.id;
   el.addEventListener('dragstart', e => {
@@ -623,6 +627,16 @@ async function taskView(id, { every, leave, reload }) {
   const due = h('input', { type: 'datetime-local', value: toLocalInput(t.due_at), onchange: () => save({ due_at: fromLocalInput(due.value) }) });
   const clearDue = h('button', { class: 'ghost small', title: 'No due time', onclick: async () => { due.value = ''; await save({ due_at: null }); } }, '✕');
 
+  // Watching a task counts it in the ⌥K picker until it reaches Done; ⌥W clicks this button.
+  const watch = h('button', {
+    class: 'ghost watch-toggle', onclick: async () => { await save({ watched: !t.watched }); drawWatch(); },
+  });
+  const drawWatch = () => {
+    watch.title = t.watched ? 'Stop watching this task' : 'Count this task in the project picker (⌥K) until it reaches Done';
+    watch.replaceChildren(t.watched ? 'Unwatch' : 'Watch', hint('⌥W'));
+  };
+  drawWatch();
+
   const archived = t.archived_at
     ? h('div', { class: 'row archived-note' }, h('span', { class: 'grow' }, 'Archived ' + ago(t.archived_at)),
       h('button', { class: 'small', onclick: async () => { await api('POST', `/api/tasks/${id}/unarchive`); reload(); } }, 'Restore'))
@@ -660,6 +674,7 @@ async function taskView(id, { every, leave, reload }) {
     buildsOn.el,
     h('div', { class: 'row', style: 'margin-top:14px' },
       h('span', { class: 'muted small grow' }, 'Created ' + fmtTime(t.created_at)),
+      watch,
       h('button', { class: 'ghost', title: 'Copy a link to this task, to paste wherever you refer to it', onclick: () => copyTaskLink(id) },
         'Copy link', hint('⌥C')),
       t.archived_at ? null : h('button', {
@@ -2140,6 +2155,7 @@ const shortcuts = [
   { keys: '⌥R', code: 'KeyR', label: 'Quick reminder', run: reminderDialog },
   { keys: '⌥P', code: 'KeyP', label: 'Agent session in a new task, building on the open one', run: async () => sessionDialog({ buildsOn: await shownTask() }) },
   { keys: '⌥C', code: 'KeyC', label: 'Copy the open task\'s link', run: () => copyTaskLink(shownTaskId(location.hash, taskDialog.id)) },
+  { keys: '⌥W', code: 'KeyW', label: 'Watch or unwatch the open task', run: toggleWatch },
   { keys: '⌥M', code: 'KeyM', label: 'Notifications', run: toggleNotifications },
   { keys: '⌥K', code: 'KeyK', label: 'Pick a project', run: projectPicker },
   { keys: '⌥[', code: 'BracketLeft', label: 'Previous project', run: () => stepProject(-1) },
@@ -2183,6 +2199,12 @@ function taskLink(origin, id) {
 function copyTaskLink(id) {
   if (!id) { toast('Open a task to copy its link'); return; }
   navigator.clipboard.writeText(taskLink(location.origin, id)).then(() => toast('Task link copied'));
+}
+
+// ⌥W: the open task's Watch button.
+function toggleWatch() {
+  const btn = document.querySelector('.watch-toggle');
+  if (btn) btn.click(); else toast('Open a task to watch it');
 }
 
 // Where a project picked with ⌥K opens: the list when on the list, else the board.
@@ -2236,17 +2258,16 @@ function stepProject(by) {
   toast(next.name);
 }
 
-// How the ⌥K picker names a project: its running sessions in brackets.
-function pickerLabel(p, running) {
-  return `${p.name} (${running.filter(s => s.project_id === p.id).length})`;
+// How the ⌥K picker names a project: its watched tasks in brackets.
+function pickerLabel(p) {
+  return `${p.name} (${p.watched})`;
 }
 
 // ⌥K: a list of the projects; ↑/↓ move, Enter (or a click) opens the chosen one.
 async function projectPicker() {
-  if (!state.board) await loadBoard();
+  await loadBoard(); // fresh watched counts
   const ps = state.board.projects;
   if (!ps.length) return;
-  const running = await api('GET', '/api/sessions?status=running');
   const hash = pickedProjectHash(location.hash);
   const dlg = document.getElementById('dialog');
   let i = Math.max(0, ps.findIndex(p => p.id === state.projectId));
@@ -2256,7 +2277,7 @@ async function projectPicker() {
     remember('project', p.id);
     go(hash);
   };
-  const items = ps.map((p, j) => h('li', { onclick: () => pick(p), onmousemove: () => { i = j; draw(); } }, pickerLabel(p, running)));
+  const items = ps.map((p, j) => h('li', { onclick: () => pick(p), onmousemove: () => { i = j; draw(); } }, pickerLabel(p)));
   function draw() {
     items.forEach((el, j) => el.classList.toggle('selected', j === i));
     items[i].scrollIntoView({ block: 'nearest' });

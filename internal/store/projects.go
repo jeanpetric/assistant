@@ -13,7 +13,11 @@ type Project struct {
 	Color    string `json:"color"`
 	Position int    `json:"position"`
 	Workdir  string `json:"workdir"` // agents on its tasks run here unless the task or session says otherwise
+	Watched  int    `json:"watched"` // its watched tasks on the board
 }
+
+const projectCols = `id, name, color, position, workdir,
+	(SELECT COUNT(*) FROM tasks WHERE tasks.project_id = projects.id AND tasks.watched AND tasks.archived_at IS NULL)`
 
 var (
 	ErrProjectNotEmpty = errors.New("project still has tasks")
@@ -21,7 +25,7 @@ var (
 )
 
 func (s *Store) Projects(ctx context.Context) ([]Project, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, name, color, position, workdir FROM projects ORDER BY position, id`)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+projectCols+` FROM projects ORDER BY position, id`)
 	if err != nil {
 		return nil, err
 	}
@@ -29,7 +33,7 @@ func (s *Store) Projects(ctx context.Context) ([]Project, error) {
 	out := []Project{}
 	for rows.Next() {
 		var p Project
-		if err := rows.Scan(&p.ID, &p.Name, &p.Color, &p.Position, &p.Workdir); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.Color, &p.Position, &p.Workdir, &p.Watched); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -39,8 +43,8 @@ func (s *Store) Projects(ctx context.Context) ([]Project, error) {
 
 func (s *Store) Project(ctx context.Context, id int64) (Project, error) {
 	var p Project
-	err := s.db.QueryRowContext(ctx, `SELECT id, name, color, position, workdir FROM projects WHERE id = ?`, id).
-		Scan(&p.ID, &p.Name, &p.Color, &p.Position, &p.Workdir)
+	err := s.db.QueryRowContext(ctx, `SELECT `+projectCols+` FROM projects WHERE id = ?`, id).
+		Scan(&p.ID, &p.Name, &p.Color, &p.Position, &p.Workdir, &p.Watched)
 	if errors.Is(err, sql.ErrNoRows) {
 		return p, ErrNotFound
 	}

@@ -1121,3 +1121,36 @@ func TestSessionAgent(t *testing.T) {
 	}
 	c.do("POST", "/api/sessions", map[string]any{"prompt": "x", "agent": "codex"}, 400, nil)
 }
+
+func TestWatchTask(t *testing.T) {
+	c := newClient(t)
+	var task store.Task
+	c.do("POST", "/api/tasks", map[string]any{"title": "Keep an eye on"}, 201, &task)
+	c.do("PATCH", "/api/tasks/"+itoa(task.ID), map[string]any{"watched": true}, 200, &task)
+	if !task.Watched {
+		t.Fatalf("not watched: %+v", task)
+	}
+	c.do("PATCH", "/api/tasks/"+itoa(task.ID), map[string]any{"title": "Keep an eye on it"}, 200, &task)
+	if !task.Watched {
+		t.Fatalf("absent watched changed it: %+v", task)
+	}
+	var board struct {
+		Projects []store.Project `json:"projects"`
+	}
+	c.do("GET", "/api/board", nil, 200, &board)
+	if board.Projects[0].Watched != 1 {
+		t.Fatalf("projects = %+v", board.Projects)
+	}
+	c.do("POST", "/api/tasks/"+itoa(task.ID)+"/move", map[string]any{"lane_id": 5, "index": 0}, 200, nil) // Done
+	c.do("GET", "/api/tasks/"+itoa(task.ID), nil, 200, &struct {
+		Task *store.Task `json:"task"`
+	}{&task})
+	if task.Watched {
+		t.Fatalf("still watched in Done: %+v", task)
+	}
+	c.do("PATCH", "/api/tasks/"+itoa(task.ID), map[string]any{"watched": true}, 200, &task)
+	c.do("PATCH", "/api/tasks/"+itoa(task.ID), map[string]any{"watched": false}, 200, &task)
+	if task.Watched {
+		t.Fatalf("unwatch kept it: %+v", task)
+	}
+}

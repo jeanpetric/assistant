@@ -1318,3 +1318,108 @@ func TestTurnLaneClearedByMove(t *testing.T) {
 		t.Fatalf("missing task: %v", err)
 	}
 }
+
+func TestWatchedTasksCountPerProjectAndEndInDone(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	other, _ := s.CreateProject(ctx, Project{Name: "Other"})
+	a, _ := s.CreateTask(ctx, Task{Title: "a", LaneID: 1})
+	b, _ := s.CreateTask(ctx, Task{Title: "b", LaneID: 1})
+	c, _ := s.CreateTask(ctx, Task{Title: "c", LaneID: 1, ProjectID: other.ID})
+	for _, id := range []int64{a.ID, b.ID, c.ID} {
+		if err := s.SetWatched(ctx, id, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.SetWatched(ctx, 999, true); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing task: %v", err)
+	}
+	watched := func() map[int64]int {
+		ps, err := s.Projects(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[int64]int{}
+		for _, p := range ps {
+			out[p.ID] = p.Watched
+		}
+		return out
+	}
+	if w := watched(); w[a.ProjectID] != 2 || w[other.ID] != 1 {
+		t.Fatalf("watched = %v", w)
+	}
+	if p, _ := s.Project(ctx, other.ID); p.Watched != 1 {
+		t.Fatalf("project = %+v", p)
+	}
+	if task, _ := s.Task(ctx, a.ID); !task.Watched {
+		t.Fatal("task not watched")
+	}
+	s.MoveTask(ctx, a.ID, 3, 0) // In progress keeps it
+	s.ArchiveTask(ctx, c.ID)    // archived tasks don't count
+	if w := watched(); w[a.ProjectID] != 2 || w[other.ID] != 0 {
+		t.Fatalf("watched after move and archive = %v", w)
+	}
+	s.MoveTask(ctx, a.ID, 5, 0) // Done ends it
+	if task, _ := s.Task(ctx, a.ID); task.Watched {
+		t.Fatal("task in Done still watched")
+	}
+	s.SetWatched(ctx, a.ID, true)
+	s.MoveTask(ctx, a.ID, 5, 0) // reordering within Done keeps a watch set there
+	if task, _ := s.Task(ctx, a.ID); !task.Watched {
+		t.Fatal("watch set in Done dropped by a reorder")
+	}
+	// The lane Settings archives from is done too.
+	set, _ := s.Settings(ctx)
+	four := int64(4)
+	set.ArchiveLaneID = &four
+	if err := s.SaveSettings(ctx, set); err != nil {
+		t.Fatal(err)
+	}
+	s.MoveTask(ctx, b.ID, 4, 0)
+	if task, _ := s.Task(ctx, b.ID); task.Watched {
+		t.Fatal("task in the archive lane still watched")
+	}
+	s.SetWatched(ctx, a.ID, false)
+	if w := watched(); w[a.ProjectID] != 0 {
+		t.Fatalf("watched after unwatch = %v", w)
+	}
+}
+
+func TestWatchedMigrationKeepsTasks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const n = 29 // before tasks could be watched
+	for _, m := range migrations[:n] {
+		if _, err := db.Exec(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, q := range []string{
+		fmt.Sprintf(`PRAGMA user_version = %d`, n),
+		`INSERT INTO tasks (id, title, description, lane_id, position, created_at, updated_at) VALUES (1, 't', 'd', 2, 0, 0, 0)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(q, err)
+		}
+	}
+	db.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	if task, err := s.Task(ctx, 1); err != nil || task.Title != "t" || task.Description != "d" || task.LaneID != 2 || task.Watched {
+		t.Fatalf("task = %+v, %v", task, err)
+	}
+	if err := s.SetWatched(ctx, 1, true); err != nil {
+		t.Fatal(err)
+	}
+	if ps, _ := s.Projects(ctx); ps[0].Watched != 1 {
+		t.Fatalf("projects = %+v", ps)
+	}
+}

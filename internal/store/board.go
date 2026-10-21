@@ -36,6 +36,9 @@ type Task struct {
 	DueAt      *time.Time `json:"due_at"`      // notify when reached
 	RemindedAt *time.Time `json:"reminded_at"` // set once the due notification fired
 	ArchivedAt *time.Time `json:"archived_at"` // archived tasks are off the board
+	// Watched tasks are counted per project in the ⌥K picker; moving the task
+	// into a done lane (see doneLanes) stops watching it.
+	Watched bool `json:"watched"`
 	// When the task entered its lane; auto-archive counts from here.
 	LaneChangedAt time.Time `json:"lane_changed_at"`
 	CreatedAt     time.Time `json:"created_at"`
@@ -174,14 +177,14 @@ func (s *Store) DeleteFieldDef(ctx context.Context, key string) error {
 
 // ---- tasks ----
 
-const taskCols = `id, title, description, kind, project_id, lane_id, position, workdir, due_at, reminded_at, archived_at, lane_changed_at, created_at, updated_at`
+const taskCols = `id, title, description, kind, project_id, lane_id, position, workdir, due_at, reminded_at, archived_at, lane_changed_at, created_at, updated_at, watched`
 
 func scanTask(sc interface{ Scan(...any) error }) (Task, error) {
 	var t Task
 	var laneChanged, created, updated int64
 	var due, reminded, archived sql.NullInt64
 	err := sc.Scan(&t.ID, &t.Title, &t.Description, &t.Kind, &t.ProjectID, &t.LaneID, &t.Position, &t.Workdir, &due, &reminded, &archived,
-		&laneChanged, &created, &updated)
+		&laneChanged, &created, &updated, &t.Watched)
 	t.CreatedAt, t.UpdatedAt, t.LaneChangedAt = fromMillis(created), fromMillis(updated), fromMillis(laneChanged)
 	t.DueAt, t.RemindedAt, t.ArchivedAt = fromNullMillis(due), fromNullMillis(reminded), fromNullMillis(archived)
 	t.Fields = map[string]string{}
@@ -563,10 +566,12 @@ func (s *Store) MoveTask(ctx context.Context, id, laneID int64, index int) (from
 		ids = append(ids[:index], append([]int64{id}, ids[index:]...)...)
 		now := s.ts()
 		laneChanged := fromLane != laneID || archived
-		// A lane change drops the lane the task was to move to after a turn (see SetTurnLane).
+		// A lane change drops the lane the task was to move to after a turn (see SetTurnLane),
+		// and arriving in the done lane ends watching the task.
 		if _, err := tx.ExecContext(ctx, `UPDATE tasks SET lane_id = ?, archived_at = NULL, updated_at = ?,
-			lane_changed_at = CASE WHEN ? THEN ? ELSE lane_changed_at END, turn_lane_id = CASE WHEN ? THEN NULL ELSE turn_lane_id END
-			WHERE id = ?`, laneID, now, laneChanged, now, laneChanged, id); err != nil {
+			lane_changed_at = CASE WHEN ? THEN ? ELSE lane_changed_at END, turn_lane_id = CASE WHEN ? THEN NULL ELSE turn_lane_id END,
+			watched = CASE WHEN ? AND ? IN (`+doneLanes+`) THEN 0 ELSE watched END
+			WHERE id = ?`, laneID, now, laneChanged, now, laneChanged, laneChanged, laneID, id); err != nil {
 			return err
 		}
 		if err := renumber(ctx, tx, ids); err != nil {
@@ -582,6 +587,15 @@ func (s *Store) MoveTask(ctx context.Context, id, laneID int64, index int) (from
 		return nil
 	})
 	return fromLane, err
+}
+
+// doneLanes are the lanes where tasks are done: the one named Done and the
+// one Settings archives from.
+const doneLanes = `SELECT id FROM lanes WHERE lower(name) = 'done' UNION SELECT archive_lane_id FROM settings WHERE id = 1`
+
+// SetWatched starts or stops watching the task.
+func (s *Store) SetWatched(ctx context.Context, taskID int64, watched bool) error {
+	return affected(s.db.ExecContext(ctx, `UPDATE tasks SET watched = ? WHERE id = ?`, boolInt(watched), taskID))
 }
 
 // SetTurnLane sets the lane the task moves to once an agent turn on it

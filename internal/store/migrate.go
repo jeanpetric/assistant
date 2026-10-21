@@ -422,6 +422,10 @@ ALTER TABLE tasks ADD COLUMN turn_lane_id INTEGER REFERENCES lanes(id) ON DELETE
 ALTER TABLE settings ADD COLUMN session_lane_id INTEGER REFERENCES lanes(id) ON DELETE SET NULL;
 UPDATE settings SET session_lane_id = (SELECT id FROM lanes WHERE lower(name) = 'in progress' ORDER BY position, id LIMIT 1);
 `,
+	// Tasks the user watches; the ⌥K picker counts them per project.
+	`
+ALTER TABLE tasks ADD COLUMN watched INTEGER NOT NULL DEFAULT 0;
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

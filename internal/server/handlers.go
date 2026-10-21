@@ -700,6 +700,7 @@ func (s *Server) updateTask(w http.ResponseWriter, r *http.Request) {
 		Fields      map[string]string `json:"fields"`
 		ContextFrom *[]int64          `json:"context_from"` // replaces the list
 		Memories    *[]int64          `json:"memories"`     // replaces the list
+		Watched     *bool             `json:"watched"`
 	}
 	if err := decode(r, &in); err != nil {
 		writeErr(w, err)
@@ -743,6 +744,12 @@ func (s *Server) updateTask(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.Memories != nil {
 		if err := s.app.Store.SetTaskMemories(r.Context(), id, *in.Memories); err != nil {
+			writeErr(w, err)
+			return
+		}
+	}
+	if in.Watched != nil {
+		if err := s.app.Store.SetWatched(r.Context(), id, *in.Watched); err != nil {
 			writeErr(w, err)
 			return
 		}

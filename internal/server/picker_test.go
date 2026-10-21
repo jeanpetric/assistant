@@ -9,13 +9,13 @@ import (
 	"testing"
 )
 
-// The ⌥K project picker shows each project's running sessions in brackets.
-func TestProjectPickerShowsRunning(t *testing.T) {
+// The ⌥K project picker shows each project's watched tasks in brackets, counted afresh.
+func TestProjectPickerShowsWatched(t *testing.T) {
 	js, err := webFS.ReadFile("web/app.js")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"const running = await api('GET', '/api/sessions?status=running');", "pickerLabel(p, running)"} {
+	for _, want := range []string{"await loadBoard(); // fresh watched counts", "pickerLabel(p)"} {
 		if !bytes.Contains(js, []byte(want)) {
 			t.Fatalf("projectPicker lacks %q", want)
 		}
@@ -35,9 +35,8 @@ func TestProjectPickerShowsRunning(t *testing.T) {
 	}
 	script := `
 const f = eval(require('fs').readFileSync(process.argv.at(-1), 'utf8') + '; pickerLabel');
-const running = [{ project_id: 1 }, { project_id: 1 }, { project_id: 2 }, {}];
-for (const [p, want] of [[{ id: 1, name: 'Work' }, 'Work (2)'], [{ id: 2, name: 'Home' }, 'Home (1)'], [{ id: 3, name: 'Idle' }, 'Idle (0)']]) {
-  if (f(p, running) !== want) { console.log(f(p, running), 'want', want); process.exitCode = 1; }
+for (const [p, want] of [[{ id: 1, name: 'Work', watched: 2 }, 'Work (2)'], [{ id: 3, name: 'Idle', watched: 0 }, 'Idle (0)']]) {
+  if (f(p) !== want) { console.log(f(p), 'want', want); process.exitCode = 1; }
 }
 `
 	out, err := exec.Command(node, "-e", script, "--", src).CombinedOutput()

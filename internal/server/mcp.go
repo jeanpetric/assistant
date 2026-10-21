@@ -192,11 +192,12 @@ func (s *Server) mcpTools() []mcpTool {
 		},
 		{
 			Name:        "update_task",
-			Description: "Change a task's title, description, kind, workdir, due time, custom fields, the tasks it builds on (context_from replaces the list), its memories (memories replaces the list) or project (it goes to the end of its lane there). Only the given keys change; due_at null clears it. Use move_task to change its lane.",
+			Description: "Change a task's title, description, kind, workdir, due time, custom fields, the tasks it builds on (context_from replaces the list), its memories (memories replaces the list), whether the user watches it, or project (it goes to the end of its lane there). Only the given keys change; due_at null clears it. Use move_task to change its lane.",
 			InputSchema: schema([]string{"task_id"}, map[string]any{
 				"task_id": pTaskID, "project_id": pProjectID, "title": prop("string", "New title"), "description": prop("string", "New description (replaces the old one)"),
 				"kind": pKind, "workdir": pWorkdir, "due_at": map[string]any{"type": []string{"string", "null"}, "description": pDueAt["description"]}, "fields": pFields,
 				"context_from": pContextFrom, "memories": pMemories,
+				"watched": prop("boolean", "Watch the task: the project picker counts watched tasks; moving it to Done stops watching"),
 			}),
 			call: byID("PATCH", "/api/tasks/%d", "task_id", true),
 		},
