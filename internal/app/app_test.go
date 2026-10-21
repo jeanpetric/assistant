@@ -393,6 +393,48 @@ func TestSessionInNewTaskLane(t *testing.T) {
 	}
 }
 
+// A new session's task never moves into its lane, so the session takes the
+// done lane of a rule into that lane, preferring the project's rule.
+func TestSessionInNewTaskTakesRuleDoneLane(t *testing.T) {
+	a, _ := newApp(t)
+	ctx := context.Background()
+	lanes := lanesByName(t, a)
+	todo, wip, review, done := lanes["Todo"], lanes["In progress"], lanes["Review"], lanes["Done"]
+	p, _ := a.Store.CreateProject(ctx, store.Project{Name: "P"})
+
+	sess, err := a.StartSessionInNewTask(ctx, StartOpts{Prompt: "no rule"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Wait()
+	if sess.DoneLaneID != nil {
+		t.Fatalf("done lane = %d without a rule", *sess.DoneLaneID)
+	}
+
+	a.Store.SaveRule(ctx, store.Rule{Name: "Disabled", ToLaneID: wip, DoneLaneID: &done, Enabled: false, Prompt: "x"})
+	a.Store.SaveRule(ctx, store.Rule{Name: "Start", FromLaneID: &todo, ToLaneID: wip, DoneLaneID: &review, Enabled: true, Prompt: "x"})
+	a.Store.SaveRule(ctx, store.Rule{Name: "P only", ProjectID: &p.ID, ToLaneID: wip, DoneLaneID: &done, Enabled: true, Prompt: "x"})
+
+	sess, _ = a.StartSessionInNewTask(ctx, StartOpts{Prompt: "go"})
+	a.Wait()
+	if sess.DoneLaneID == nil || *sess.DoneLaneID != review {
+		t.Fatalf("done lane = %v, want Review (%d)", sess.DoneLaneID, review)
+	}
+	if task, _ := a.Store.Task(ctx, sess.TaskID); task.LaneID != review {
+		t.Fatalf("task lane = %d, want Review after the turn", task.LaneID)
+	}
+	sess, _ = a.StartSessionInNewTask(ctx, StartOpts{Prompt: "go", ProjectID: p.ID})
+	a.Wait()
+	if sess.DoneLaneID == nil || *sess.DoneLaneID != done {
+		t.Fatalf("project done lane = %v, want Done (%d)", sess.DoneLaneID, done)
+	}
+	sess, _ = a.StartSessionInNewTask(ctx, StartOpts{Prompt: "go", DoneLaneID: &todo})
+	a.Wait()
+	if sess.DoneLaneID == nil || *sess.DoneLaneID != todo {
+		t.Fatalf("explicit done lane = %v, want Todo (%d)", sess.DoneLaneID, todo)
+	}
+}
+
 func TestMoveTaskFiresRules(t *testing.T) {
 	a, r := newApp(t)
 	ctx := context.Background()

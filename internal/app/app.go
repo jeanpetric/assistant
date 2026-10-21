@@ -174,7 +174,9 @@ func (a *App) StartSession(ctx context.Context, o StartOpts) (store.Session, err
 // StartSessionInNewTask creates a task for the prompt in o.ProjectID, in the
 // lane set for new sessions (the first lane if none), and starts the session on it, so no session is left without a task. The
 // task's title is the prompt's first line; its description is the whole
-// prompt unless that is the title already.
+// prompt unless that is the title already. No rule fires for a task created
+// in a lane, so unless o sets one, the session takes the done lane of a rule
+// into that lane: as if the task had been moved there.
 func (a *App) StartSessionInNewTask(ctx context.Context, o StartOpts) (store.Session, error) {
 	if strings.TrimSpace(o.Prompt) == "" {
 		return store.Session{}, errors.New("prompt is required")
@@ -195,6 +197,12 @@ func (a *App) StartSessionInNewTask(ctx context.Context, o StartOpts) (store.Ses
 		return store.Session{}, err
 	}
 	o.TaskID = t.ID
+	if o.DoneLaneID == nil {
+		if o.DoneLaneID, err = a.Store.DoneLaneInto(ctx, t.ProjectID, t.LaneID); err != nil {
+			_ = a.Store.DeleteTask(ctx, t.ID)
+			return store.Session{}, err
+		}
+	}
 	if shared := a.sharedBrief(ctx, t); shared != "" {
 		o.Prompt = shared + "\n\n---\n\n" + o.Prompt
 	}

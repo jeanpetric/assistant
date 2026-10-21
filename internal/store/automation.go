@@ -100,6 +100,22 @@ func (s *Store) MatchingRules(ctx context.Context, projectID, from, to int64) ([
 		ORDER BY id`, to, from, projectID, projectID)
 }
 
+// DoneLaneInto returns the done lane of the first enabled rule into lane `to`
+// that has one, from any lane, preferring the project's rules; nil if none.
+func (s *Store) DoneLaneInto(ctx context.Context, projectID, to int64) (*int64, error) {
+	var lane int64
+	err := s.db.QueryRowContext(ctx, `SELECT done_lane_id FROM transition_rules
+		WHERE enabled = 1 AND to_lane_id = ? AND done_lane_id IS NOT NULL AND (project_id = ? OR project_id IS NULL)
+		ORDER BY project_id IS NULL, id LIMIT 1`, to, projectID).Scan(&lane)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &lane, nil
+}
+
 func (s *Store) Rule(ctx context.Context, id int64) (Rule, error) {
 	r, err := scanRule(s.db.QueryRowContext(ctx, `SELECT `+ruleCols+` FROM transition_rules WHERE id = ?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
