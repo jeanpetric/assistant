@@ -1423,3 +1423,91 @@ func TestWatchedMigrationKeepsTasks(t *testing.T) {
 		t.Fatalf("projects = %+v", ps)
 	}
 }
+
+func TestDoneTasksDropTheirNotifications(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	a, _ := s.CreateTask(ctx, Task{Title: "a", LaneID: 1})
+	b, _ := s.CreateTask(ctx, Task{Title: "b", LaneID: 1})
+	s.Notify(ctx, &a.ID, "about a")
+	s.Notify(ctx, &b.ID, "about b")
+	s.Notify(ctx, nil, "plain")
+	messages := func() []string {
+		ns, err := s.Notifications(ctx, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := []string{}
+		for _, n := range ns {
+			out = append(out, n.Message)
+		}
+		return out
+	}
+	s.MoveTask(ctx, a.ID, 2, 0) // not done: kept
+	if m := messages(); len(m) != 3 {
+		t.Fatalf("after a move to another lane: %v", m)
+	}
+	if _, err := s.MoveTask(ctx, a.ID, 5, 0); err != nil { // Done
+		t.Fatal(err)
+	}
+	if m := messages(); len(m) != 2 || m[0] != "plain" || m[1] != "about b" {
+		t.Fatalf("after a reached Done: %v", m)
+	}
+	// One about a task already done is archived as it is made.
+	s.Notify(ctx, &a.ID, "moved to Done")
+	if m := messages(); len(m) != 2 {
+		t.Fatalf("after notifying about a done task: %v", m)
+	}
+	if ns, _ := s.Notifications(ctx, true); len(ns) != 2 {
+		t.Fatalf("unread: %+v", ns)
+	}
+	// Back out of Done, it is notified again.
+	s.MoveTask(ctx, a.ID, 1, 0)
+	s.Notify(ctx, &a.ID, "again")
+	if m := messages(); len(m) != 3 || m[0] != "again" {
+		t.Fatalf("after leaving Done: %v", m)
+	}
+}
+
+func TestDoneNotificationMigrationArchivesOnlyDoneTasks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const n = 30 // before done tasks dropped their notifications
+	for _, m := range migrations[:n] {
+		if _, err := db.Exec(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, q := range []string{
+		fmt.Sprintf(`PRAGMA user_version = %d`, n),
+		`INSERT INTO tasks (id, title, description, lane_id, position, created_at, updated_at) VALUES (1, 'open', '', 2, 0, 0, 0)`,
+		`INSERT INTO tasks (id, title, description, lane_id, position, created_at, updated_at) VALUES (2, 'done', '', 5, 0, 0, 0)`,
+		`INSERT INTO notifications (id, task_id, message, created_at) VALUES (1, 1, 'about open', 10)`,
+		`INSERT INTO notifications (id, task_id, message, created_at, read_at) VALUES (2, 2, 'about done', 20, 25)`,
+		`INSERT INTO notifications (id, task_id, message, created_at) VALUES (3, NULL, 'plain', 30)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(q, err)
+		}
+	}
+	db.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ns, err := s.Notifications(context.Background(), false)
+	if err != nil || len(ns) != 2 || ns[0].Message != "plain" || ns[1].Message != "about open" || ns[1].ReadAt != nil {
+		t.Fatalf("notifications = %+v, %v", ns, err)
+	}
+	var msg string
+	var read, archived sql.NullInt64
+	s.db.QueryRow(`SELECT message, read_at, archived_at FROM notifications WHERE id = 2`).Scan(&msg, &read, &archived)
+	if msg != "about done" || read.Int64 != 25 || !archived.Valid {
+		t.Fatalf("done task's notification: %q %v %v", msg, read, archived)
+	}
+}

@@ -567,12 +567,18 @@ func (s *Store) MoveTask(ctx context.Context, id, laneID int64, index int) (from
 		now := s.ts()
 		laneChanged := fromLane != laneID || archived
 		// A lane change drops the lane the task was to move to after a turn (see SetTurnLane),
-		// and arriving in the done lane ends watching the task.
+		// and arriving in the done lane ends watching the task and archives its notifications.
 		if _, err := tx.ExecContext(ctx, `UPDATE tasks SET lane_id = ?, archived_at = NULL, updated_at = ?,
 			lane_changed_at = CASE WHEN ? THEN ? ELSE lane_changed_at END, turn_lane_id = CASE WHEN ? THEN NULL ELSE turn_lane_id END,
 			watched = CASE WHEN ? AND ? IN (`+doneLanes+`) THEN 0 ELSE watched END
 			WHERE id = ?`, laneID, now, laneChanged, now, laneChanged, laneChanged, laneID, id); err != nil {
 			return err
+		}
+		if laneChanged {
+			if _, err := tx.ExecContext(ctx, `UPDATE notifications SET archived_at = ?, read_at = COALESCE(read_at, ?)
+				WHERE task_id = ? AND archived_at IS NULL AND ? IN (`+doneLanes+`)`, now, now, id, laneID); err != nil {
+				return err
+			}
 		}
 		if err := renumber(ctx, tx, ids); err != nil {
 			return err

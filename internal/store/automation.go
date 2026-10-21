@@ -231,10 +231,15 @@ func (s *Store) Notify(ctx context.Context, taskID *int64, msg string) error {
 	return s.NotifySession(ctx, taskID, nil, msg)
 }
 
-// NotifySession is Notify about one of the task's sessions.
+// NotifySession is Notify about one of the task's sessions. A notification
+// about a task in a done lane is archived right away: done tasks keep the
+// panel clear.
 func (s *Store) NotifySession(ctx context.Context, taskID, sessionID *int64, msg string) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO notifications (task_id, session_id, message, created_at) VALUES (?, ?, ?, ?)`,
-		taskID, sessionID, msg, s.ts())
+	now := s.ts()
+	_, err := s.db.ExecContext(ctx, `INSERT INTO notifications (task_id, session_id, message, created_at, read_at, archived_at)
+		SELECT ?1, ?2, ?3, ?4, done, done FROM (SELECT CASE WHEN EXISTS
+			(SELECT 1 FROM tasks WHERE id = ?1 AND lane_id IN (`+doneLanes+`)) THEN ?4 END AS done)`,
+		taskID, sessionID, msg, now)
 	return err
 }
 

@@ -426,6 +426,13 @@ UPDATE settings SET session_lane_id = (SELECT id FROM lanes WHERE lower(name) = 
 	`
 ALTER TABLE tasks ADD COLUMN watched INTEGER NOT NULL DEFAULT 0;
 `,
+	// Done tasks keep no notifications on the panel: archive those already there.
+	`
+UPDATE notifications SET archived_at = CAST(unixepoch('subsec') * 1000 AS INTEGER),
+	read_at = COALESCE(read_at, CAST(unixepoch('subsec') * 1000 AS INTEGER))
+WHERE archived_at IS NULL AND task_id IN (SELECT id FROM tasks WHERE lane_id IN
+	(SELECT id FROM lanes WHERE lower(name) = 'done' UNION SELECT archive_lane_id FROM settings WHERE id = 1));
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {
