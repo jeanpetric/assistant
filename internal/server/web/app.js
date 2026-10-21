@@ -593,6 +593,12 @@ async function taskView(id, { every, leave, reload }) {
   await loadBoard();
   const data = await api('GET', `/api/tasks/${id}`);
   const t = data.task;
+  // A task opened from another project (a notification, ⌥J) brings its project into focus.
+  if (t.project_id !== state.projectId) {
+    state.projectId = t.project_id;
+    remember('project', t.project_id);
+    await loadBoard();
+  }
   const save = patch => api('PATCH', `/api/tasks/${id}`, patch).then(nt => Object.assign(t, nt));
 
   // --- side panel ---

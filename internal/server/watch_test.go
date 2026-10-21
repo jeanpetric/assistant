@@ -28,3 +28,15 @@ func TestWatchToggleInTopBar(t *testing.T) {
 		}
 	}
 }
+
+// Opening a task from another project (a notification, ⌥J) switches to the task's project.
+func TestTaskViewSwitchesProject(t *testing.T) {
+	js, err := webFS.ReadFile("web/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "const t = data.task;\n  // A task opened from another project (a notification, ⌥J) brings its project into focus.\n  if (t.project_id !== state.projectId) {\n    state.projectId = t.project_id;\n    remember('project', t.project_id);\n    await loadBoard();\n  }"
+	if !bytes.Contains(js, []byte(want)) {
+		t.Fatalf("app.js lacks %q", want)
+	}
+}
