@@ -1067,7 +1067,14 @@ func TestRuleProjectAndSkill(t *testing.T) {
 	if rule.Prompt != "" || rule.SkillID != nil || *rule.DoneLaneID != 2 || rule.Mode != "" || rule.Workdir != "" {
 		t.Fatalf("move rule = %+v", rule)
 	}
-	c.do("POST", "/api/rules", map[string]any{"name": "r", "to_lane_id": 1, "done_lane_id": 1}, 400, nil)
+	var e struct{ Error string }
+	c.do("POST", "/api/rules", map[string]any{"name": "r", "to_lane_id": 1, "done_lane_id": 1}, 400, &e)
+	if !strings.Contains(e.Error, "other than to_lane_id") || strings.Contains(e.Error, "prompt") {
+		t.Fatalf("same lane error = %q", e.Error)
+	}
+	// What the dialog sends for a move rule: the hidden prompt, mode and directory go empty.
+	c.do("POST", "/api/rules", map[string]any{"name": "r", "project_id": nil, "from_lane_id": nil, "to_lane_id": 1,
+		"prompt": "", "skill_id": nil, "mode": "", "workdir": "", "done_lane_id": 2, "enabled": true}, 200, &rule)
 }
 
 func TestSessionAgent(t *testing.T) {

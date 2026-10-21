@@ -1821,6 +1821,22 @@ function trelloPanel(b, trello, rerender) {
 // A rule with neither prompt nor skill moves the task to its done lane once an agent turn on it finishes.
 const isMoveRule = r => !r.skill_id && !r.prompt.trim();
 
+// The rule to save from the dialog's values, or why it can't be saved. Only the chosen action's fields go
+// with it: a move rule has no prompt, mode or directory, a skill rule no prompt.
+function ruleBody(rule, v) {
+  const move = v.action === 'move';
+  const skill = v.action && !move ? Number(v.action) : null;
+  const session = !move && !skill;
+  if (!v.name.trim()) return [null, 'Give the rule a name'];
+  if (move && v.moveTo === v.to) return [null, 'Move the task to a lane other than To, the lane the rule watches'];
+  return [{
+    ...rule, name: v.name, prompt: session ? v.prompt : '', skill_id: skill, mode: session ? v.mode : '',
+    workdir: session ? v.workdir : '', project_id: v.project ? Number(v.project) : null,
+    from_lane_id: v.from ? Number(v.from) : null, to_lane_id: Number(v.to),
+    done_lane_id: move ? Number(v.moveTo) : v.doneLane ? Number(v.doneLane) : null,
+  }, null];
+}
+
 function ruleDialog(rule, b, skills, done) {
   const lanes = b.lanes;
   // Automated sessions usually end in review, so new rules default to a Review lane if there is one.
@@ -1846,7 +1862,7 @@ function ruleDialog(rule, b, skills, done) {
     prompt,
     h('label', {}, 'Agent mode'), mode,
     h('label', {}, 'Working directory'), workdir);
-  const moveOpts = h('div', {}, h('label', {}, 'Move to (skipped if the task was moved meanwhile)'), moveTo);
+  const moveOpts = h('div', {}, h('label', {}, 'Once an agent turn on it finishes, move it to (a lane other than To; skipped if the task was moved meanwhile)'), moveTo);
   const doneOpts = h('div', {}, h('label', {}, 'After the agent finishes (skipped if the task was moved meanwhile)'), doneLane);
   const showOpts = () => {
     sessionOpts.classList.toggle('hidden', !!action.value);
@@ -1865,15 +1881,11 @@ function ruleDialog(rule, b, skills, done) {
       cancelButton(dlg),
       h('button', {
         onclick: async () => {
-          const move = action.value === 'move';
-          const skill = action.value && !move ? Number(action.value) : null;
-          const session = !move && !skill;
-          const body = {
-            ...rule, name: name.value, prompt: session ? prompt.value : '', skill_id: skill, mode: session ? mode.value : '',
-            workdir: session ? workdir.value : '', project_id: project.value ? Number(project.value) : null,
-            from_lane_id: from.value ? Number(from.value) : null, to_lane_id: Number(to.value),
-            done_lane_id: move ? Number(moveTo.value) : doneLaneValue(doneLane),
-          };
+          const [body, err] = ruleBody(rule, {
+            name: name.value, project: project.value, from: from.value, to: to.value, action: action.value,
+            prompt: prompt.value, mode: mode.value, workdir: workdir.value, moveTo: moveTo.value, doneLane: doneLane.value,
+          });
+          if (err) return toast(err);
           await api(rule.id ? 'PUT' : 'POST', rule.id ? `/api/rules/${rule.id}` : '/api/rules', body);
           dlg.close();
           done();

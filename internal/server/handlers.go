@@ -1243,8 +1243,12 @@ func (s *Server) saveRule(w http.ResponseWriter, r *http.Request) {
 		return
 	case !hasPrompt && rule.SkillID == nil:
 		// Its action is moving the task on once an agent turn on it finishes.
-		if rule.DoneLaneID == nil || *rule.DoneLaneID == rule.ToLaneID {
-			writeErr(w, badRequest{"a rule needs a prompt, a skill_id, or a done_lane_id other than to_lane_id to move the task to after an agent turn"})
+		if rule.DoneLaneID == nil {
+			writeErr(w, badRequest{"a rule needs a prompt, a skill_id, or a done_lane_id to move the task to after an agent turn"})
+			return
+		}
+		if *rule.DoneLaneID == rule.ToLaneID {
+			writeErr(w, badRequest{"a rule moving the task after an agent turn needs a done_lane_id other than to_lane_id, the lane it watches"})
 			return
 		}
 		rule.Mode, rule.Workdir = "", ""
