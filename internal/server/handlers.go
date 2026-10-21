@@ -109,10 +109,20 @@ func (s *Server) board(w http.ResponseWriter, r *http.Request) {
 		"agent_status": agentStatus})
 }
 
+// agentMeta lists the agents a session can run on with their model suggestions.
+func agentMeta() []map[string]any {
+	out := []map[string]any{}
+	for _, a := range agent.Agents {
+		out = append(out, map[string]any{"name": a, "models": agent.ModelsFor(a)})
+	}
+	return out
+}
+
 func (s *Server) meta(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{
 		"modes":        agent.Modes,
 		"models":       agent.Models,
+		"agents":       agentMeta(),
 		"default_mode": s.app.DefaultMode,
 		"workdir":      s.app.DefaultWorkdir,
 		"kinds":        taskKinds,
@@ -836,6 +846,7 @@ type sessionInput struct {
 	Prompt         string `json:"prompt"`
 	Title          string `json:"title"`
 	Mode           string `json:"mode"`
+	Agent          string `json:"agent"` // empty: claude
 	Model          string `json:"model"`
 	Workdir        string `json:"workdir"`
 	IncludeContext bool   `json:"include_context"`
@@ -849,6 +860,9 @@ func (in *sessionInput) validate() error {
 	}
 	if strings.TrimSpace(in.Prompt) == "" {
 		return badRequest{"prompt is required"}
+	}
+	if in.Agent != "" && !slices.Contains(agent.Agents, in.Agent) {
+		return badRequest{"unknown agent"}
 	}
 	if in.Model = strings.TrimSpace(in.Model); !validModel(in.Model) {
 		return badRequest{"invalid model"}
@@ -920,7 +934,7 @@ func (s *Server) startStandaloneSession(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	sess, err := s.app.StartSessionInNewTask(r.Context(), app.StartOpts{
-		Prompt: in.Prompt, Title: in.Title, Mode: in.Mode, Model: in.Model, Workdir: in.Workdir, ProjectID: in.ProjectID,
+		Prompt: in.Prompt, Title: in.Title, Mode: in.Mode, Agent: in.Agent, Model: in.Model, Workdir: in.Workdir, ProjectID: in.ProjectID,
 	})
 	if err != nil {
 		writeErr(w, err)
@@ -958,7 +972,7 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess, err := s.app.StartSession(r.Context(), app.StartOpts{
-		TaskID: id, Prompt: prompt, Title: in.Title, Mode: in.Mode, Model: in.Model, Workdir: in.Workdir,
+		TaskID: id, Prompt: prompt, Title: in.Title, Mode: in.Mode, Agent: in.Agent, Model: in.Model, Workdir: in.Workdir,
 		DoneLaneID: in.DoneLaneID,
 	})
 	if err != nil {

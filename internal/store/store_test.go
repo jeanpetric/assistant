@@ -1116,7 +1116,7 @@ func TestRuleProjectAndSkillMigrationKeepsRules(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	n := len(migrations) - 1 // before rules had a project and a skill
+	const n = 23 // before rules had a project and a skill
 	for _, m := range migrations[:n] {
 		if _, err := db.Exec(m); err != nil {
 			t.Fatal(err)
@@ -1196,5 +1196,53 @@ func TestRulesPerProjectAndSkill(t *testing.T) {
 	}
 	if _, err := s.Rule(ctx, any.ID); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSessionAgentMigrationKeepsSessions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const n = 24 // before sessions had an agent
+	for _, m := range migrations[:n] {
+		if _, err := db.Exec(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, q := range []string{
+		fmt.Sprintf(`PRAGMA user_version = %d`, n),
+		`INSERT INTO tasks (id, title, lane_id, position, created_at, updated_at) VALUES (1, 't', 1, 0, 0, 0)`,
+		`INSERT INTO sessions (id, task_id, title, status, mode, model, claude_session_id, cost_usd, summary, created_at, updated_at)
+			VALUES (7, 1, 'work', 'idle', 'plan', 'opus', 'c-7', 1.5, 'sum', 0, 5)`,
+		`INSERT INTO messages (session_id, role, kind, content, created_at) VALUES (7, 'user', 'text', 'hi', 0)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(q, err)
+		}
+	}
+	db.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	x, err := s.Session(ctx, 7)
+	if err != nil || x.Agent != "claude" || x.Title != "work" || x.Model != "opus" || x.ClaudeSessionID != "c-7" ||
+		x.CostUSD != 1.5 || x.Summary != "sum" || x.TaskID != 1 {
+		t.Fatalf("session = %+v, %v", x, err)
+	}
+	if msgs, _ := s.Messages(ctx, 7, 0); len(msgs) != 1 {
+		t.Fatalf("messages = %+v", msgs)
+	}
+	g, err := s.CreateSession(ctx, Session{TaskID: 1, Title: "g", Mode: "plan", Agent: "gemini", Workdir: "/w"})
+	if err != nil || g.Agent != "gemini" {
+		t.Fatalf("gemini session = %+v, %v", g, err)
+	}
+	if c, _ := s.CreateSession(ctx, Session{TaskID: 1, Title: "c", Mode: "plan", Workdir: "/w"}); c.Agent != "claude" {
+		t.Fatalf("default agent = %q", c.Agent)
 	}
 }

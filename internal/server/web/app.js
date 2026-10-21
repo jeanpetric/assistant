@@ -99,6 +99,18 @@ function modelInput(value) {
   return [h('input', { value: value || '', placeholder: 'Model — CLI default', list: list.id }), list];
 }
 
+// Which CLI runs the session. Switching it swaps the model suggestions and
+// clears a model picked for the other CLI.
+const agentLabels = { claude: 'Claude Code', gemini: 'Gemini CLI' };
+function agentSelect(value, model, list) {
+  const agents = state.meta.agents || [{ name: 'claude', models: state.meta.models }];
+  const sel = select(agents.map(a => [a.name, agentLabels[a.name] || a.name]), value || 'claude');
+  const fill = () => list.replaceChildren(...(agents.find(a => a.name === sel.value)?.models || []).map(m => h('option', { value: m })));
+  sel.addEventListener('change', () => { model.value = ''; fill(); });
+  fill();
+  return sel;
+}
+
 // Working directory picked from the list in Settings; '' falls back to defaultLabel's directory.
 // A value no longer in the list stays selectable so it isn't lost silently.
 function workdirSelect(value, defaultLabel, attrs) {
@@ -833,6 +845,7 @@ function newSessionPanel(task, onStarted) {
   const prompt = h('textarea', { rows: 4, placeholder: 'What should the agent do? Skills work too, e.g. /p-dev:review 123' });
   const mode = select(modeOptions(false), state.meta.default_mode);
   const [model, modelList] = modelInput('');
+  const agentSel = agentSelect('claude', model, modelList);
   const ctx = h('input', { type: 'checkbox', checked: true });
   const ctxLabel = h('span');
   const drawContextLabel = () => {
@@ -846,7 +859,7 @@ function newSessionPanel(task, onStarted) {
   const start = async () => {
     if (!prompt.value.trim()) return;
     const s = await api('POST', `/api/tasks/${task.id}/sessions`, {
-      prompt: prompt.value, mode: mode.value, model: model.value, workdir: workdir.value, include_context: ctx.checked,
+      prompt: prompt.value, mode: mode.value, agent: agentSel.value, model: model.value, workdir: workdir.value, include_context: ctx.checked,
       done_lane_id: doneLaneValue(doneLane),
     });
     prompt.value = '';
@@ -858,6 +871,7 @@ function newSessionPanel(task, onStarted) {
     h('h3', {}, 'New agent session'),
     prompt,
     h('div', { class: 'row', style: 'margin-top:8px; flex-wrap:wrap' },
+      h('div', { class: 'grow', style: 'min-width:140px' }, agentSel),
       h('div', { class: 'grow', style: 'min-width:200px' }, mode),
       h('div', { class: 'grow', style: 'min-width:140px' }, model, modelList),
       h('div', { class: 'grow', style: 'min-width:200px' }, workdir),
@@ -1016,7 +1030,7 @@ function sessionComponent(session, messages, task) {
     const s = c.session;
     const running = s.status === 'running';
     const resumable = ['interrupted', 'cancelled', 'error'].includes(s.status);
-    const resumeCmd = s.claude_session_id ? `cd ${JSON.stringify(s.workdir)} && claude --resume ${s.claude_session_id}` : '';
+    const resumeCmd = s.claude_session_id ? `cd ${JSON.stringify(s.workdir)} && ${s.agent || 'claude'} --resume ${s.claude_session_id}` : '';
     head.replaceChildren(...[
       h('span', { class: 'title', onclick: () => c.setCollapsed(!el.classList.contains('collapsed')) }, s.title || `Session ${s.id}`),
       h('span', { class: 'badge status-' + s.status }, running ? h('span', { class: 'pulse' }) : null, s.status),
@@ -1029,6 +1043,7 @@ function sessionComponent(session, messages, task) {
           drawHead();
         },
       }, 'Dismiss') : null,
+      s.agent && s.agent !== 'claude' ? h('span', { class: 'badge' }, agentLabels[s.agent] || s.agent) : null,
       h('span', { class: 'badge' }, s.mode),
       s.model ? h('span', { class: 'badge' }, s.model) : null,
       s.trigger !== 'manual' ? h('span', { class: 'badge' }, s.trigger) : null,
@@ -1261,10 +1276,12 @@ async function sessionDialog() {
   const projectId = state.projectId;
   const where = h('p', { class: 'muted small' }, `Project ${projectName(projectId)} · ${taskWorkdir({ project_id: projectId })}`);
   const [model, modelList] = modelInput(recall('session.model'));
+  const agentSel = agentSelect(recall('session.agent'), model, modelList);
   const mode = select(modeOptions(false), recall('session.mode') || state.meta.default_mode);
   const start = async () => {
     if (!prompt.value.trim()) return;
-    const s = await api('POST', '/api/sessions', { prompt: prompt.value, project_id: projectId, model: model.value, mode: mode.value });
+    const s = await api('POST', '/api/sessions', { prompt: prompt.value, project_id: projectId, agent: agentSel.value, model: model.value, mode: mode.value });
+    remember('session.agent', agentSel.value);
     remember('session.model', model.value);
     remember('session.mode', mode.value);
     dlg.close();
@@ -1278,6 +1295,7 @@ async function sessionDialog() {
     h('p', { class: 'muted small' }, 'A new task holds the session: its title is the first line of the prompt, its description the whole prompt.'),
     where,
     h('div', { class: 'row' },
+      h('div', { class: 'grow' }, h('label', {}, 'Agent'), agentSel),
       h('div', { class: 'grow' }, h('label', {}, 'Model'), model, modelList),
       h('div', { class: 'grow' }, h('label', {}, 'Mode'), mode)),
     h('div', { class: 'dialog-actions' }, cancelButton(dlg), h('button', { onclick: start }, 'Start', hint('⌘↵'))));

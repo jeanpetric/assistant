@@ -1,5 +1,6 @@
 // Package agent runs AI coding agent turns. ClaudeRunner drives the
-// Claude Code CLI in print mode and translates its stream-json output.
+// Claude Code CLI in print mode and GeminiRunner the Gemini CLI in headless
+// mode; both translate the CLI's stream-json output into Events.
 package agent
 
 import (
@@ -58,6 +59,7 @@ type LimitWindow struct {
 }
 
 type Request struct {
+	Agent    string // which CLI runs the turn, one of Agents; empty is claude
 	Prompt   string
 	Workdir  string
 	Mode     string // claude --permission-mode value; empty uses CLI default
@@ -71,11 +73,49 @@ type Runner interface {
 	Run(ctx context.Context, req Request, emit func(Event)) error
 }
 
-// Permission modes understood by the claude CLI.
+// Agents are the CLIs a session can run on.
+const (
+	Claude = "claude"
+	Gemini = "gemini"
+)
+
+var Agents = []string{Claude, Gemini}
+
+// Permission modes, as the claude CLI names them; GeminiRunner maps them to
+// its approval modes.
 var Modes = []string{"bypassPermissions", "acceptEdits", "plan", "default"}
 
 // Models are suggestions for --model; any alias or full model name is accepted.
 var Models = []string{"opus", "sonnet", "haiku", "fable"}
+
+// GeminiModels are suggestions for the gemini CLI's --model.
+var GeminiModels = []string{"auto", "pro", "flash", "flash-lite"}
+
+// ModelsFor are the model suggestions for agent.
+func ModelsFor(agent string) []string {
+	if agent == Gemini {
+		return GeminiModels
+	}
+	return Models
+}
+
+// CanFork says whether agent can continue a session in a copy (Request.Fork).
+func CanFork(agent string) bool { return agent == "" || agent == Claude }
+
+// Runners runs each turn on the runner named by its Request.Agent.
+type Runners map[string]Runner
+
+func (rs Runners) Run(ctx context.Context, req Request, emit func(Event)) error {
+	name := req.Agent
+	if name == "" {
+		name = Claude
+	}
+	r, ok := rs[name]
+	if !ok {
+		return fmt.Errorf("unknown agent %q", name)
+	}
+	return r.Run(ctx, req, emit)
+}
 
 type ClaudeRunner struct {
 	Command   string   // defaults to "claude"
@@ -108,7 +148,17 @@ func (r ClaudeRunner) Run(ctx context.Context, req Request, emit func(Event)) er
 	if command == "" {
 		command = "claude"
 	}
-	cmd := exec.CommandContext(ctx, command, r.Args(req)...)
+	return runCLI(ctx, command, r.Args(req), req, func(line []byte) {
+		for _, ev := range ParseLine(line) {
+			emit(ev)
+		}
+	}, emit)
+}
+
+// runCLI runs command in req.Workdir with the prompt on stdin and hands each
+// non-blank stdout line to parse.
+func runCLI(ctx context.Context, command string, args []string, req Request, parse func([]byte), emit func(Event)) error {
+	cmd := exec.CommandContext(ctx, command, args...)
 	cmd.Dir = req.Workdir
 	cmd.Env = cleanEnv(os.Environ())
 	cmd.Stdin = strings.NewReader(req.Prompt)
@@ -125,9 +175,7 @@ func (r ClaudeRunner) Run(ctx context.Context, req Request, emit func(Event)) er
 	for {
 		line, err := rd.ReadBytes('\n')
 		if len(bytes.TrimSpace(line)) > 0 {
-			for _, ev := range ParseLine(line) {
-				emit(ev)
-			}
+			parse(line)
 		}
 		if err != nil {
 			if !errors.Is(err, io.EOF) {

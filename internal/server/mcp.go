@@ -305,12 +305,13 @@ func (s *Server) mcpTools() []mcpTool {
 		},
 		{
 			Name:        "start_session",
-			Description: "Start a Claude Code agent session on a task, running prompt in the task's working directory.",
+			Description: "Start an agent session (Claude Code or Gemini CLI) on a task, running prompt in the task's working directory.",
 			InputSchema: schema([]string{"task_id", "prompt"}, map[string]any{
 				"task_id": pTaskID, "prompt": prop("string", "What the agent should do"), "title": prop("string", "Session title"),
 				"include_context": prop("boolean", "Prepend the task's title, description and fields, its memories, and the results of the tasks it builds on, to the prompt"),
 				"mode":            prop("string", "Permission mode, e.g. bypassPermissions or plan (default: the app's)"),
-				"model":           prop("string", "Model, e.g. opus (default: the CLI's)"),
+				"agent":           prop("string", "CLI the session runs on: claude (default) or gemini"),
+				"model":           prop("string", "Model, e.g. opus for claude or flash for gemini (default: the CLI's)"),
 				"workdir":         pWorkdir,
 				"done_lane_id":    prop("integer", "Move the task to this lane once the agent finishes successfully"),
 			}),

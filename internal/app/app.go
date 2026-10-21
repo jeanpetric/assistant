@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -95,6 +96,7 @@ type StartOpts struct {
 	Prompt    string
 	Title     string
 	Mode      string
+	Agent     string // one of agent.Agents; empty is claude
 	Model     string
 	Workdir   string
 	Trigger   string // manual | rule:<name> | schedule:<id>
@@ -119,6 +121,12 @@ func (a *App) StartSession(ctx context.Context, o StartOpts) (store.Session, err
 	}
 	if o.Mode == "" {
 		o.Mode = a.DefaultMode
+	}
+	if o.Agent == "" {
+		o.Agent = agent.Claude
+	}
+	if !slices.Contains(agent.Agents, o.Agent) {
+		return store.Session{}, fmt.Errorf("unknown agent %q", o.Agent)
 	}
 	if o.Workdir == "" {
 		o.Workdir = task.Workdir
@@ -146,7 +154,7 @@ func (a *App) StartSession(ctx context.Context, o StartOpts) (store.Session, err
 		o.DoneLaneID = nil
 	}
 	sess, err := a.Store.CreateSession(ctx, store.Session{
-		TaskID: o.TaskID, ProjectID: o.ProjectID, Title: o.Title, Mode: o.Mode, Model: o.Model, Workdir: o.Workdir, Trigger: o.Trigger,
+		TaskID: o.TaskID, ProjectID: o.ProjectID, Title: o.Title, Mode: o.Mode, Agent: o.Agent, Model: o.Model, Workdir: o.Workdir, Trigger: o.Trigger,
 		DoneLaneID: o.DoneLaneID, ParentID: o.ParentID,
 	})
 	if err != nil {
@@ -265,7 +273,7 @@ func (a *App) Handoff(ctx context.Context, sessionID int64, note string) error {
 		if err == nil {
 			_, err = a.StartSession(bg, StartOpts{
 				TaskID: sess.TaskID, ProjectID: sess.ProjectID, Prompt: a.handoffPrompt(bg, sess, brief, note), Title: sess.Title,
-				Mode: sess.Mode, Model: sess.Model, Workdir: sess.Workdir, Trigger: "handoff",
+				Mode: sess.Mode, Agent: sess.Agent, Model: sess.Model, Workdir: sess.Workdir, Trigger: "handoff",
 				DoneLaneID: sess.DoneLaneID, ParentID: &sess.ID,
 			})
 		}
@@ -364,7 +372,7 @@ func (a *App) launch(sess store.Session, prompt, resumeID string, done func(ctx 
 	go func() {
 		defer a.wg.Done()
 		bg := context.Background()
-		req := agent.Request{Prompt: prompt, Workdir: sess.Workdir, Mode: sess.Mode, Model: sess.Model, ResumeID: resumeID}
+		req := agent.Request{Agent: sess.Agent, Prompt: prompt, Workdir: sess.Workdir, Mode: sess.Mode, Model: sess.Model, ResumeID: resumeID}
 		failed := false
 		var wait waitSigns
 		var model string // as the CLI names it
@@ -557,7 +565,8 @@ func (a *App) runSkill(ctx context.Context, sess store.Session, sk store.Skill, 
 		parts = append(parts, ArtifactNote)
 	}
 	prompt := strings.Join(append(parts, body), "\n\n")
-	if sk.Model != "" {
+	// Skills name claude's models.
+	if sk.Model != "" && sess.Agent == agent.Claude {
 		sess.Model = sk.Model // this turn only: the session keeps its model
 	}
 	return a.launch(sess, prompt, sess.ClaudeSessionID, func(ctx context.Context, status string) {

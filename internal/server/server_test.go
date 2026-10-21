@@ -1036,3 +1036,31 @@ func TestRuleProjectAndSkill(t *testing.T) {
 	c.do("POST", "/api/rules", map[string]any{"name": "r", "to_lane_id": 1, "skill_id": 999}, 400, nil)
 	c.do("POST", "/api/rules", map[string]any{"name": "r", "to_lane_id": 1, "prompt": "p", "project_id": 999}, 400, nil)
 }
+
+func TestSessionAgent(t *testing.T) {
+	c := newClient(t)
+	var meta struct {
+		Agents []struct {
+			Name   string   `json:"name"`
+			Models []string `json:"models"`
+		} `json:"agents"`
+	}
+	c.do("GET", "/api/meta", nil, 200, &meta)
+	if len(meta.Agents) != 2 || meta.Agents[0].Name != "claude" || meta.Agents[1].Name != "gemini" || meta.Agents[1].Models[0] != "auto" {
+		t.Fatalf("meta = %+v", meta)
+	}
+	var sess store.Session
+	c.do("POST", "/api/sessions", map[string]any{"prompt": "hello", "agent": "gemini", "model": "flash"}, 201, &sess)
+	c.app.Wait()
+	if sess.Agent != "gemini" || sess.Model != "flash" {
+		t.Fatalf("session = %+v", sess)
+	}
+	var onTask store.Session
+	c.do("POST", "/api/tasks/"+itoa(sess.TaskID)+"/sessions", map[string]any{"prompt": "more", "agent": "gemini"}, 201, &onTask)
+	c.do("POST", "/api/sessions", map[string]any{"prompt": "x"}, 201, &sess)
+	c.app.Wait()
+	if onTask.Agent != "gemini" || sess.Agent != "claude" {
+		t.Fatalf("task session %q, default %q", onTask.Agent, sess.Agent)
+	}
+	c.do("POST", "/api/sessions", map[string]any{"prompt": "x", "agent": "codex"}, 400, nil)
+}

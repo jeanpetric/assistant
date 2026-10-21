@@ -31,6 +31,8 @@ func main() {
 	flag.StringVar(&f.DB, "db", "", "SQLite database file (config: db)")
 	flag.StringVar(&f.Claude, "claude", "", "claude CLI binary (config: claude)")
 	flag.StringVar(&f.ClaudeArgs, "claude-args", "", "extra arguments for every claude run, space separated, e.g. \"--model opus\" (config: claude_args)")
+	flag.StringVar(&f.Gemini, "gemini", "", "gemini CLI binary (config: gemini)")
+	flag.StringVar(&f.GeminiArgs, "gemini-args", "", "extra arguments for every gemini run, space separated (config: gemini_args)")
 	flag.StringVar(&f.Workdir, "workdir", "", "default working directory for agent sessions (config: workdir)")
 	flag.StringVar(&f.Mode, "mode", "", "default permission mode: "+strings.Join(agent.Modes, ", ")+" (config: mode)")
 	flag.StringVar(&f.TrelloKey, "trello-key", "", "Trello API key (config: trello_key)")
@@ -52,6 +54,10 @@ func main() {
 			cfg.Claude = f.Claude
 		case "claude-args":
 			cfg.ClaudeArgs = f.ClaudeArgs
+		case "gemini":
+			cfg.Gemini = f.Gemini
+		case "gemini-args":
+			cfg.GeminiArgs = f.GeminiArgs
 		case "workdir":
 			cfg.Workdir = f.Workdir
 		case "mode":
@@ -79,7 +85,10 @@ func main() {
 		log.Fatal(err)
 	}
 
-	runner := agent.ClaudeRunner{Command: cfg.Claude, ExtraArgs: strings.Fields(cfg.ClaudeArgs)}
+	runner := agent.Runners{
+		agent.Claude: agent.ClaudeRunner{Command: cfg.Claude, ExtraArgs: strings.Fields(cfg.ClaudeArgs)},
+		agent.Gemini: agent.GeminiRunner{Command: cfg.Gemini, ExtraArgs: strings.Fields(cfg.GeminiArgs)},
+	}
 	a := app.New(st, runner, cfg.Workdir, cfg.Mode)
 	go a.RunScheduler(ctx, 5*time.Second)
 	if cfg.TrelloKey != "" && cfg.TrelloToken != "" {

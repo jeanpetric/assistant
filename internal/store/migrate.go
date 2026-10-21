@@ -386,6 +386,10 @@ ALTER TABLE notifications ADD COLUMN archived_at INTEGER;
 ALTER TABLE transition_rules ADD COLUMN project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE transition_rules ADD COLUMN skill_id INTEGER REFERENCES skills(id) ON DELETE CASCADE;
 `,
+	// The CLI a session runs on; sessions from before are claude's.
+	`
+ALTER TABLE sessions ADD COLUMN agent TEXT NOT NULL DEFAULT 'claude';
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

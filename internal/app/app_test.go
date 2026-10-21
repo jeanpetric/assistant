@@ -1380,3 +1380,54 @@ func TestRuleSkillWithoutSessionNotifies(t *testing.T) {
 		t.Fatalf("notifications = %+v", n)
 	}
 }
+
+// A gemini session runs every turn, its handoff included, on gemini; its
+// summary is written from the transcript since gemini cannot fork.
+func TestGeminiSession(t *testing.T) {
+	a, r := newApp(t)
+	ctx := context.Background()
+	research, _ := a.Store.CreateTask(ctx, store.Task{Title: "Research", Workdir: "/repo"})
+	a.Store.CreateTask(ctx, store.Task{Title: "Build", ContextFrom: []int64{research.ID}})
+
+	sess, err := a.StartSession(ctx, StartOpts{TaskID: research.ID, Prompt: "look", Agent: agent.Gemini, Model: "flash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Wait()
+	if got, _ := a.Store.Session(ctx, sess.ID); got.Agent != agent.Gemini || got.ClaudeSessionID != "claude-1" || got.Summary == "" {
+		t.Fatalf("session = %+v", got)
+	}
+	reqs := r.requests()
+	if len(reqs) != 2 || reqs[0].Agent != agent.Gemini || reqs[0].Model != "flash" {
+		t.Fatalf("turn = %+v", reqs)
+	}
+	if sum := reqs[1]; sum.Fork || sum.ResumeID != "" || sum.Agent != "" || sum.Model != SummaryModel {
+		t.Fatalf("summary should come from the transcript: %+v", sum)
+	}
+
+	if err := a.SendMessage(ctx, sess.ID, "more"); err != nil {
+		t.Fatal(err)
+	}
+	a.Wait()
+	if err := a.Handoff(ctx, sess.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	a.Wait()
+	for _, req := range r.requests() {
+		if req.Prompt != SummaryPrompt && !strings.HasPrefix(req.Prompt, TranscriptSummaryPrompt) && req.Agent != agent.Gemini {
+			t.Fatalf("turn not on gemini: %+v", req)
+		}
+	}
+	got, _ := a.Store.Session(ctx, sess.ID)
+	if child, _ := a.Store.Session(ctx, *got.ChildID); child.Agent != agent.Gemini || child.Model != "flash" {
+		t.Fatalf("handed-off session = %+v", child)
+	}
+
+	if _, err := a.StartSession(ctx, StartOpts{TaskID: research.ID, Prompt: "x", Agent: "codex"}); err == nil {
+		t.Fatal("unknown agent should fail")
+	}
+	if c, _ := a.StartSession(ctx, StartOpts{TaskID: research.ID, Prompt: "x"}); c.Agent != agent.Claude {
+		t.Fatalf("default agent = %q", c.Agent)
+	}
+	a.Wait()
+}

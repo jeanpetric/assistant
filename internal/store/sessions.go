@@ -23,6 +23,7 @@ type Session struct {
 	Title           string  `json:"title"`
 	Status          string  `json:"status"`
 	Mode            string  `json:"mode"`
+	Agent           string  `json:"agent"` // the CLI the session runs on, e.g. claude or gemini
 	Model           string  `json:"model"` // empty: CLI default
 	Workdir         string  `json:"workdir"`
 	Trigger         string  `json:"trigger"`
@@ -62,7 +63,7 @@ type Message struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-const sessionCols = `s.id, COALESCE(s.task_id, 0), COALESCE(t.title, ''), COALESCE(t.project_id, s.project_id, 0), s.title, s.status, s.mode, s.model, s.workdir, s.trigger, s.done_lane_id, s.parent_id,
+const sessionCols = `s.id, COALESCE(s.task_id, 0), COALESCE(t.title, ''), COALESCE(t.project_id, s.project_id, 0), s.title, s.status, s.mode, s.agent, s.model, s.workdir, s.trigger, s.done_lane_id, s.parent_id,
 	(SELECT MAX(c.id) FROM sessions c WHERE c.parent_id = s.id), s.claude_session_id, s.cost_usd, s.error, s.created_at, s.updated_at,
 	COALESCE((SELECT content FROM messages m WHERE m.session_id = s.id AND m.kind IN ('text', 'result', 'error') ORDER BY m.id DESC LIMIT 1), ''),
 	s.summary, s.summary_upto, s.summary_at, COALESCE((SELECT MAX(m.id) FROM messages m WHERE m.session_id = s.id), 0), s.needs_input, s.seen,
@@ -73,7 +74,7 @@ func scanSession(sc interface{ Scan(...any) error }) (Session, error) {
 	var created, updated int64
 	var doneLane, parent, child, summaryAt sql.NullInt64
 	var lastID int64
-	err := sc.Scan(&x.ID, &x.TaskID, &x.TaskTitle, &x.ProjectID, &x.Title, &x.Status, &x.Mode, &x.Model, &x.Workdir, &x.Trigger,
+	err := sc.Scan(&x.ID, &x.TaskID, &x.TaskTitle, &x.ProjectID, &x.Title, &x.Status, &x.Mode, &x.Agent, &x.Model, &x.Workdir, &x.Trigger,
 		&doneLane, &parent, &child, &x.ClaudeSessionID, &x.CostUSD, &x.Error, &created, &updated, &x.LastMessage,
 		&x.Summary, &x.SummaryUpto, &summaryAt, &lastID, &x.NeedsInput, &x.Seen,
 		&x.ContextTokens, &x.ContextWindow)
@@ -87,15 +88,22 @@ func scanSession(sc interface{ Scan(...any) error }) (Session, error) {
 func (s *Store) CreateSession(ctx context.Context, x Session) (Session, error) {
 	now := s.ts()
 	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO sessions (task_id, project_id, title, status, mode, model, workdir, trigger, done_lane_id, parent_id, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		sql.NullInt64{Int64: x.TaskID, Valid: x.TaskID != 0}, sql.NullInt64{Int64: x.ProjectID, Valid: x.TaskID == 0 && x.ProjectID != 0}, x.Title, StatusRunning, x.Mode, x.Model, x.Workdir, x.Trigger,
+		INSERT INTO sessions (task_id, project_id, title, status, mode, agent, model, workdir, trigger, done_lane_id, parent_id, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		sql.NullInt64{Int64: x.TaskID, Valid: x.TaskID != 0}, sql.NullInt64{Int64: x.ProjectID, Valid: x.TaskID == 0 && x.ProjectID != 0}, x.Title, StatusRunning, x.Mode, agentOrClaude(x.Agent), x.Model, x.Workdir, x.Trigger,
 		x.DoneLaneID, x.ParentID, now, now)
 	if err != nil {
 		return Session{}, err
 	}
 	id, _ := res.LastInsertId()
 	return s.Session(ctx, id)
+}
+
+func agentOrClaude(a string) string {
+	if a == "" {
+		return "claude"
+	}
+	return a
 }
 
 func (s *Store) Session(ctx context.Context, id int64) (Session, error) {

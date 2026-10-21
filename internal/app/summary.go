@@ -131,7 +131,8 @@ func (a *App) summarize(ctx context.Context, sess store.Session) error {
 	}
 	var summary string
 	var cost float64
-	if sess.ClaudeSessionID != "" {
+	// An agent that cannot fork would carry the question in the session itself.
+	if sess.ClaudeSessionID != "" && agent.CanFork(sess.Agent) {
 		summary, cost, err = a.ask(ctx, agent.Request{Prompt: SummaryPrompt, Workdir: sess.Workdir, Mode: "plan",
 			Model: sess.Model, ResumeID: sess.ClaudeSessionID, Fork: true})
 		if ctx.Err() != nil {

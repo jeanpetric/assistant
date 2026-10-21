@@ -302,7 +302,7 @@ func (a *App) askMemory(ctx context.Context, sess store.Session, m store.Memory)
 	var reply string
 	var cost float64
 	var err error
-	if sess.ClaudeSessionID != "" {
+	if sess.ClaudeSessionID != "" && agent.CanFork(sess.Agent) {
 		reply, cost, err = a.ask(ctx, agent.Request{Prompt: MemoryPrompt(m), Workdir: sess.Workdir, Mode: "plan",
 			Model: sess.Model, ResumeID: sess.ClaudeSessionID, Fork: true})
 		if ctx.Err() != nil {

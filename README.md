@@ -1,8 +1,8 @@
 # assistant
 
 A personal, local-first workflow board for an engineering manager who also writes code.
-Tasks live on a kanban board; each task can run any number of Claude Code agent
-sessions, and the **whole** transcript of every session is shown on the task page.
+Tasks live on a kanban board; each task can run any number of Claude Code or Gemini CLI
+agent sessions, and the **whole** transcript of every session is shown on the task page.
 
 One Go binary, one SQLite file, no JavaScript build step.
 
@@ -49,6 +49,10 @@ One Go binary, one SQLite file, no JavaScript build step.
   Reply to continue a session (`claude --resume`), stop it, resume one interrupted by a restart,
   or copy the resume command to continue in a terminal. Messages render as Markdown, tool calls
   fold into one collapsed group per run, and a *Working…* line shows the turn's elapsed time.
+- **Gemini sessions**: pick *Gemini CLI* as a session's agent to run it on `gemini` instead of
+  `claude`; modes map to its approval modes (autopilot is `yolo`). Gemini cannot fork a
+  conversation, so its sessions' summaries and memory updates are written by Claude from the
+  transcript; skill models apply to Claude sessions only.
 - **Standalone sessions** (`⌥P`): an agent without a task, run in the current project's
   directory; it starts in the background and shows on the *Sessions* page.
 - **Agent status** on every card and task: running, ✋ *needs you* (the turn ended with a
@@ -122,6 +126,8 @@ Settings live in `~/.assistant/config.json` (created with defaults on first run)
   "db": "~/.assistant/assistant.db",
   "claude": "claude",
   "claude_args": "",
+  "gemini": "gemini",
+  "gemini_args": "",
   "workdir": "$HOME",
   "mode": "bypassPermissions",
   "trello_key": "",
@@ -130,7 +136,7 @@ Settings live in `~/.assistant/config.json` (created with defaults on first run)
 ```
 
 Every key also has a flag that overrides the file for one run: `-port`, `-db`, `-claude`,
-`-claude-args`, `-workdir`, `-mode`, `-trello-key`, `-trello-token`, plus `-config` to point at another file. Avoid ports
+`-claude-args`, `-gemini`, `-gemini-args`, `-workdir`, `-mode`, `-trello-key`, `-trello-token`, plus `-config` to point at another file. Avoid ports
 6665–6669: browsers refuse them.
 
 Agents run with your user's permissions. The server only binds to 127.0.0.1 and rejects

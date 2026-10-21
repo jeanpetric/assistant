@@ -15,6 +15,8 @@ type Config struct {
 	DB         string `json:"db"`
 	Claude     string `json:"claude"`
 	ClaudeArgs string `json:"claude_args"`
+	Gemini     string `json:"gemini"`
+	GeminiArgs string `json:"gemini_args"`
 	Workdir    string `json:"workdir"`
 	Mode       string `json:"mode"`
 	// Trello API key and token (https://trello.com/power-ups/admin); both
@@ -28,6 +30,7 @@ func Defaults(home string) Config {
 		Port:    6767,
 		DB:      filepath.Join(home, ".assistant", "assistant.db"),
 		Claude:  "claude",
+		Gemini:  "gemini",
 		Workdir: home,
 		Mode:    "bypassPermissions",
 	}
