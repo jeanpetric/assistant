@@ -17,6 +17,9 @@ func TestRuleDialogBody(t *testing.T) {
 	}
 	start := bytes.Index(js, []byte("function ruleBody("))
 	end := bytes.Index(js, []byte("function ruleDialog("))
+	if !bytes.Contains(js[start:end], []byte("function moveToLanes(")) {
+		t.Fatal("app.js lacks moveToLanes between ruleBody and ruleDialog")
+	}
 	if start < 0 || end < start {
 		t.Fatal("app.js lacks ruleBody before ruleDialog")
 	}
@@ -32,7 +35,7 @@ func TestRuleDialogBody(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := `
-const body = eval(require('fs').readFileSync(process.argv.at(-1), 'utf8') + '; ruleBody');
+const [body, toLanes] = eval(require('fs').readFileSync(process.argv.at(-1), 'utf8') + '; [ruleBody, moveToLanes]');
 const fail = (...a) => { console.log(...a); process.exitCode = 1; };
 const v = { name: 'Review it', project: '', from: '', to: '3', action: 'move',
   prompt: '{{.Context}}', mode: 'plan', workdir: '/w', moveTo: '4', doneLane: '' };
@@ -47,6 +50,14 @@ if (b || !err) fail('no name', err);
 if (err || b.prompt !== '{{.Context}}' || b.mode !== 'plan' || b.done_lane_id !== null) fail('session', err, JSON.stringify(b));
 [b, err] = body({}, { ...v, action: '7', doneLane: '5' });
 if (err || b.skill_id !== 7 || b.prompt !== '' || b.done_lane_id !== 5) fail('skill', err, JSON.stringify(b));
+// Move to never offers To, so the dialog can't pick the lane the rule watches.
+const lanes = [{ id: 2, name: 'Todo' }, { id: 3, name: 'In progress' }, { id: 4, name: 'Review' }];
+let [opts, pick] = toLanes(lanes, '4', 4);
+if (opts.some(([id]) => id === 4) || opts.length !== 2 || pick !== 2) fail('to review', JSON.stringify(opts), pick);
+[opts, pick] = toLanes(lanes, '3', '');
+if (opts.some(([id]) => id === 3) || pick !== 4) fail('to in progress', JSON.stringify(opts), pick);
+[opts, pick] = toLanes(lanes, '3', '2');
+if (pick !== 2) fail('keep', pick);
 `
 	if out, err := exec.Command(node, "-e", script, "--", src).CombinedOutput(); err != nil || len(out) > 0 {
 		t.Fatalf("node: %v\n%s", err, out)

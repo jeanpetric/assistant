@@ -1837,6 +1837,14 @@ function ruleBody(rule, v) {
   }, null];
 }
 
+// The lanes a move rule can move its task to: any but To, the lane it watches. keep stays chosen if it can,
+// else a Review lane, else the first.
+function moveToLanes(lanes, to, keep) {
+  const opts = lanes.filter(l => String(l.id) !== String(to));
+  const pick = opts.find(l => String(l.id) === String(keep)) || opts.find(l => /review/i.test(l.name)) || opts[0];
+  return [opts.map(l => [l.id, l.name]), pick ? pick.id : ''];
+}
+
 function ruleDialog(rule, b, skills, done) {
   const lanes = b.lanes;
   // Automated sessions usually end in review, so new rules default to a Review lane if there is one.
@@ -1851,7 +1859,14 @@ function ruleDialog(rule, b, skills, done) {
   const action = select([['', 'Start a new agent session with a prompt'],
     ...skills.map(sk => [sk.id, `Run skill "${sk.name}" in the task's latest session`]),
     ['move', 'Move the task once an agent turn on it finishes']], rule.id && isMoveRule(rule) ? 'move' : rule.skill_id ?? '');
-  const moveTo = select(lanes.map(l => [l.id, l.name]), rule.done_lane_id ?? (review || lanes[0]).id);
+  const moveTo = h('select', {});
+  const fillMoveTo = () => {
+    const [opts, pick] = moveToLanes(lanes, to.value, moveTo.value || rule.done_lane_id);
+    moveTo.replaceChildren(...select(opts, pick).children);
+    moveTo.value = pick;
+  };
+  to.onchange = fillMoveTo;
+  fillMoveTo();
   const prompt = h('textarea', { rows: 6 }, rule.prompt);
   const mode = select(modeOptions(true), rule.mode);
   const workdir = workdirSelect(rule.workdir, "Task directory, else the project's, else app default");
@@ -1862,7 +1877,7 @@ function ruleDialog(rule, b, skills, done) {
     prompt,
     h('label', {}, 'Agent mode'), mode,
     h('label', {}, 'Working directory'), workdir);
-  const moveOpts = h('div', {}, h('label', {}, 'Once an agent turn on it finishes, move it to (a lane other than To; skipped if the task was moved meanwhile)'), moveTo);
+  const moveOpts = h('div', {}, h('label', {}, 'Once an agent turn on it finishes, move it from To to (skipped if the task was moved meanwhile)'), moveTo);
   const doneOpts = h('div', {}, h('label', {}, 'After the agent finishes (skipped if the task was moved meanwhile)'), doneLane);
   const showOpts = () => {
     sessionOpts.classList.toggle('hidden', !!action.value);
