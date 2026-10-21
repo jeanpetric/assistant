@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -323,6 +324,46 @@ func TestStandaloneSession(t *testing.T) {
 		t.Fatalf("a standalone session runs in its project's directory: %+v", got)
 	}
 	a.Wait()
+}
+
+// A session started in a new task that builds on others (⌥P on an open task):
+// the task links them and inherits their memories, and the first prompt starts
+// with both; without links the prompt is sent as typed.
+func TestSessionInNewTaskBuildsOn(t *testing.T) {
+	a, r := newApp(t)
+	ctx := context.Background()
+	mem, _ := a.Store.CreateMemory(ctx, store.Memory{Name: "API", Body: "- Pages hold 200 items"})
+	src, _ := a.Store.CreateTask(ctx, store.Task{Title: "Research caching", Memories: []int64{mem.ID}})
+	sess, err := a.StartSessionInNewTask(ctx, StartOpts{Prompt: "build it", ContextFrom: []int64{src.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Wait()
+	task, _ := a.Store.Task(ctx, sess.TaskID)
+	if !slices.Equal(task.ContextFrom, []int64{src.ID}) || !slices.Equal(task.Memories, []int64{mem.ID}) || task.Title != "build it" {
+		t.Fatalf("task = %+v", task)
+	}
+	prompt := r.requests()[0].Prompt
+	for _, want := range []string{MemoryIntro, SharedIntro, "## Task #" + itoa(src.ID) + ": Research caching"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt lacks %q:\n%s", want, prompt)
+		}
+	}
+	if !strings.HasSuffix(prompt, "\n\n---\n\nbuild it") || strings.Contains(prompt, "Task #"+itoa(task.ID)) {
+		t.Fatalf("the prompt ends with what was typed, without the new task's own context:\n%s", prompt)
+	}
+
+	plain, _ := a.StartSessionInNewTask(ctx, StartOpts{Prompt: "just this"})
+	a.Wait()
+	if reqs := r.requests(); reqs[len(reqs)-1].Prompt != "just this" {
+		t.Fatalf("plain prompt = %q", reqs[len(reqs)-1].Prompt)
+	}
+	if task, _ := a.Store.Task(ctx, plain.TaskID); len(task.ContextFrom) != 0 {
+		t.Fatalf("plain task = %+v", task)
+	}
+	if _, err := a.StartSessionInNewTask(ctx, StartOpts{Prompt: "x", ContextFrom: []int64{999}}); !errors.Is(err, store.ErrBadContext) {
+		t.Fatalf("unknown source: %v", err)
+	}
 }
 
 func TestMoveTaskFiresRules(t *testing.T) {

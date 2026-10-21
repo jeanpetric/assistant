@@ -335,7 +335,7 @@ func TestStaticUI(t *testing.T) {
 		// Tool calls fold into one collapsed group per run instead of one row each.
 		"appendMessage(body, m)", "h('details', { class: 'tools' }", "onclick: e => { if (e.metaKey || e.ctrlKey) location.hash = `#/task/${t.id}`; else openTaskDialog(t.id); }",
 		// Keyboard shortcuts come from one table, which the "?" dialog lists.
-		"document.addEventListener('keydown', onShortcut)", "{ keys: '⌥T', code: 'KeyT', label: 'New task', run: newTaskDialog }",
+		"document.addEventListener('keydown', onShortcut)", "{ keys: '⌥T', code: 'KeyT', label: 'New task, building on the open one'",
 		"{ keys: '⌥B', code: 'KeyB', label: 'Go to Board'", "{ keys: '?', label: 'Show these shortcuts', run: shortcutsDialog }",
 		// Shortcut hints are drawn greyed next to the controls they trigger.
 		"function hint(keys)", "drawHeaderHints();", "'Cancel', hint('Esc')", "'Create', hint('⌘↵')", "submitOnCmdEnter([title, desc, kind, project, lane, due], create)", "filter, hint('/')",
@@ -448,6 +448,21 @@ func TestStandaloneSession(t *testing.T) {
 	c.do("POST", "/api/sessions", map[string]any{"prompt": "x", "model": "--dangerously-skip"}, 400, nil)
 	c.do("POST", "/api/sessions", map[string]any{"prompt": "x", "mode": "yolo"}, 400, nil)
 	c.do("POST", "/api/sessions", map[string]any{"prompt": "x", "project_id": 999}, 400, nil)
+	c.do("POST", "/api/sessions", map[string]any{"prompt": "x", "context_from": []int64{999}}, 400, nil)
+
+	// From an open task (⌥P), the new task builds on it.
+	var linked store.Session
+	c.do("POST", "/api/sessions", map[string]any{"prompt": "follow up", "context_from": []int64{sess.TaskID}}, 201, &linked)
+	c.app.Wait()
+	var task struct {
+		BuildsOn []struct {
+			ID int64 `json:"id"`
+		} `json:"builds_on"`
+	}
+	c.do("GET", "/api/tasks/"+itoa(linked.TaskID), nil, 200, &task)
+	if len(task.BuildsOn) != 1 || task.BuildsOn[0].ID != sess.TaskID {
+		t.Fatalf("builds_on = %+v", task.BuildsOn)
+	}
 
 	var p store.Project
 	c.do("POST", "/api/projects", map[string]any{"name": "Web", "workdir": dir}, 201, &p)

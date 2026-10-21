@@ -61,3 +61,24 @@ func TestSessionsListShowsProject(t *testing.T) {
 		}
 	}
 }
+
+// ⌥T and ⌥P on an open task make the new task build on it: both dialogs start
+// their builds-on picker from it and send what is left of it as context_from.
+func TestNewTaskDialogsBuildOnOpenTask(t *testing.T) {
+	js, err := webFS.ReadFile("web/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"run: async () => newTaskDialog({ buildsOn: await shownTask() })",
+		"run: async () => sessionDialog({ buildsOn: await shownTask() })",
+		"const id = shownTaskId(location.hash, taskDialog.id);",
+		"const buildsOn = buildsOnPicker(from ? [from] : [], projectId);",
+		"mode: mode.value, context_from: buildsOn.ids() }",
+		"context_from: buildsOn.ids(), memories: memories.ids(),",
+	} {
+		if !bytes.Contains(js, []byte(want)) {
+			t.Fatalf("app.js lacks %q", want)
+		}
+	}
+}

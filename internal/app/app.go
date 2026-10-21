@@ -105,6 +105,9 @@ type StartOpts struct {
 	// (see moveWhenDone). Nil leaves the task where it is.
 	DoneLaneID *int64
 	ParentID   *int64 // the session this one continues (see Handoff)
+	// ContextFrom: the tasks StartSessionInNewTask's task builds on; the first
+	// prompt starts with their results and the memories the task inherits.
+	ContextFrom []int64
 }
 
 // StartSession creates a session, for the task if one is given, and runs its
@@ -175,7 +178,7 @@ func (a *App) StartSessionInNewTask(ctx context.Context, o StartOpts) (store.Ses
 	if strings.TrimSpace(o.Prompt) == "" {
 		return store.Session{}, errors.New("prompt is required")
 	}
-	t := store.Task{Title: firstLine(o.Prompt, 80), ProjectID: o.ProjectID}
+	t := store.Task{Title: firstLine(o.Prompt, 80), ProjectID: o.ProjectID, ContextFrom: o.ContextFrom}
 	if desc := strings.TrimSpace(o.Prompt); desc != t.Title {
 		t.Description = desc
 	}
@@ -184,6 +187,9 @@ func (a *App) StartSessionInNewTask(ctx context.Context, o StartOpts) (store.Ses
 		return store.Session{}, err
 	}
 	o.TaskID = t.ID
+	if shared := a.sharedBrief(ctx, t); shared != "" {
+		o.Prompt = shared + "\n\n---\n\n" + o.Prompt
+	}
 	sess, err := a.StartSession(ctx, o)
 	if err != nil && sess.ID == 0 {
 		_ = a.Store.DeleteTask(ctx, t.ID)
@@ -939,21 +945,31 @@ func (a *App) TaskBrief(ctx context.Context, t store.Task) string {
 	if links := LinksBrief(t); links != "" {
 		brief += "\n\n---\n\n" + links
 	}
+	if shared := a.sharedBrief(ctx, t); shared != "" {
+		brief += "\n\n---\n\n" + shared
+	}
+	return brief
+}
+
+// sharedBrief is the part of TaskBrief that comes from elsewhere: the task's
+// memories and the results of the tasks it builds on; empty if it has neither.
+func (a *App) sharedBrief(ctx context.Context, t store.Task) string {
+	var parts []string
 	if mem := a.memoryBrief(ctx, t); mem != "" {
-		brief += "\n\n---\n\n" + mem
+		parts = append(parts, mem)
 	}
-	if len(t.ContextFrom) == 0 {
-		return brief
-	}
-	var sources []string
-	for _, id := range t.ContextFrom {
-		src, err := a.Store.Task(ctx, id)
-		if err != nil {
-			continue
+	if len(t.ContextFrom) > 0 {
+		var sources []string
+		for _, id := range t.ContextFrom {
+			src, err := a.Store.Task(ctx, id)
+			if err != nil {
+				continue
+			}
+			sources = append(sources, a.taskResults(ctx, src))
 		}
-		sources = append(sources, a.taskResults(ctx, src))
+		parts = append(parts, SharedIntro+"\n\n"+strings.Join(sources, "\n\n---\n\n"))
 	}
-	return brief + "\n\n---\n\n" + SharedIntro + "\n\n" + strings.Join(sources, "\n\n---\n\n")
+	return strings.Join(parts, "\n\n---\n\n")
 }
 
 // taskResults renders one source task for TaskBrief.

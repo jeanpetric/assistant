@@ -845,15 +845,16 @@ func (s *Server) setArchived(w http.ResponseWriter, r *http.Request, fn func(con
 // ---- sessions ----
 
 type sessionInput struct {
-	Prompt         string `json:"prompt"`
-	Title          string `json:"title"`
-	Mode           string `json:"mode"`
-	Agent          string `json:"agent"` // empty: claude
-	Model          string `json:"model"`
-	Workdir        string `json:"workdir"`
-	IncludeContext bool   `json:"include_context"`
-	DoneLaneID     *int64 `json:"done_lane_id"` // task sessions only
-	ProjectID      int64  `json:"project_id"`   // standalone sessions only: runs in the project's directory
+	Prompt         string  `json:"prompt"`
+	Title          string  `json:"title"`
+	Mode           string  `json:"mode"`
+	Agent          string  `json:"agent"` // empty: claude
+	Model          string  `json:"model"`
+	Workdir        string  `json:"workdir"`
+	IncludeContext bool    `json:"include_context"`
+	DoneLaneID     *int64  `json:"done_lane_id"` // task sessions only
+	ProjectID      int64   `json:"project_id"`   // standalone sessions only: runs in the project's directory
+	ContextFrom    []int64 `json:"context_from"` // standalone sessions only: the tasks its new task builds on
 }
 
 func (in *sessionInput) validate() error {
@@ -937,6 +938,7 @@ func (s *Server) startStandaloneSession(w http.ResponseWriter, r *http.Request) 
 	}
 	sess, err := s.app.StartSessionInNewTask(r.Context(), app.StartOpts{
 		Prompt: in.Prompt, Title: in.Title, Mode: in.Mode, Agent: in.Agent, Model: in.Model, Workdir: in.Workdir, ProjectID: in.ProjectID,
+		ContextFrom: in.ContextFrom,
 	})
 	if err != nil {
 		writeErr(w, err)

@@ -1280,19 +1280,23 @@ async function renderSession(id) {
   });
 }
 
-async function sessionDialog() {
+// opts.buildsOn: the task on screen; the new task builds on it (unless
+// unlinked) and the session runs in its project.
+async function sessionDialog(opts = {}) {
   if (!state.board) await loadBoard();
+  const from = opts.buildsOn;
   const dlg = document.getElementById('dialog');
   const prompt = h('textarea', { rows: 6, placeholder: 'What should the agent do? Skills work too, e.g. /p-dev:review 123' });
   // Runs in the current project's directory, like its tasks' agents.
-  const projectId = state.projectId;
+  const projectId = from ? from.project_id : state.projectId;
+  const buildsOn = buildsOnPicker(from ? [from] : [], projectId);
   const where = h('p', { class: 'muted small' }, `Project ${projectName(projectId)} · ${taskWorkdir({ project_id: projectId })}`);
   const [model, modelList] = modelInput(recall('session.model'));
   const agentSel = agentSelect(recall('session.agent'), model, modelList);
   const mode = select(modeOptions(false), recall('session.mode') || state.meta.default_mode);
   const start = async () => {
     if (!prompt.value.trim()) return;
-    const s = await api('POST', '/api/sessions', { prompt: prompt.value, project_id: projectId, agent: agentSel.value, model: model.value, mode: mode.value });
+    const s = await api('POST', '/api/sessions', { prompt: prompt.value, project_id: projectId, agent: agentSel.value, model: model.value, mode: mode.value, context_from: buildsOn.ids() });
     remember('session.agent', agentSel.value);
     remember('session.model', model.value);
     remember('session.mode', mode.value);
@@ -1306,6 +1310,7 @@ async function sessionDialog() {
     h('label', {}, 'Prompt'), prompt,
     h('p', { class: 'muted small' }, 'A new task holds the session: its title is the first line of the prompt, its description the whole prompt.'),
     where,
+    buildsOn.el,
     h('div', { class: 'row' },
       h('div', { class: 'grow' }, h('label', {}, 'Agent'), agentSel),
       h('div', { class: 'grow' }, h('label', {}, 'Model'), model, modelList),
@@ -1903,6 +1908,7 @@ async function newTaskDialog(opts = {}) {
   const lane = select(state.board.lanes.map(l => [l.id, l.name]), state.board.lanes[0]?.id);
   const due = h('input', { type: 'datetime-local' });
   const memories = memoryPicker(title, desc);
+  const buildsOn = buildsOnPicker(from ? [from] : [], from ? from.project_id : state.projectId);
   if (opts.memory) memories.add(opts.memory);
   if (from) (await api('GET', `/api/tasks/${from.id}`)).memories.forEach(memories.add);
   const create = async () => {
@@ -1910,7 +1916,7 @@ async function newTaskDialog(opts = {}) {
     if (due.value) askNotificationPermission();
     const t = await api('POST', '/api/tasks', {
       title: title.value, description: desc.value, kind: kind.value, lane_id: Number(lane.value), due_at: fromLocalInput(due.value),
-      project_id: Number(project.value), context_from: from ? [from.id] : [], memories: memories.ids(),
+      project_id: Number(project.value), context_from: buildsOn.ids(), memories: memories.ids(),
     });
     dlg.close();
     // Back to the board, on the new task's project, where the task now shows.
@@ -1922,8 +1928,8 @@ async function newTaskDialog(opts = {}) {
   submitOnCmdEnter([title, desc, kind, project, lane, due], create);
   // replaceChildren would draw a null as the text "null", unlike h().
   dlg.replaceChildren(...[h('h2', {}, from ? 'New follow-up task' : opts.memory ? `New task on ${opts.memory.name}` : 'New task'),
-    from ? h('p', { class: 'muted small' }, `Builds on #${from.id} ${from.title}: its agents' results go into this task's agent context.`) : null,
     h('label', {}, 'Title'), title, h('label', {}, 'Description'), desc,
+    buildsOn.el,
     memories.el,
     h('label', {}, 'Project'), project,
     h('div', { class: 'row' }, h('div', { class: 'grow' }, h('label', {}, 'Kind'), kind), h('div', { class: 'grow' }, h('label', {}, 'Lane'), lane)),
@@ -1931,6 +1937,29 @@ async function newTaskDialog(opts = {}) {
     h('div', { class: 'dialog-actions' }, cancelButton(dlg), h('button', { onclick: create }, 'Create', hint('⌘↵')))].filter(Boolean));
   dlg.showModal();
   title.focus();
+}
+
+// The tasks a new task builds on: initial ones (the task on screen), removable,
+// and more picked by search. projectId is the new task's, to name other projects.
+function buildsOnPicker(initial, projectId) {
+  let picked = initial.map(t => ({ id: t.id, title: t.title }));
+  const el = h('div');
+  const search = taskSearch({
+    placeholder: 'Build on an earlier task — search any project by words or #id…',
+    exclude: x => picked.some(p => p.id === x.id),
+    note: x => [x.project_id !== projectId ? projectName(x.project_id) : null, x.archived_at ? 'archived' : null],
+    onPick: x => { picked.push({ id: x.id, title: x.title }); draw(); search.input.focus(); },
+  });
+  const draw = () => {
+    el.replaceChildren(...[
+      h('label', {}, 'Builds on — their agents\' results go into this task\'s agent context'),
+      picked.map(t => h('div', { class: 'field-row' }, h('span', { class: 'link-ref' }, `#${t.id} ${t.title}`),
+        h('button', { class: 'ghost small', title: 'Don\'t build on this task', onclick: () => { picked = picked.filter(x => x.id !== t.id); draw(); } }, '✕'))),
+      search.el,
+    ].flat());
+  };
+  draw();
+  return { el, ids: () => picked.map(t => t.id) };
 }
 
 // The memories of a new task: picked by search, or suggested from the words
@@ -2038,9 +2067,9 @@ async function toggleNotifications() {
 // browser and to the text fields' cursor keys; letters that start an accent (⌥E, ⌥I, ⌥N, ⌥U) are
 // avoided. "/" and "?" work alone outside a text field.
 const shortcuts = [
-  { keys: '⌥T', code: 'KeyT', label: 'New task', run: newTaskDialog },
+  { keys: '⌥T', code: 'KeyT', label: 'New task, building on the open one', run: async () => newTaskDialog({ buildsOn: await shownTask() }) },
   { keys: '⌥R', code: 'KeyR', label: 'Quick reminder', run: reminderDialog },
-  { keys: '⌥P', code: 'KeyP', label: 'Agent session in a new task', run: sessionDialog },
+  { keys: '⌥P', code: 'KeyP', label: 'Agent session in a new task, building on the open one', run: async () => sessionDialog({ buildsOn: await shownTask() }) },
   { keys: '⌥C', code: 'KeyC', label: 'Copy the open task\'s link', run: () => copyTaskLink(shownTaskId(location.hash, taskDialog.id)) },
   { keys: '⌥M', code: 'KeyM', label: 'Notifications', run: toggleNotifications },
   { keys: '⌥K', code: 'KeyK', label: 'Pick a project', run: projectPicker },
@@ -2069,6 +2098,12 @@ function shownTaskId(hash, dialogId) {
   if (dialogId) return dialogId;
   const m = /^#\/task\/(\d+)\b/.exec(hash);
   return m ? Number(m[1]) : 0;
+}
+
+// The task on screen (see shownTaskId), or undefined on any other page.
+async function shownTask() {
+  const id = shownTaskId(location.hash, taskDialog.id);
+  return id ? (await api('GET', `/api/tasks/${id}`)).task : undefined;
 }
 
 // The link that opens a task, e.g. http://localhost:6767/#/task/7.
