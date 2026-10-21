@@ -114,21 +114,35 @@ function recall(key) {
   try { return localStorage.getItem(key) || ''; } catch (_) { return ''; }
 }
 
-// A session collapsed to its head stays collapsed across redraws and reloads.
-function sessionCollapsed(id) {
-  return recall(`session.collapsed.${id}`) === '1';
+// A flag kept across redraws and reloads; an unset flag leaves no key behind.
+function flag(key) {
+  return recall(key) === '1';
 }
 
-function setSessionCollapsed(id, on) {
+function setFlag(key, on) {
   try {
-    if (on) localStorage.setItem(`session.collapsed.${id}`, '1');
-    else localStorage.removeItem(`session.collapsed.${id}`);
+    if (on) localStorage.setItem(key, '1');
+    else localStorage.removeItem(key);
   } catch (_) { /* storage unavailable */ }
 }
+
+// A session collapsed to its head stays collapsed across redraws and reloads.
+const sessionCollapsed = id => flag(`session.collapsed.${id}`);
+const setSessionCollapsed = (id, on) => setFlag(`session.collapsed.${id}`, on);
+
+// So does a turn folded to one line, by the id of its prompt.
+const turnCollapsed = id => flag(`turn.collapsed.${id}`);
+const setTurnCollapsed = (id, on) => setFlag(`turn.collapsed.${id}`, on);
 
 function trunc(s, n) {
   s = (s || '').replace(/\s+/g, ' ').trim();
   return s.length > n ? s.slice(0, n) + '…' : s;
+}
+
+// The one line a folded turn shows: its prompt, its tool calls and, once it finished, when.
+function turnLine(prompt, tools, end) {
+  return [trunc(prompt, 120), tools ? (tools === 1 ? '1 tool call' : `${tools} tool calls`) : '', end ? '✓ ' + end : '']
+    .filter(Boolean).join(' · ');
 }
 
 // ---------- state & routing ----------
@@ -886,18 +900,53 @@ function messageEl(m) {
 
 const isToolMsg = m => m.kind === 'tool_use' || m.kind === 'tool_result' || m.kind === 'context';
 
+// A turn is a prompt and everything up to the next prompt. It folds to one line on its own,
+// from the ▾ on the prompt, and opens again from that line.
+function turnEl(m) {
+  const turn = h('div', { class: 'turn', 'data-id': m.id });
+  turn.dataset.prompt = m.content;
+  turn.append(
+    h('div', { class: 'turn-line', title: 'Expand the turn', onclick: () => setTurn(turn, false) }),
+    h('button', { class: 'ghost small turn-toggle', title: 'Fold the turn to one line', onclick: () => setTurn(turn, true) }, '▾'),
+    messageEl(m),
+    h('div', { class: 'turn-body' }));
+  turn.classList.toggle('collapsed', turnCollapsed(m.id));
+  drawTurnLine(turn);
+  return turn;
+}
+
+function setTurn(turn, on) {
+  turn.classList.toggle('collapsed', on);
+  setTurnCollapsed(turn.dataset.id, on);
+}
+
+function drawTurnLine(turn) {
+  const line = turnLine(turn.dataset.prompt, turn.querySelectorAll('.tool-use').length, turn.dataset.end);
+  turn.firstElementChild.replaceChildren(h('span', { class: 'turn-caret' }, '▸'), line);
+}
+
 // Tool calls, their output and CLI-injected context between two messages fold into one collapsed group,
 // so a session reads as the conversation; the group keeps growing while the agent works.
+// Everything after a prompt lands in its turn, folded or not.
 function appendMessage(body, m) {
-  if (!isToolMsg(m)) { body.append(messageEl(m)); return; }
-  let group = body.lastElementChild;
-  if (!group || !group.classList.contains('tools')) {
-    group = h('details', { class: 'tools' }, h('summary', {}), h('div', { class: 'tools-body' }));
-    body.append(group);
+  if (m.role === 'user' && m.kind === 'text') { body.append(turnEl(m)); return; }
+  const turn = body.lastElementChild?.classList.contains('turn') ? body.lastElementChild : null;
+  const into = turn ? turn.lastElementChild : body;
+  if (!isToolMsg(m)) {
+    into.append(messageEl(m));
+  } else {
+    let group = into.lastElementChild;
+    if (!group || !group.classList.contains('tools')) {
+      group = h('details', { class: 'tools' }, h('summary', {}), h('div', { class: 'tools-body' }));
+      into.append(group);
+    }
+    group.lastElementChild.append(messageEl(m));
+    const n = group.querySelectorAll('.tools-body > .tool-use').length;
+    group.firstElementChild.textContent = n === 1 ? '1 tool call' : `${n} tool calls`;
   }
-  group.lastElementChild.append(messageEl(m));
-  const n = group.querySelectorAll('.tools-body > .tool-use').length;
-  group.firstElementChild.textContent = n === 1 ? '1 tool call' : `${n} tool calls`;
+  if (!turn) return;
+  if (m.kind === 'result') turn.dataset.end = fmtTime(m.created_at);
+  drawTurnLine(turn);
 }
 
 // task: the session's task, if it is shown on the task's page.
@@ -1007,6 +1056,10 @@ function sessionComponent(session, messages, task) {
         class: 'ghost small', title: 'Have the agent write a brief and continue in a new session with a fresh context',
         onclick: () => handoffDialog(s, refresh),
       }, 'Hand off') : null,
+      !el.classList.contains('collapsed') && body.querySelectorAll(':scope > .turn').length > 1 ? h('button', {
+        class: 'ghost small', title: 'Fold every turn but the last to one line',
+        onclick: () => [...body.querySelectorAll(':scope > .turn')].slice(0, -1).forEach(t => setTurn(t, true)),
+      }, 'Fold turns') : null,
       el.classList.contains('collapsed')
         ? h('button', { class: 'ghost small', title: 'Expand the session', onclick: () => c.setCollapsed(false) }, '▸')
         : h('button', { class: 'ghost small', title: 'Collapse the session to its head', onclick: () => c.setCollapsed(true) }, '▾'),
