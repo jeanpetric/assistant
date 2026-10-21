@@ -563,8 +563,10 @@ func (s *Store) MoveTask(ctx context.Context, id, laneID int64, index int) (from
 		ids = append(ids[:index], append([]int64{id}, ids[index:]...)...)
 		now := s.ts()
 		laneChanged := fromLane != laneID || archived
+		// A lane change drops the lane the task was to move to after a turn (see SetTurnLane).
 		if _, err := tx.ExecContext(ctx, `UPDATE tasks SET lane_id = ?, archived_at = NULL, updated_at = ?,
-			lane_changed_at = CASE WHEN ? THEN ? ELSE lane_changed_at END WHERE id = ?`, laneID, now, laneChanged, now, id); err != nil {
+			lane_changed_at = CASE WHEN ? THEN ? ELSE lane_changed_at END, turn_lane_id = CASE WHEN ? THEN NULL ELSE turn_lane_id END
+			WHERE id = ?`, laneID, now, laneChanged, now, laneChanged, id); err != nil {
 			return err
 		}
 		if err := renumber(ctx, tx, ids); err != nil {
@@ -580,6 +582,22 @@ func (s *Store) MoveTask(ctx context.Context, id, laneID int64, index int) (from
 		return nil
 	})
 	return fromLane, err
+}
+
+// SetTurnLane sets the lane the task moves to once an agent turn on it
+// finishes; nil keeps it where it is. Moving to another lane clears it.
+func (s *Store) SetTurnLane(ctx context.Context, taskID int64, laneID *int64) error {
+	return affected(s.db.ExecContext(ctx, `UPDATE tasks SET turn_lane_id = ? WHERE id = ?`, laneID, taskID))
+}
+
+// TurnLane returns the lane SetTurnLane set for the task, or nil.
+func (s *Store) TurnLane(ctx context.Context, taskID int64) (*int64, error) {
+	var lane sql.NullInt64
+	err := s.db.QueryRowContext(ctx, `SELECT turn_lane_id FROM tasks WHERE id = ?`, taskID).Scan(&lane)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return fromNullID(lane), err
 }
 
 // laneTaskIDs returns the board tasks of a project's lane in laneSort, without exclude.

@@ -1584,17 +1584,18 @@ async function renderSettings() {
   const laneLabel = id => id == null ? 'Any lane' : (b.lanes.find(l => l.id === id) || {}).name || '?';
   const rulesPanel = h('div', { class: 'panel' },
     h('div', { class: 'row' }, h('h2', { class: 'grow' }, 'Transition rules'), h('button', { onclick: () => ruleDialog(null, b, skills, rerender) }, '+ Add rule')),
-    h('p', { class: 'muted small' }, 'When a task moves between lanes, start an agent session automatically, or run a skill in the task\'s latest session. ' +
-      'When an agent turn on a task finishes, move the task to another lane. A project\'s rule replaces any-project rules for the same transition.'),
+    h('p', { class: 'muted small' }, 'When a task moves between lanes, start an agent session automatically, run a skill in the task\'s latest session, ' +
+      'or move the task on once an agent turn on it finishes. ' +
+      'A project\'s rule replaces any-project rules for the same transition.'),
     rules.length ? h('table', {}, h('thead', {}, h('tr', {}, ['', 'Rule', 'Project', 'Transition', 'Action', 'Mode', 'When done', ''].map(x => h('th', {}, x)))),
       h('tbody', {}, rules.map(r => h('tr', {},
         h('td', {}, h('input', { type: 'checkbox', checked: r.enabled, onchange: async e => { await api('PUT', `/api/rules/${r.id}`, { ...r, enabled: e.target.checked }); } })),
         h('td', {}, r.name),
         h('td', { class: 'small' }, r.project_id ? projectName(r.project_id) : 'Any'),
-        h('td', {}, r.trigger === 'turn' ? `Turn finished in ${laneLabel(r.from_lane_id)}` : `${laneLabel(r.from_lane_id)} → ${laneLabel(r.to_lane_id)}`),
-        h('td', { class: 'small' }, r.trigger === 'turn' ? 'Move to ' + laneLabel(r.to_lane_id) : r.skill_id ? 'Skill: ' + ((skills.find(sk => sk.id === r.skill_id) || {}).name || '?') : h('code', {}, trunc(r.prompt, 80))),
-        h('td', { class: 'muted small' }, r.skill_id || r.trigger === 'turn' ? '—' : r.mode || 'app default'),
-        h('td', { class: 'muted small' }, r.trigger === 'turn' ? '—' : r.done_lane_id ? '→ ' + laneLabel(r.done_lane_id) : 'stay'),
+        h('td', {}, `${laneLabel(r.from_lane_id)} → ${laneLabel(r.to_lane_id)}`),
+        h('td', { class: 'small' }, isMoveRule(r) ? `Move to ${laneLabel(r.done_lane_id)} after an agent turn` : r.skill_id ? 'Skill: ' + ((skills.find(sk => sk.id === r.skill_id) || {}).name || '?') : h('code', {}, trunc(r.prompt, 80))),
+        h('td', { class: 'muted small' }, r.skill_id || isMoveRule(r) ? '—' : r.mode || 'app default'),
+        h('td', { class: 'muted small' }, isMoveRule(r) ? '—' : r.done_lane_id ? '→ ' + laneLabel(r.done_lane_id) : 'stay'),
         h('td', {}, h('button', { class: 'ghost small', onclick: () => ruleDialog(r, b, skills, rerender) }, 'Edit'), ' ',
           h('button', { class: 'danger small', onclick: async () => { await api('DELETE', `/api/rules/${r.id}`); rerender(); } }, 'Delete'))))))
       : h('p', { class: 'muted' }, 'No rules yet.'));
@@ -1817,21 +1818,24 @@ function trelloPanel(b, trello, rerender) {
     }, 'Sync now')));
 }
 
+// A rule with neither prompt nor skill moves the task to its done lane once an agent turn on it finishes.
+const isMoveRule = r => !r.skill_id && !r.prompt.trim();
+
 function ruleDialog(rule, b, skills, done) {
   const lanes = b.lanes;
   // Automated sessions usually end in review, so new rules default to a Review lane if there is one.
   const review = lanes.find(l => /review/i.test(l.name));
-  rule = rule || { name: '', trigger: 'move', project_id: null, from_lane_id: null, to_lane_id: lanes[0].id, prompt: '{{.Context}}\n\n', skill_id: null,
+  rule = rule || { name: '', project_id: null, from_lane_id: null, to_lane_id: lanes[0].id, prompt: '{{.Context}}\n\n', skill_id: null,
     mode: '', workdir: '', done_lane_id: review ? review.id : null, enabled: true };
   const dlg = document.getElementById('dialog');
   const name = h('input', { value: rule.name, placeholder: 'e.g. Start coding' });
   const project = select([['', 'Any project'], ...b.projects.map(p => [p.id, p.name])], rule.project_id ?? '');
   const from = select([['', 'Any lane'], ...lanes.map(l => [l.id, l.name])], rule.from_lane_id ?? '');
   const to = select(lanes.map(l => [l.id, l.name]), rule.to_lane_id);
-  const trigger = select([['move', 'A task moves between lanes'], ['turn', 'An agent turn on a task finishes successfully']], rule.trigger || 'move');
-  const fromLabel = h('label', {}), toLabel = h('label', {});
   const action = select([['', 'Start a new agent session with a prompt'],
-    ...skills.map(sk => [sk.id, `Run skill "${sk.name}" in the task's latest session`])], rule.skill_id ?? '');
+    ...skills.map(sk => [sk.id, `Run skill "${sk.name}" in the task's latest session`]),
+    ['move', 'Move the task once an agent turn on it finishes']], rule.id && isMoveRule(rule) ? 'move' : rule.skill_id ?? '');
+  const moveTo = select(lanes.map(l => [l.id, l.name]), rule.done_lane_id ?? (review || lanes[0]).id);
   const prompt = h('textarea', { rows: 6 }, rule.prompt);
   const mode = select(modeOptions(true), rule.mode);
   const workdir = workdirSelect(rule.workdir, "Task directory, else the project's, else app default");
@@ -1842,35 +1846,33 @@ function ruleDialog(rule, b, skills, done) {
     prompt,
     h('label', {}, 'Agent mode'), mode,
     h('label', {}, 'Working directory'), workdir);
-  // A turn rule's action is the move: From is the lane the task is in, To where it goes.
-  const moveOpts = h('div', {}, h('label', {}, 'Then'), action, sessionOpts,
-    h('label', {}, 'After the agent finishes (skipped if the task was moved meanwhile)'), doneLane);
+  const moveOpts = h('div', {}, h('label', {}, 'Move to (skipped if the task was moved meanwhile)'), moveTo);
+  const doneOpts = h('div', {}, h('label', {}, 'After the agent finishes (skipped if the task was moved meanwhile)'), doneLane);
   const showOpts = () => {
-    const turn = trigger.value === 'turn';
-    fromLabel.textContent = turn ? 'Task in lane' : 'From';
-    toLabel.textContent = turn ? 'Then move it to' : 'To';
-    moveOpts.classList.toggle('hidden', turn);
     sessionOpts.classList.toggle('hidden', !!action.value);
+    moveOpts.classList.toggle('hidden', action.value !== 'move');
+    doneOpts.classList.toggle('hidden', action.value === 'move');
   };
-  trigger.onchange = action.onchange = showOpts;
+  action.onchange = showOpts;
   showOpts();
   dlg.replaceChildren(h('h2', {}, rule.id ? 'Edit rule' : 'New rule'),
     h('label', {}, 'Name'), name,
     h('label', {}, 'Tasks in project'), project,
-    h('label', {}, 'When'), trigger,
-    h('div', { class: 'row' }, h('div', { class: 'grow' }, fromLabel, from), h('div', { class: 'grow' }, toLabel, to)),
-    moveOpts,
+    h('div', { class: 'row' }, h('div', { class: 'grow' }, h('label', {}, 'From'), from), h('div', { class: 'grow' }, h('label', {}, 'To'), to)),
+    h('label', {}, 'Then'), action,
+    sessionOpts, moveOpts, doneOpts,
     h('div', { class: 'dialog-actions' },
       cancelButton(dlg),
       h('button', {
         onclick: async () => {
-          const turn = trigger.value === 'turn';
-          const skill = !turn && action.value ? Number(action.value) : null;
-          const session = !turn && !skill;
+          const move = action.value === 'move';
+          const skill = action.value && !move ? Number(action.value) : null;
+          const session = !move && !skill;
           const body = {
-            ...rule, name: name.value, trigger: trigger.value, prompt: session ? prompt.value : '', skill_id: skill, mode: session ? mode.value : '',
+            ...rule, name: name.value, prompt: session ? prompt.value : '', skill_id: skill, mode: session ? mode.value : '',
             workdir: session ? workdir.value : '', project_id: project.value ? Number(project.value) : null,
-            from_lane_id: from.value ? Number(from.value) : null, to_lane_id: Number(to.value), done_lane_id: turn ? null : doneLaneValue(doneLane),
+            from_lane_id: from.value ? Number(from.value) : null, to_lane_id: Number(to.value),
+            done_lane_id: move ? Number(moveTo.value) : doneLaneValue(doneLane),
           };
           await api(rule.id ? 'PUT' : 'POST', rule.id ? `/api/rules/${rule.id}` : '/api/rules', body);
           dlg.close();

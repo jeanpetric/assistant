@@ -1564,52 +1564,48 @@ func TestSessionPrompt(t *testing.T) {
 	}
 }
 
-func TestTurnRuleMovesTask(t *testing.T) {
+func TestMoveRuleMovesTaskAfterTurn(t *testing.T) {
 	ctx := context.Background()
-
-	t.Run("successful turn", func(t *testing.T) {
+	setup := func(t *testing.T) (*App, *fakeRunner, map[string]int64, store.Task) {
 		a, r := newApp(t)
 		lanes := lanesByName(t, a)
 		wip, review := lanes["In progress"], lanes["Review"]
-		task, _ := a.Store.CreateTask(ctx, store.Task{Title: "T", LaneID: wip})
-		a.Store.SaveRule(ctx, store.Rule{Name: "To review", Trigger: store.TriggerTurn, FromLaneID: &wip, ToLaneID: review, Enabled: true})
-		a.Store.SaveRule(ctx, store.Rule{Name: "Review", ToLaneID: review, Enabled: true, Prompt: "review"})
+		task, _ := a.Store.CreateTask(ctx, store.Task{Title: "T", LaneID: lanes["Todo"]})
+		a.Store.SaveRule(ctx, store.Rule{Name: "Then review", ToLaneID: wip, DoneLaneID: &review, Enabled: true})
+		return a, r, lanes, task
+	}
+
+	t.Run("turn after the move", func(t *testing.T) {
+		a, r, lanes, task := setup(t)
+		if started, err := a.MoveTask(ctx, task.ID, lanes["In progress"], 0); err != nil || len(started) != 0 {
+			t.Fatalf("a move rule starts nothing: %+v, %v", started, err)
+		}
+		if len(r.requests()) != 0 {
+			t.Fatal("a move rule ran an agent")
+		}
 		a.StartSession(ctx, StartOpts{TaskID: task.ID, Prompt: "p"})
 		a.Wait()
-		if got, _ := a.Store.Task(ctx, task.ID); got.LaneID != review {
-			t.Fatalf("task in lane %d, want review %d", got.LaneID, review)
-		}
-		// The move fires Review's move rule; its turn ends in Review, where no turn rule applies.
-		if reqs := r.requests(); len(reqs) != 2 || reqs[1].Prompt != "review" {
-			t.Fatalf("requests = %+v", reqs)
-		}
-		if got, _ := a.Store.Task(ctx, task.ID); got.LaneID != review {
-			t.Fatal("task left review")
+		if got, _ := a.Store.Task(ctx, task.ID); got.LaneID != lanes["Review"] {
+			t.Fatalf("task in lane %d, want review", got.LaneID)
 		}
 		n, _ := a.Store.Notifications(ctx, true)
-		if len(n) != 1 || !strings.Contains(n[0].Message, `rule "To review" moved it to Review`) {
+		if len(n) != 1 || !strings.Contains(n[0].Message, "moved to Review") {
 			t.Fatalf("notifications = %+v", n)
 		}
 	})
 
-	t.Run("other lane", func(t *testing.T) {
-		a, _ := newApp(t)
-		lanes := lanesByName(t, a)
-		wip := lanes["In progress"]
-		task, _ := a.Store.CreateTask(ctx, store.Task{Title: "T", LaneID: lanes["Todo"]})
-		a.Store.SaveRule(ctx, store.Rule{Name: "To review", Trigger: store.TriggerTurn, FromLaneID: &wip, ToLaneID: lanes["Review"], Enabled: true})
+	t.Run("not before it", func(t *testing.T) {
+		a, _, lanes, task := setup(t)
 		a.StartSession(ctx, StartOpts{TaskID: task.ID, Prompt: "p"})
 		a.Wait()
 		if got, _ := a.Store.Task(ctx, task.ID); got.LaneID != lanes["Todo"] {
-			t.Fatal("rule for another lane moved the task")
+			t.Fatal("task moved without entering the rule's lane")
 		}
 	})
 
 	t.Run("failed turn", func(t *testing.T) {
-		a, r := newApp(t)
-		lanes := lanesByName(t, a)
-		task, _ := a.Store.CreateTask(ctx, store.Task{Title: "T", LaneID: lanes["In progress"]})
-		a.Store.SaveRule(ctx, store.Rule{Name: "To review", Trigger: store.TriggerTurn, ToLaneID: lanes["Review"], Enabled: true})
+		a, r, lanes, task := setup(t)
+		a.MoveTask(ctx, task.ID, lanes["In progress"], 0)
 		r.err = errors.New("boom")
 		a.StartSession(ctx, StartOpts{TaskID: task.ID, Prompt: "p"})
 		a.Wait()
@@ -1618,31 +1614,27 @@ func TestTurnRuleMovesTask(t *testing.T) {
 		}
 	})
 
-	t.Run("moved by hand during the turn", func(t *testing.T) {
-		a, r := newApp(t)
-		lanes := lanesByName(t, a)
-		task, _ := a.Store.CreateTask(ctx, store.Task{Title: "T", LaneID: lanes["In progress"]})
-		a.Store.SaveRule(ctx, store.Rule{Name: "To review", Trigger: store.TriggerTurn, ToLaneID: lanes["Review"], Enabled: true})
+	t.Run("moved by hand meanwhile", func(t *testing.T) {
+		a, r, lanes, task := setup(t)
+		a.MoveTask(ctx, task.ID, lanes["In progress"], 0)
 		r.block = make(chan struct{})
 		a.StartSession(ctx, StartOpts{TaskID: task.ID, Prompt: "p"})
-		a.Store.MoveTask(ctx, task.ID, lanes["Done"], 0)
+		a.MoveTask(ctx, task.ID, lanes["Done"], 0)
 		close(r.block)
 		a.Wait()
 		if got, _ := a.Store.Task(ctx, task.ID); got.LaneID != lanes["Done"] {
-			t.Fatal("a manual move must win over the turn rule")
+			t.Fatal("a manual move must win")
 		}
 	})
 
 	t.Run("session's done lane wins", func(t *testing.T) {
-		a, _ := newApp(t)
-		lanes := lanesByName(t, a)
+		a, _, lanes, task := setup(t)
+		a.MoveTask(ctx, task.ID, lanes["In progress"], 0)
 		done := lanes["Done"]
-		task, _ := a.Store.CreateTask(ctx, store.Task{Title: "T", LaneID: lanes["In progress"]})
-		a.Store.SaveRule(ctx, store.Rule{Name: "To review", Trigger: store.TriggerTurn, ToLaneID: lanes["Review"], Enabled: true})
 		a.StartSession(ctx, StartOpts{TaskID: task.ID, Prompt: "p", DoneLaneID: &done})
 		a.Wait()
 		if got, _ := a.Store.Task(ctx, task.ID); got.LaneID != done {
-			t.Fatalf("task in lane %d, want done %d", got.LaneID, done)
+			t.Fatalf("task in lane %d, want done", got.LaneID)
 		}
 	})
 }

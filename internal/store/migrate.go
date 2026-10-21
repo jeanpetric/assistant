@@ -402,6 +402,20 @@ UPDATE settings SET session_prompt = '` + strings.ReplaceAll(DefaultSessionPromp
 	`
 ALTER TABLE transition_rules ADD COLUMN trigger TEXT NOT NULL DEFAULT 'move';
 `,
+	// Moving the task after an agent turn is a rule's action instead of its
+	// trigger: a rule with neither prompt nor skill marks the task arriving in
+	// its lane to move to its done lane once a turn on it finishes. A turn rule
+	// from lane X to lane Y becomes a rule into X that moves to Y; one from any
+	// lane has no lane to go into, so it is kept disabled and inert. The marked
+	// lane is kept on the task until the task moves.
+	`
+UPDATE transition_rules SET trigger = 'move', done_lane_id = to_lane_id, prompt = '', skill_id = NULL, enabled = 0
+	WHERE trigger = 'turn' AND from_lane_id IS NULL;
+UPDATE transition_rules SET to_lane_id = from_lane_id, done_lane_id = to_lane_id, from_lane_id = NULL, prompt = '', skill_id = NULL
+	WHERE trigger = 'turn';
+ALTER TABLE transition_rules DROP COLUMN trigger;
+ALTER TABLE tasks ADD COLUMN turn_lane_id INTEGER REFERENCES lanes(id) ON DELETE SET NULL;
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

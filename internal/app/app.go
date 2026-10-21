@@ -495,7 +495,7 @@ func (a *App) Limits(sessionID int64) agent.RateLimits {
 
 // afterTurn follows a successful turn: the skills whose automations match the
 // task run in the session, one turn each, then the task moves to its done lane
-// (or, without one, as a turn rule says) and, if other tasks build on it, the session's summary is written; the
+// (or, failing that, to the lane a rule set for after a turn) and, if other tasks build on it, the session's summary is written; the
 // task's memories are updated from the session.
 // A skill turn that does not finish successfully ends the chain there.
 func (a *App) afterTurn(ctx context.Context, sessionID, startLane int64) {
@@ -513,7 +513,7 @@ func (a *App) afterTurn(ctx context.Context, sessionID, startLane int64) {
 	}
 	a.runSkills(ctx, sess, skills, func(ctx context.Context) {
 		a.moveWhenDone(ctx, sessionID, startLane)
-		a.applyTurnRule(ctx, sess, startLane)
+		a.moveToTurnLane(ctx, sess)
 		a.summarizeForUsers(ctx, sess)
 		a.memorizeAfterTurn(ctx, sess)
 	})
@@ -709,35 +709,28 @@ func (a *App) moveDone(ctx context.Context, sess store.Session, startLane, doneL
 	a.Store.Notify(ctx, &taskID, fmt.Sprintf("Agent finished %q — moved to %s", sess.Title, lane.Name))
 }
 
-// applyTurnRule moves the session's task as the turn rule for its lane says.
-// It does nothing if the task left startLane during the turn, by hand or to
-// the session's done lane.
-func (a *App) applyTurnRule(ctx context.Context, sess store.Session, startLane int64) {
+// moveToTurnLane moves the session's task to the lane a rule set for after a
+// turn, if the task has not moved since (moving clears it).
+func (a *App) moveToTurnLane(ctx context.Context, sess store.Session) {
 	if sess.TaskID == 0 {
 		return
 	}
-	task, err := a.Store.Task(ctx, sess.TaskID)
-	if err != nil || task.LaneID != startLane {
+	taskID := sess.TaskID
+	lane, err := a.Store.TurnLane(ctx, taskID)
+	if err != nil || lane == nil {
 		return
 	}
-	r, err := a.Store.TurnRule(ctx, task.ProjectID, task.LaneID)
-	if err != nil {
-		log.Printf("session %d: turn rule: %v", sess.ID, err)
-	}
-	if r == nil || r.ToLaneID == task.LaneID {
+	if _, err := a.MoveTask(ctx, taskID, *lane, -1); err != nil {
+		a.Store.Notify(ctx, &taskID, fmt.Sprintf("Session %q finished but the task could not be moved: %v", sess.Title, err))
 		return
 	}
-	taskID := task.ID
-	if _, err := a.MoveTask(ctx, taskID, r.ToLaneID, -1); err != nil {
-		a.Store.Notify(ctx, &taskID, fmt.Sprintf("Rule %q: %v", r.Name, err))
-		return
-	}
-	lane, _ := a.Store.Lane(ctx, r.ToLaneID)
-	a.Store.Notify(ctx, &taskID, fmt.Sprintf("Agent finished %q — rule %q moved it to %s", sess.Title, r.Name, lane.Name))
+	l, _ := a.Store.Lane(ctx, *lane)
+	a.Store.Notify(ctx, &taskID, fmt.Sprintf("Agent finished %q — moved to %s", sess.Title, l.Name))
 }
 
 // MoveTask moves a task on the board and fires matching transition rules.
-// It returns the sessions rules started, or continue with a skill.
+// It returns the sessions rules started, or continue with a skill. A rule
+// with neither marks the task to move on once an agent turn on it finishes.
 func (a *App) MoveTask(ctx context.Context, taskID, laneID int64, index int) ([]store.Session, error) {
 	from, err := a.Store.MoveTask(ctx, taskID, laneID, index)
 	if err != nil || from == laneID {
@@ -760,6 +753,12 @@ func (a *App) MoveTask(ctx context.Context, taskID, laneID int64, index int) ([]
 	}
 	var started []store.Session
 	for _, r := range rules {
+		if r.SkillID == nil && strings.TrimSpace(r.Prompt) == "" {
+			if err := a.Store.SetTurnLane(ctx, taskID, r.DoneLaneID); err != nil {
+				a.Store.Notify(ctx, &taskID, fmt.Sprintf("Rule %q: %v", r.Name, err))
+			}
+			continue
+		}
 		if r.SkillID != nil {
 			if err := a.ruleSkill(ctx, r, latest); err != nil {
 				a.Store.Notify(ctx, &taskID, fmt.Sprintf("Rule %q: %v", r.Name, err))

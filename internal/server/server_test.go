@@ -1062,23 +1062,12 @@ func TestRuleProjectAndSkill(t *testing.T) {
 	c.do("POST", "/api/rules", map[string]any{"name": "r", "to_lane_id": 1, "prompt": "p", "skill_id": sk.ID}, 400, nil)
 	c.do("POST", "/api/rules", map[string]any{"name": "r", "to_lane_id": 1, "skill_id": 999}, 400, nil)
 	c.do("POST", "/api/rules", map[string]any{"name": "r", "to_lane_id": 1, "prompt": "p", "project_id": 999}, 400, nil)
-}
-
-func TestTurnRuleValidation(t *testing.T) {
-	c := newClient(t)
-	var rule store.Rule
-	c.do("POST", "/api/rules", map[string]any{"name": "r", "trigger": "turn", "from_lane_id": 1, "to_lane_id": 2, "mode": "plan", "enabled": true}, 200, &rule)
-	if rule.Trigger != store.TriggerTurn || *rule.FromLaneID != 1 || rule.ToLaneID != 2 || rule.Mode != "" || rule.Prompt != "" {
-		t.Fatalf("rule = %+v", rule)
+	// Neither prompt nor skill: the rule moves the task to its done lane after an agent turn.
+	c.do("POST", "/api/rules", map[string]any{"name": "r", "to_lane_id": 1, "done_lane_id": 2, "mode": "plan", "workdir": "/w"}, 200, &rule)
+	if rule.Prompt != "" || rule.SkillID != nil || *rule.DoneLaneID != 2 || rule.Mode != "" || rule.Workdir != "" {
+		t.Fatalf("move rule = %+v", rule)
 	}
-	c.do("POST", "/api/rules", map[string]any{"name": "r", "to_lane_id": 1, "prompt": "p"}, 200, &rule)
-	if rule.Trigger != store.TriggerMove {
-		t.Fatalf("default trigger = %q", rule.Trigger)
-	}
-	c.do("POST", "/api/rules", map[string]any{"name": "r", "trigger": "turn", "to_lane_id": 2, "prompt": "p"}, 400, nil)
-	c.do("POST", "/api/rules", map[string]any{"name": "r", "trigger": "turn", "to_lane_id": 2, "done_lane_id": 3}, 400, nil)
-	c.do("POST", "/api/rules", map[string]any{"name": "r", "trigger": "turn", "from_lane_id": 2, "to_lane_id": 2}, 400, nil)
-	c.do("POST", "/api/rules", map[string]any{"name": "r", "trigger": "later", "to_lane_id": 2, "prompt": "p"}, 400, nil)
+	c.do("POST", "/api/rules", map[string]any{"name": "r", "to_lane_id": 1, "done_lane_id": 1}, 400, nil)
 }
 
 func TestSessionAgent(t *testing.T) {

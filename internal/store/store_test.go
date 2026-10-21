@@ -1247,13 +1247,13 @@ func TestSessionAgentMigrationKeepsSessions(t *testing.T) {
 	}
 }
 
-func TestRuleTriggerMigrationKeepsRules(t *testing.T) {
+func TestTurnRuleMigrationMakesMoveRules(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test.db")
 	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)")
 	if err != nil {
 		t.Fatal(err)
 	}
-	const n = 26 // before rules had a trigger
+	const n = 27 // while moving after a turn was a rule's trigger
 	for _, m := range migrations[:n] {
 		if _, err := db.Exec(m); err != nil {
 			t.Fatal(err)
@@ -1261,9 +1261,11 @@ func TestRuleTriggerMigrationKeepsRules(t *testing.T) {
 	}
 	for _, q := range []string{
 		fmt.Sprintf(`PRAGMA user_version = %d`, n),
-		`INSERT INTO skills (id, name, description, body, artifact, created_at, updated_at) VALUES (5, 'Review', '', 'b', 0, 0, 0)`,
-		`INSERT INTO transition_rules (id, name, project_id, from_lane_id, to_lane_id, prompt, skill_id, mode, workdir, done_lane_id, enabled)
-			VALUES (2, 'Code', 1, 2, 3, '', 5, 'plan', '/w', 4, 0)`,
+		`INSERT INTO tasks (id, title, lane_id, position, created_at, updated_at) VALUES (1, 't', 2, 0, 0, 0)`,
+		`INSERT INTO transition_rules (id, name, trigger, project_id, from_lane_id, to_lane_id, prompt, mode, workdir, done_lane_id, enabled)
+			VALUES (1, 'Code', 'move', 1, 1, 2, 'p', 'plan', '/w', 3, 1),
+			(2, 'To review', 'turn', NULL, 2, 3, '', '', '', NULL, 1),
+			(3, 'Anywhere', 'turn', NULL, NULL, 4, '', '', '', NULL, 1)`,
 	} {
 		if _, err := db.Exec(q); err != nil {
 			t.Fatal(q, err)
@@ -1277,46 +1279,42 @@ func TestRuleTriggerMigrationKeepsRules(t *testing.T) {
 	}
 	defer s.Close()
 	ctx := context.Background()
-	r, err := s.Rule(ctx, 2)
-	if err != nil || r.Trigger != TriggerMove || r.Name != "Code" || *r.ProjectID != 1 || *r.FromLaneID != 2 || r.ToLaneID != 3 ||
-		*r.SkillID != 5 || r.Mode != "plan" || r.Workdir != "/w" || *r.DoneLaneID != 4 || r.Enabled {
-		t.Fatalf("rule = %+v, %v", r, err)
+	if r, err := s.Rule(ctx, 1); err != nil || r.Name != "Code" || *r.ProjectID != 1 || *r.FromLaneID != 1 || r.ToLaneID != 2 ||
+		r.Prompt != "p" || r.Mode != "plan" || r.Workdir != "/w" || *r.DoneLaneID != 3 || !r.Enabled {
+		t.Fatalf("move rule = %+v, %v", r, err)
+	}
+	if r, err := s.Rule(ctx, 2); err != nil || r.FromLaneID != nil || r.ToLaneID != 2 || *r.DoneLaneID != 3 || r.Prompt != "" ||
+		r.SkillID != nil || !r.Enabled {
+		t.Fatalf("turn rule from a lane = %+v, %v", r, err)
+	}
+	if r, err := s.Rule(ctx, 3); err != nil || r.ToLaneID != 4 || *r.DoneLaneID != 4 || r.Enabled {
+		t.Fatalf("turn rule from any lane = %+v, %v", r, err)
+	}
+	if task, err := s.Task(ctx, 1); err != nil || task.LaneID != 2 {
+		t.Fatalf("task = %+v, %v", task, err)
+	}
+	if lane, err := s.TurnLane(ctx, 1); err != nil || lane != nil {
+		t.Fatalf("turn lane = %v, %v", lane, err)
 	}
 }
 
-func TestTurnRules(t *testing.T) {
+func TestTurnLaneClearedByMove(t *testing.T) {
 	s := open(t)
 	ctx := context.Background()
-	p, _ := s.CreateProject(ctx, Project{Name: "Backyard"})
-	two := int64(2)
-	move, _ := s.SaveRule(ctx, Rule{Name: "move", FromLaneID: &two, ToLaneID: 3, Prompt: "p", Enabled: true})
-	if move.Trigger != TriggerMove {
-		t.Fatalf("default trigger = %q", move.Trigger)
+	task, _ := s.CreateTask(ctx, Task{Title: "t", LaneID: 1})
+	three := int64(3)
+	if err := s.SetTurnLane(ctx, task.ID, &three); err != nil {
+		t.Fatal(err)
 	}
-	if got, _ := s.TurnRule(ctx, p.ID, 2); got != nil {
-		t.Fatalf("a move rule is no turn rule: %+v", got)
+	s.MoveTask(ctx, task.ID, 1, 0) // reordering in its lane keeps it
+	if lane, _ := s.TurnLane(ctx, task.ID); lane == nil || *lane != 3 {
+		t.Fatalf("turn lane after reorder = %v", lane)
 	}
-	anyLane, _ := s.SaveRule(ctx, Rule{Name: "any lane", Trigger: TriggerTurn, ToLaneID: 4, Enabled: true})
-	inTwo, _ := s.SaveRule(ctx, Rule{Name: "in two", Trigger: TriggerTurn, FromLaneID: &two, ToLaneID: 3, Enabled: true})
-	if got, _ := s.MatchingRules(ctx, p.ID, 2, 3); len(got) != 1 || got[0].ID != move.ID {
-		t.Fatalf("turn rules fire on moves: %+v", got)
+	s.MoveTask(ctx, task.ID, 2, 0)
+	if lane, _ := s.TurnLane(ctx, task.ID); lane != nil {
+		t.Fatalf("turn lane after move = %v", *lane)
 	}
-	if got, _ := s.TurnRule(ctx, p.ID, 2); got == nil || got.ID != inTwo.ID {
-		t.Fatalf("the lane's rule should win: %+v", got)
-	}
-	if got, _ := s.TurnRule(ctx, p.ID, 1); got == nil || got.ID != anyLane.ID {
-		t.Fatalf("any lane: %+v", got)
-	}
-	mine, _ := s.SaveRule(ctx, Rule{Name: "mine", Trigger: TriggerTurn, ProjectID: &p.ID, ToLaneID: 1, Enabled: true})
-	if got, _ := s.TurnRule(ctx, p.ID, 2); got == nil || got.ID != mine.ID {
-		t.Fatalf("the project's rule should win: %+v", got)
-	}
-	if got, _ := s.TurnRule(ctx, p.ID+1, 2); got == nil || got.ID != inTwo.ID {
-		t.Fatalf("other project: %+v", got)
-	}
-	mine.Enabled = false
-	s.SaveRule(ctx, mine)
-	if got, _ := s.TurnRule(ctx, p.ID, 2); got == nil || got.ID != inTwo.ID {
-		t.Fatalf("disabled rule: %+v", got)
+	if _, err := s.TurnLane(ctx, 999); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing task: %v", err)
 	}
 }

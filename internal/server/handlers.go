@@ -1237,27 +1237,17 @@ func (s *Server) saveRule(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, badRequest{"name and to_lane_id are required"})
 		return
 	}
-	switch rule.Trigger {
-	case "", store.TriggerMove:
-		rule.Trigger = store.TriggerMove
-		if (strings.TrimSpace(rule.Prompt) == "") == (rule.SkillID == nil) {
-			writeErr(w, badRequest{"a rule needs either a prompt or a skill_id"})
-			return
-		}
-	case store.TriggerTurn:
-		// Its action is the move to to_lane_id.
-		if strings.TrimSpace(rule.Prompt) != "" || rule.SkillID != nil || rule.DoneLaneID != nil {
-			writeErr(w, badRequest{"a turn rule moves the task to to_lane_id: it takes no prompt, skill_id or done_lane_id"})
-			return
-		}
-		if rule.FromLaneID != nil && *rule.FromLaneID == rule.ToLaneID {
-			writeErr(w, badRequest{"a turn rule must move the task to another lane"})
+	switch hasPrompt := strings.TrimSpace(rule.Prompt) != ""; {
+	case hasPrompt && rule.SkillID != nil:
+		writeErr(w, badRequest{"a rule takes a prompt or a skill_id, not both"})
+		return
+	case !hasPrompt && rule.SkillID == nil:
+		// Its action is moving the task on once an agent turn on it finishes.
+		if rule.DoneLaneID == nil || *rule.DoneLaneID == rule.ToLaneID {
+			writeErr(w, badRequest{"a rule needs a prompt, a skill_id, or a done_lane_id other than to_lane_id to move the task to after an agent turn"})
 			return
 		}
 		rule.Mode, rule.Workdir = "", ""
-	default:
-		writeErr(w, badRequest{"trigger is move or turn"})
-		return
 	}
 	if !validMode(rule.Mode) {
 		writeErr(w, badRequest{"unknown mode"})
