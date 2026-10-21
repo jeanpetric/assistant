@@ -513,7 +513,7 @@ async function renderTask(id, focusSession) {
     leave: () => { location.hash = '#/board'; },
     reload: route,
   });
-  view.replaceChildren(h('div', { class: 'task-page-bar' }, page.watch), page.el);
+  view.replaceChildren(h('div', { class: 'task-page-bar' }, page.title, page.watch), page.el);
   page.focus(focusSession);
 }
 
@@ -574,6 +574,7 @@ async function openTaskDialog(id) {
   taskDialog.id = id;
   dlg.replaceChildren(
     h('div', { class: 'task-dialog-bar' },
+      page.title,
       page.watch,
       h('a', { class: 'btn ghost small', href: `#/task/${id}`, title: 'Open the task as a full page' }, '⤢ Full page'),
       h('button', { class: 'ghost small', title: 'Close (Esc)', onclick: () => dlg.close() }, '✕')),
@@ -628,6 +629,9 @@ async function taskView(id, { every, leave, reload }) {
   const due = h('input', { type: 'datetime-local', value: toLocalInput(t.due_at), onchange: () => save({ due_at: fromLocalInput(due.value) }) });
   const clearDue = h('button', { class: 'ghost small', title: 'No due time', onclick: async () => { due.value = ''; await save({ due_at: null }); } }, '✕');
 
+  // The title heads the host's top bar, left of the watch eye.
+  const title = h('input', { class: 'title-input', value: t.title, onchange: e => save({ title: e.target.value }) });
+
   // Watching a task counts it in the ⌥K picker until it reaches Done; ⌥W clicks this icon. The host puts
   // it in its top bar, beside Full page.
   const watch = h('button', {
@@ -651,7 +655,6 @@ async function taskView(id, { every, leave, reload }) {
   drawStatus(data.agent_status);
   side.append(h('div', { class: 'panel' },
     archived,
-    h('input', { class: 'title-input', value: t.title, onchange: e => save({ title: e.target.value }) }),
     agentStatus,
     h('label', {}, 'Project'),
     select(state.board.projects.map(p => [p.id, p.name]), t.project_id, {
@@ -729,6 +732,7 @@ async function taskView(id, { every, leave, reload }) {
 
   return {
     el: h('div', { class: 'task-page' }, side, main),
+    title,
     watch,
     focus: sessionId => {
       const c = sessionId && components.get(sessionId);
