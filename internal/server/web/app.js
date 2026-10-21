@@ -915,13 +915,19 @@ function messageEl(m) {
 const isToolMsg = m => m.kind === 'tool_use' || m.kind === 'tool_result' || m.kind === 'context';
 
 // A turn is a prompt and everything up to the next prompt. It folds to one line on its own,
-// from the ▾ on the prompt, and opens again from that line.
+// from the chevron on the prompt, and opens again from that line.
 function turnEl(m) {
   const turn = h('div', { class: 'turn', 'data-id': m.id });
   turn.dataset.prompt = m.content;
   turn.append(
-    h('div', { class: 'turn-line', title: 'Expand the turn', onclick: () => setTurn(turn, false) }),
-    h('button', { class: 'ghost small turn-toggle', title: 'Fold the turn to one line', onclick: () => setTurn(turn, true) }, '▾'),
+    h('div', {
+      class: 'turn-line', role: 'button', tabindex: 0, title: 'Expand the turn', 'aria-expanded': 'false',
+      onclick: () => flipTurn(turn, false),
+      onkeydown: e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); flipTurn(turn, false); } },
+    }),
+    h('button', {
+      class: 'turn-toggle', title: 'Fold the turn to one line', 'aria-label': 'Fold the turn', 'aria-expanded': 'true',
+      onclick: () => flipTurn(turn, true) }, h('span', { class: 'turn-caret' })),
     messageEl(m),
     h('div', { class: 'turn-body' }));
   turn.classList.toggle('collapsed', turnCollapsed(m.id));
@@ -934,9 +940,15 @@ function setTurn(turn, on) {
   setTurnCollapsed(turn.dataset.id, on);
 }
 
+// Folding from the turn's own control hands focus to the other one, so the keyboard isn't left on a hidden element.
+function flipTurn(turn, on) {
+  setTurn(turn, on);
+  turn.querySelector(on ? '.turn-line' : '.turn-toggle').focus({ preventScroll: true });
+}
+
 function drawTurnLine(turn) {
   const line = turnLine(turn.dataset.prompt, turn.querySelectorAll('.tool-use').length, turn.dataset.end);
-  turn.firstElementChild.replaceChildren(h('span', { class: 'turn-caret' }, '▸'), line);
+  turn.firstElementChild.replaceChildren(h('span', { class: 'turn-caret' }), line);
 }
 
 // Tool calls, their output and CLI-injected context between two messages fold into one collapsed group,

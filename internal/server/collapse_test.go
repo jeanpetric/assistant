@@ -78,8 +78,9 @@ func TestTurnCollapse(t *testing.T) {
 		"if (m.role === 'user' && m.kind === 'text') { body.append(turnEl(m)); return; }",
 		"const into = turn ? turn.lastElementChild : body;",
 		"turn.classList.toggle('collapsed', turnCollapsed(m.id));",
-		"onclick: () => setTurn(turn, false)",
-		"onclick: () => setTurn(turn, true) }, '▾')",
+		"onclick: () => flipTurn(turn, false),",
+		"onclick: () => flipTurn(turn, true) }, h('span', { class: 'turn-caret' })),",
+		"turn.querySelector(on ? '.turn-line' : '.turn-toggle').focus({ preventScroll: true });",
 		"if (m.kind === 'result') turn.dataset.end = fmtTime(m.created_at);",
 		"[...body.querySelectorAll(':scope > .turn')].slice(0, -1).forEach(t => setTurn(t, true))",
 	} {
