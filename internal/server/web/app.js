@@ -104,7 +104,7 @@ function modelInput(value) {
 const agentLabels = { claude: 'Claude Code', gemini: 'Gemini CLI' };
 function agentSelect(value, model, list) {
   const agents = state.meta.agents || [{ name: 'claude', models: state.meta.models }];
-  const sel = select(agents.map(a => [a.name, agentLabels[a.name] || a.name]), value || 'claude');
+  const sel = select(agents.map(a => [a.name, agentLabels[a.name] || a.name]), value || state.meta.default_agent || 'claude');
   const fill = () => list.replaceChildren(...(agents.find(a => a.name === sel.value)?.models || []).map(m => h('option', { value: m })));
   sel.addEventListener('change', () => { model.value = ''; fill(); });
   fill();
@@ -845,7 +845,7 @@ function newSessionPanel(task, onStarted) {
   const prompt = h('textarea', { rows: 4, placeholder: 'What should the agent do? Skills work too, e.g. /p-dev:review 123' });
   const mode = select(modeOptions(false), state.meta.default_mode);
   const [model, modelList] = modelInput('');
-  const agentSel = agentSelect('claude', model, modelList);
+  const agentSel = agentSelect('', model, modelList);
   const ctx = h('input', { type: 'checkbox', checked: true });
   const ctxLabel = h('span');
   const drawContextLabel = () => {

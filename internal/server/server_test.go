@@ -1040,13 +1040,14 @@ func TestRuleProjectAndSkill(t *testing.T) {
 func TestSessionAgent(t *testing.T) {
 	c := newClient(t)
 	var meta struct {
-		Agents []struct {
+		DefaultAgent string `json:"default_agent"`
+		Agents       []struct {
 			Name   string   `json:"name"`
 			Models []string `json:"models"`
 		} `json:"agents"`
 	}
 	c.do("GET", "/api/meta", nil, 200, &meta)
-	if len(meta.Agents) != 2 || meta.Agents[0].Name != "claude" || meta.Agents[1].Name != "gemini" || meta.Agents[1].Models[0] != "auto" {
+	if len(meta.Agents) != 2 || meta.Agents[0].Name != "claude" || meta.Agents[1].Name != "gemini" || meta.Agents[1].Models[0] != "auto" || meta.DefaultAgent != "claude" {
 		t.Fatalf("meta = %+v", meta)
 	}
 	var sess store.Session

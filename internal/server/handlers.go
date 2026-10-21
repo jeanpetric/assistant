@@ -1,6 +1,7 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -120,12 +121,13 @@ func agentMeta() []map[string]any {
 
 func (s *Server) meta(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{
-		"modes":        agent.Modes,
-		"models":       agent.Models,
-		"agents":       agentMeta(),
-		"default_mode": s.app.DefaultMode,
-		"workdir":      s.app.DefaultWorkdir,
-		"kinds":        taskKinds,
+		"modes":         agent.Modes,
+		"models":        agent.Models,
+		"agents":        agentMeta(),
+		"default_mode":  s.app.DefaultMode,
+		"default_agent": cmp.Or(s.app.DefaultAgent, agent.Claude),
+		"workdir":       s.app.DefaultWorkdir,
+		"kinds":         taskKinds,
 	})
 }
 

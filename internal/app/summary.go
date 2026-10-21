@@ -37,6 +37,17 @@ Reply with the summary only, without an introduction. Do not use any tools.`
 // conversation is summed up with the session's model.
 const SummaryModel = "haiku"
 
+// GeminiSummaryModel does the same for gemini sessions, so they need no claude.
+const GeminiSummaryModel = "flash"
+
+// transcriptModel is the model that reads a session's transcript, on the session's agent.
+func transcriptModel(agentName string) string {
+	if agentName == agent.Gemini {
+		return GeminiSummaryModel
+	}
+	return SummaryModel
+}
+
 // maxTranscriptRunes bounds the transcript sent for a summary; the middle of a
 // longer one is left out.
 const maxTranscriptRunes = 150000
@@ -149,7 +160,7 @@ func (a *App) summarize(ctx context.Context, sess store.Session) error {
 		}
 		var c float64
 		summary, c, err = a.ask(ctx, agent.Request{Prompt: TranscriptSummaryPrompt + "\n\n<transcript>\n" + transcript(msgs, upto) + "</transcript>",
-			Workdir: a.DefaultWorkdir, Mode: "plan", Model: SummaryModel})
+			Agent: sess.Agent, Workdir: a.DefaultWorkdir, Mode: "plan", Model: transcriptModel(sess.Agent)})
 		cost += c
 		if err != nil {
 			return err

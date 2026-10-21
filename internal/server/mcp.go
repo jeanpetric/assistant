@@ -310,7 +310,7 @@ func (s *Server) mcpTools() []mcpTool {
 				"task_id": pTaskID, "prompt": prop("string", "What the agent should do"), "title": prop("string", "Session title"),
 				"include_context": prop("boolean", "Prepend the task's title, description and fields, its memories, and the results of the tasks it builds on, to the prompt"),
 				"mode":            prop("string", "Permission mode, e.g. bypassPermissions or plan (default: the app's)"),
-				"agent":           prop("string", "CLI the session runs on: claude (default) or gemini"),
+				"agent":           prop("string", "CLI the session runs on: claude or gemini (default: the app's)"),
 				"model":           prop("string", "Model, e.g. opus for claude or flash for gemini (default: the CLI's)"),
 				"workdir":         pWorkdir,
 				"done_lane_id":    prop("integer", "Move the task to this lane once the agent finishes successfully"),

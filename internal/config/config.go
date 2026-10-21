@@ -18,7 +18,9 @@ type Config struct {
 	Gemini     string `json:"gemini"`
 	GeminiArgs string `json:"gemini_args"`
 	Workdir    string `json:"workdir"`
-	Mode       string `json:"mode"`
+	// Agent runs sessions that name none: claude or gemini.
+	Agent string `json:"agent"`
+	Mode  string `json:"mode"`
 	// Trello API key and token (https://trello.com/power-ups/admin); both
 	// set turns the Trello sync on.
 	TrelloKey   string `json:"trello_key"`
@@ -32,6 +34,7 @@ func Defaults(home string) Config {
 		Claude:  "claude",
 		Gemini:  "gemini",
 		Workdir: home,
+		Agent:   "claude",
 		Mode:    "bypassPermissions",
 	}
 }

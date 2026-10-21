@@ -326,7 +326,7 @@ func (a *App) askMemory(ctx context.Context, sess store.Session, m store.Memory)
 		}
 		var c float64
 		reply, c, err = a.ask(ctx, agent.Request{Prompt: TranscriptMemoryPrompt(m, transcript(msgs, upto)),
-			Workdir: a.DefaultWorkdir, Mode: "plan", Model: SummaryModel})
+			Agent: sess.Agent, Workdir: a.DefaultWorkdir, Mode: "plan", Model: transcriptModel(sess.Agent)})
 		cost += c
 		if err != nil {
 			return "", cost, err

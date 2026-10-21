@@ -35,6 +35,7 @@ type App struct {
 	Runner         agent.Runner
 	DefaultWorkdir string
 	DefaultMode    string
+	DefaultAgent   string // for sessions that name none, rules' and schedules' too; empty is claude
 	Now            func() time.Time
 
 	mu       sync.Mutex
@@ -121,6 +122,9 @@ func (a *App) StartSession(ctx context.Context, o StartOpts) (store.Session, err
 	}
 	if o.Mode == "" {
 		o.Mode = a.DefaultMode
+	}
+	if o.Agent == "" {
+		o.Agent = a.DefaultAgent
 	}
 	if o.Agent == "" {
 		o.Agent = agent.Claude

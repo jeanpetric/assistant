@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -34,6 +35,7 @@ func main() {
 	flag.StringVar(&f.Gemini, "gemini", "", "gemini CLI binary (config: gemini)")
 	flag.StringVar(&f.GeminiArgs, "gemini-args", "", "extra arguments for every gemini run, space separated (config: gemini_args)")
 	flag.StringVar(&f.Workdir, "workdir", "", "default working directory for agent sessions (config: workdir)")
+	flag.StringVar(&f.Agent, "agent", "", "default agent for new sessions: "+strings.Join(agent.Agents, ", ")+" (config: agent)")
 	flag.StringVar(&f.Mode, "mode", "", "default permission mode: "+strings.Join(agent.Modes, ", ")+" (config: mode)")
 	flag.StringVar(&f.TrelloKey, "trello-key", "", "Trello API key (config: trello_key)")
 	flag.StringVar(&f.TrelloToken, "trello-token", "", "Trello API token (config: trello_token)")
@@ -60,6 +62,8 @@ func main() {
 			cfg.GeminiArgs = f.GeminiArgs
 		case "workdir":
 			cfg.Workdir = f.Workdir
+		case "agent":
+			cfg.Agent = f.Agent
 		case "mode":
 			cfg.Mode = f.Mode
 		case "trello-key":
@@ -89,7 +93,11 @@ func main() {
 		agent.Claude: agent.ClaudeRunner{Command: cfg.Claude, ExtraArgs: strings.Fields(cfg.ClaudeArgs)},
 		agent.Gemini: agent.GeminiRunner{Command: cfg.Gemini, ExtraArgs: strings.Fields(cfg.GeminiArgs)},
 	}
+	if cfg.Agent != "" && !slices.Contains(agent.Agents, cfg.Agent) {
+		log.Fatalf("unknown agent %q: want one of %s", cfg.Agent, strings.Join(agent.Agents, ", "))
+	}
 	a := app.New(st, runner, cfg.Workdir, cfg.Mode)
+	a.DefaultAgent = cfg.Agent
 	go a.RunScheduler(ctx, 5*time.Second)
 	if cfg.TrelloKey != "" && cfg.TrelloToken != "" {
 		a.Trello = &trello.Client{Key: cfg.TrelloKey, Token: cfg.TrelloToken}
