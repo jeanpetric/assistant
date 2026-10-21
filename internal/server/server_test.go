@@ -620,6 +620,22 @@ func TestArchive(t *testing.T) {
 	if set.SessionPrompt != "In {{.Project.Name}}" {
 		t.Fatalf("session prompt = %q", set.SessionPrompt)
 	}
+	// New sessions' tasks start In progress; a save leaving the lane out keeps it, null means the first lane.
+	if set.SessionLaneID == nil || *set.SessionLaneID != lane["In progress"] {
+		t.Fatalf("default session lane = %v", set.SessionLaneID)
+	}
+	c.do("PUT", "/api/settings", map[string]any{"archive_after_minutes": 5, "session_lane_id": lane["Review"]}, 200, nil)
+	c.do("PUT", "/api/settings", map[string]any{"archive_after_minutes": 5}, 200, nil)
+	c.do("PUT", "/api/settings", map[string]any{"archive_after_minutes": 5, "session_lane_id": 999}, 400, nil)
+	c.do("PUT", "/api/settings", map[string]any{"archive_after_minutes": 5, "session_lane_id": "x"}, 400, nil)
+	c.do("GET", "/api/settings", nil, 200, &set)
+	if set.SessionLaneID == nil || *set.SessionLaneID != lane["Review"] {
+		t.Fatalf("kept session lane = %v", set.SessionLaneID)
+	}
+	c.do("PUT", "/api/settings", map[string]any{"archive_after_minutes": 5, "session_lane_id": nil}, 200, &set)
+	if set.SessionLaneID != nil {
+		t.Fatalf("cleared session lane = %v", *set.SessionLaneID)
+	}
 	c.do("PUT", "/api/settings", map[string]any{"archive_after_minutes": 0, "workdirs": []string{}}, 200, &set)
 	if set.Workdirs == nil || len(set.Workdirs) != 0 {
 		t.Fatalf("cleared workdirs = %v", set.Workdirs)

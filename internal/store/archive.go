@@ -19,6 +19,9 @@ type Settings struct {
 	// SessionPrompt is a template appended to every agent turn's system
 	// prompt (see app.SessionPromptData); empty sends nothing.
 	SessionPrompt string `json:"session_prompt"`
+	// SessionLaneID is the lane a task made for a new agent session starts
+	// in; nil means the first lane.
+	SessionLaneID *int64 `json:"session_lane_id"`
 }
 
 // DefaultSessionPrompt tells an agent it runs inside the app, so "add a task"
@@ -30,14 +33,15 @@ const DefaultSessionPrompt = `You are running as a session of the "assistant" ap
 
 func (s *Store) Settings(ctx context.Context) (Settings, error) {
 	var x Settings
-	var lane sql.NullInt64
+	var lane, sessionLane sql.NullInt64
 	var dirs string
-	err := s.db.QueryRowContext(ctx, `SELECT archive_lane_id, archive_after_minutes, workdirs, session_prompt FROM settings WHERE id = 1`).
-		Scan(&lane, &x.ArchiveAfterMinutes, &dirs, &x.SessionPrompt)
+	err := s.db.QueryRowContext(ctx, `SELECT archive_lane_id, archive_after_minutes, workdirs, session_prompt, session_lane_id FROM settings WHERE id = 1`).
+		Scan(&lane, &x.ArchiveAfterMinutes, &dirs, &x.SessionPrompt, &sessionLane)
 	if err != nil {
 		return x, err
 	}
 	x.ArchiveLaneID = fromNullID(lane)
+	x.SessionLaneID = fromNullID(sessionLane)
 	x.Workdirs = []string{}
 	return x, json.Unmarshal([]byte(dirs), &x.Workdirs)
 }
@@ -47,8 +51,8 @@ func (s *Store) SaveSettings(ctx context.Context, x Settings) error {
 		x.Workdirs = []string{}
 	}
 	dirs, _ := json.Marshal(x.Workdirs)
-	return affected(s.db.ExecContext(ctx, `UPDATE settings SET archive_lane_id = ?, archive_after_minutes = ?, workdirs = ?, session_prompt = ? WHERE id = 1`,
-		x.ArchiveLaneID, x.ArchiveAfterMinutes, string(dirs), x.SessionPrompt))
+	return affected(s.db.ExecContext(ctx, `UPDATE settings SET archive_lane_id = ?, archive_after_minutes = ?, workdirs = ?, session_prompt = ?, session_lane_id = ? WHERE id = 1`,
+		x.ArchiveLaneID, x.ArchiveAfterMinutes, string(dirs), x.SessionPrompt, x.SessionLaneID))
 }
 
 // ArchiveTask takes the task off the board; it keeps its lane. Archiving an

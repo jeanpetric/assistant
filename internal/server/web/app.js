@@ -1601,7 +1601,7 @@ async function renderSettings() {
       : h('p', { class: 'muted' }, 'No rules yet.'));
 
   view.replaceChildren(h('div', { style: 'max-width:900px' }, projects, lanes, workdirsPanel(settings.workdirs, rerender), rulesPanel,
-    skillsPanel(skills, b, rerender), sessionPromptPanel(settings), archivePanel(b.lanes, settings), trelloPanel(b, trello, rerender), fields));
+    skillsPanel(skills, b, rerender), sessionPromptPanel(settings), sessionLanePanel(b.lanes, settings), archivePanel(b.lanes, settings), trelloPanel(b, trello, rerender), fields));
 }
 
 // ---------- skills ----------
@@ -1745,6 +1745,19 @@ function sessionPromptPanel(settings) {
     h('p', { class: 'muted small' }, 'Added to the system prompt of every agent turn, so a session in another repo still knows it runs for this app. ' +
       'Template fields: {{.Project.Name}}, {{.Project.ID}}, {{.Task.ID}}, {{.Task.Title}}, {{.Session.ID}}, {{.Session.Workdir}}. Empty sends nothing.'),
     text, h('div', { class: 'row', style: 'margin-top:6px' }, h('button', { onclick: save }, 'Save')));
+}
+
+// The lane a task made for a new agent session (⌥P) starts in.
+function sessionLanePanel(lanes, settings) {
+  const lane = select([['', `First lane (${lanes[0]?.name ?? ''})`], ...lanes.map(l => [l.id, l.name])], settings.session_lane_id ?? '', {
+    onchange: async () => {
+      await api('PUT', '/api/settings', { ...await api('GET', '/api/settings'), session_lane_id: lane.value ? Number(lane.value) : null });
+      toast('Saved');
+    },
+  });
+  return h('div', { class: 'panel' }, h('h2', {}, 'New sessions'),
+    h('p', { class: 'muted small' }, 'A new agent session (⌥P) gets a task of its own; the task starts in this lane.'),
+    h('label', {}, 'Lane'), lane);
 }
 
 // Auto-archive: which lane, and how long a task stays there first.

@@ -145,7 +145,8 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		store.Settings
-		SessionPrompt *string `json:"session_prompt"`
+		SessionPrompt *string         `json:"session_prompt"`
+		SessionLaneID json.RawMessage `json:"session_lane_id"`
 	}
 	if err := decode(r, &in); err != nil {
 		writeErr(w, err)
@@ -173,6 +174,19 @@ func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) {
 	if err := s.checkLane(r.Context(), x.ArchiveLaneID, "archive_lane_id"); err != nil {
 		writeErr(w, err)
 		return
+	}
+	// Leaving session_lane_id out keeps the saved lane; null means the first lane.
+	x.SessionLaneID = cur.SessionLaneID
+	if in.SessionLaneID != nil {
+		x.SessionLaneID = nil
+		if err := json.Unmarshal(in.SessionLaneID, &x.SessionLaneID); err != nil {
+			writeErr(w, badRequest{"session_lane_id: " + err.Error()})
+			return
+		}
+		if err := s.checkLane(r.Context(), x.SessionLaneID, "session_lane_id"); err != nil {
+			writeErr(w, err)
+			return
+		}
 	}
 	// Leaving workdirs out keeps the saved list.
 	if x.Workdirs == nil {

@@ -416,6 +416,12 @@ UPDATE transition_rules SET to_lane_id = from_lane_id, done_lane_id = to_lane_id
 ALTER TABLE transition_rules DROP COLUMN trigger;
 ALTER TABLE tasks ADD COLUMN turn_lane_id INTEGER REFERENCES lanes(id) ON DELETE SET NULL;
 `,
+	// The lane a task made for a new agent session (⌥P) starts in; null means
+	// the first lane. Starts as the lane named In progress.
+	`
+ALTER TABLE settings ADD COLUMN session_lane_id INTEGER REFERENCES lanes(id) ON DELETE SET NULL;
+UPDATE settings SET session_lane_id = (SELECT id FROM lanes WHERE lower(name) = 'in progress' ORDER BY position, id LIMIT 1);
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

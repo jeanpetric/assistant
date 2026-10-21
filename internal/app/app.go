@@ -171,8 +171,8 @@ func (a *App) StartSession(ctx context.Context, o StartOpts) (store.Session, err
 	return sess, a.launch(sess, o.Prompt, "", nil)
 }
 
-// StartSessionInNewTask creates a task for the prompt in o.ProjectID's first
-// lane and starts the session on it, so no session is left without a task. The
+// StartSessionInNewTask creates a task for the prompt in o.ProjectID, in the
+// lane set for new sessions (the first lane if none), and starts the session on it, so no session is left without a task. The
 // task's title is the prompt's first line; its description is the whole
 // prompt unless that is the title already.
 func (a *App) StartSessionInNewTask(ctx context.Context, o StartOpts) (store.Session, error) {
@@ -180,10 +180,17 @@ func (a *App) StartSessionInNewTask(ctx context.Context, o StartOpts) (store.Ses
 		return store.Session{}, errors.New("prompt is required")
 	}
 	t := store.Task{Title: firstLine(o.Prompt, 80), ProjectID: o.ProjectID, ContextFrom: o.ContextFrom}
+	set, err := a.Store.Settings(ctx)
+	if err != nil {
+		return store.Session{}, err
+	}
+	if set.SessionLaneID != nil {
+		t.LaneID = *set.SessionLaneID
+	}
 	if desc := strings.TrimSpace(o.Prompt); desc != t.Title {
 		t.Description = desc
 	}
-	t, err := a.Store.CreateTask(ctx, t)
+	t, err = a.Store.CreateTask(ctx, t)
 	if err != nil {
 		return store.Session{}, err
 	}

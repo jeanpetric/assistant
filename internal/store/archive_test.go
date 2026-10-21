@@ -311,3 +311,45 @@ func TestSessionPromptMigrationKeepsSettings(t *testing.T) {
 		t.Fatalf("task = %+v, %v", task, err)
 	}
 }
+
+// Upgrading points new sessions at the lane named In progress, wherever it
+// is, and keeps the other settings.
+func TestSessionLaneMigration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := len(migrations) - 1 // migrations before the session lane
+	for _, m := range migrations[:n] {
+		if _, err := db.Exec(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, q := range []string{
+		fmt.Sprintf(`PRAGMA user_version = %d`, n),
+		`DELETE FROM lanes WHERE name = 'Backlog'`,
+		`UPDATE lanes SET name = 'IN PROGRESS' WHERE id = 3`,
+		`UPDATE settings SET archive_after_minutes = 42, session_prompt = 'mine'`,
+		`INSERT INTO tasks (id, title, lane_id, position, created_at, updated_at) VALUES (1, 'kept', 3, 0, 0, 0)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(q, err)
+		}
+	}
+	db.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	x, err := s.Settings(ctx)
+	if err != nil || x.SessionLaneID == nil || *x.SessionLaneID != 3 || x.ArchiveAfterMinutes != 42 || x.SessionPrompt != "mine" {
+		t.Fatalf("settings = %+v, %v", x, err)
+	}
+	if task, err := s.Task(ctx, 1); err != nil || task.Title != "kept" || task.LaneID != 3 {
+		t.Fatalf("task = %+v, %v", task, err)
+	}
+}

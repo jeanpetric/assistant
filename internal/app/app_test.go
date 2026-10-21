@@ -367,6 +367,32 @@ func TestSessionInNewTaskBuildsOn(t *testing.T) {
 	}
 }
 
+// A new session's task starts in the lane set for new sessions (In progress
+// by default), or the first lane when none is set.
+func TestSessionInNewTaskLane(t *testing.T) {
+	a, _ := newApp(t)
+	ctx := context.Background()
+	lanes := lanesByName(t, a)
+	sess, err := a.StartSessionInNewTask(ctx, StartOpts{Prompt: "go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Wait()
+	if task, _ := a.Store.Task(ctx, sess.TaskID); task.LaneID != lanes["In progress"] {
+		t.Fatalf("lane = %d, want In progress (%d)", task.LaneID, lanes["In progress"])
+	}
+	set, _ := a.Store.Settings(ctx)
+	set.SessionLaneID = nil
+	if err := a.Store.SaveSettings(ctx, set); err != nil {
+		t.Fatal(err)
+	}
+	sess, _ = a.StartSessionInNewTask(ctx, StartOpts{Prompt: "go"})
+	a.Wait()
+	if task, _ := a.Store.Task(ctx, sess.TaskID); task.LaneID != lanes["Backlog"] {
+		t.Fatalf("lane = %d, want the first lane (%d)", task.LaneID, lanes["Backlog"])
+	}
+}
+
 func TestMoveTaskFiresRules(t *testing.T) {
 	a, r := newApp(t)
 	ctx := context.Background()
