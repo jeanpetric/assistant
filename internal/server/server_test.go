@@ -608,6 +608,18 @@ func TestArchive(t *testing.T) {
 	if len(set.Workdirs) != 2 || set.ArchiveAfterMinutes != 5 {
 		t.Fatalf("after save without workdirs = %+v", set)
 	}
+
+	// The session prompt is kept when a save leaves it out and must be a valid template.
+	if set.SessionPrompt != store.DefaultSessionPrompt {
+		t.Fatalf("default session prompt = %q", set.SessionPrompt)
+	}
+	c.do("PUT", "/api/settings", map[string]any{"archive_after_minutes": 5, "session_prompt": "In {{.Project.Name}}"}, 200, &set)
+	c.do("PUT", "/api/settings", map[string]any{"archive_after_minutes": 5}, 200, nil)
+	c.do("PUT", "/api/settings", map[string]any{"archive_after_minutes": 5, "session_prompt": "{{.Project.Name"}, 400, nil)
+	c.do("GET", "/api/settings", nil, 200, &set)
+	if set.SessionPrompt != "In {{.Project.Name}}" {
+		t.Fatalf("session prompt = %q", set.SessionPrompt)
+	}
 	c.do("PUT", "/api/settings", map[string]any{"archive_after_minutes": 0, "workdirs": []string{}}, 200, &set)
 	if set.Workdirs == nil || len(set.Workdirs) != 0 {
 		t.Fatalf("cleared workdirs = %v", set.Workdirs)

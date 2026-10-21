@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -1509,4 +1510,56 @@ func TestGeminiAsDefaultAgent(t *testing.T) {
 		t.Fatalf("an explicit agent wins: %q", c.Agent)
 	}
 	a.Wait()
+}
+
+// Every turn carries the settings' session prompt, rendered for the session's
+// project and task, so an agent working in another repo knows its app.
+func TestSessionPrompt(t *testing.T) {
+	a, r := newApp(t)
+	ctx := context.Background()
+	p, _ := a.Store.CreateProject(ctx, store.Project{Name: "Fantastica", Workdir: "/fantastica"})
+	task, _ := a.Store.CreateTask(ctx, store.Task{Title: "Ship it", ProjectID: p.ID})
+	set, _ := a.Store.Settings(ctx)
+	if !strings.Contains(set.SessionPrompt, "{{.Project.ID}}") {
+		t.Fatalf("default session prompt = %q", set.SessionPrompt)
+	}
+	set.SessionPrompt = "Project {{.Project.Name}} ({{.Project.ID}}){{if .Task.ID}}, task #{{.Task.ID}} {{.Task.Title}}{{end}}, session #{{.Session.ID}} in {{.Session.Workdir}}"
+	a.Store.SaveSettings(ctx, set)
+
+	sess, err := a.StartSession(ctx, StartOpts{TaskID: task.ID, Prompt: "go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Wait()
+	a.Store.UpdateProject(ctx, store.Project{ID: p.ID, Name: "Fantastica 2", Workdir: "/fantastica"})
+	a.SendMessage(ctx, sess.ID, "more")
+	a.Wait()
+	standalone, _ := a.StartSession(ctx, StartOpts{Prompt: "hi", Workdir: "/x"})
+	a.Wait()
+	set.SessionPrompt = "  "
+	a.Store.SaveSettings(ctx, set)
+	a.StartSession(ctx, StartOpts{Prompt: "quiet"})
+	a.Wait()
+
+	reqs := r.requests()
+	want := []string{
+		fmt.Sprintf("Project Fantastica (%d), task #%d Ship it, session #%d in /fantastica", p.ID, task.ID, sess.ID),
+		// Rendered each turn, so a rename shows on the next one.
+		fmt.Sprintf("Project Fantastica 2 (%d), task #%d Ship it, session #%d in /fantastica", p.ID, task.ID, sess.ID),
+		// No project: the first one, where tasks go by default.
+		fmt.Sprintf("Project Assistant (1), session #%d in /x", standalone.ID),
+		"",
+	}
+	if len(reqs) != len(want) {
+		t.Fatalf("requests = %+v", reqs)
+	}
+	for i, w := range want {
+		if reqs[i].SystemPrompt != w {
+			t.Errorf("turn %d system prompt = %q, want %q", i, reqs[i].SystemPrompt, w)
+		}
+	}
+	// The transcript shows what the user sent, not the system prompt.
+	if msgs, _ := a.Store.Messages(ctx, sess.ID, 0); msgs[0].Content != "go" {
+		t.Fatalf("first message = %q", msgs[0].Content)
+	}
 }

@@ -66,6 +66,8 @@ type Request struct {
 	Model    string // claude --model value; empty uses CLI default
 	ResumeID string // continue an existing claude session
 	Fork     bool   // with ResumeID: continue in a copy, leaving that session as it was
+	// SystemPrompt is added to the CLI's own system prompt for this turn.
+	SystemPrompt string
 }
 
 type Runner interface {
@@ -134,6 +136,9 @@ func (r ClaudeRunner) Args(req Request) []string {
 	}
 	if req.Mode != "" && req.Mode != "default" {
 		args = append(args, "--permission-mode", req.Mode)
+	}
+	if req.SystemPrompt != "" {
+		args = append(args, "--append-system-prompt", req.SystemPrompt)
 	}
 	args = append(args, r.ExtraArgs...)
 	// After ExtraArgs so a per-session model beats one from the config.

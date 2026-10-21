@@ -143,10 +143,28 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) {
-	var x store.Settings
-	if err := decode(r, &x); err != nil {
+	var in struct {
+		store.Settings
+		SessionPrompt *string `json:"session_prompt"`
+	}
+	if err := decode(r, &in); err != nil {
 		writeErr(w, err)
 		return
+	}
+	x := in.Settings
+	cur, err := s.app.Store.Settings(r.Context())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	// Leaving session_prompt out keeps the saved one.
+	x.SessionPrompt = cur.SessionPrompt
+	if in.SessionPrompt != nil {
+		x.SessionPrompt = *in.SessionPrompt
+		if _, err := app.RenderSessionPrompt(x.SessionPrompt, app.SessionPromptData{}); err != nil {
+			writeErr(w, badRequest{"session_prompt: " + err.Error()})
+			return
+		}
 	}
 	if x.ArchiveAfterMinutes < 0 {
 		writeErr(w, badRequest{"archive_after_minutes must not be negative"})
@@ -158,11 +176,6 @@ func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	// Leaving workdirs out keeps the saved list.
 	if x.Workdirs == nil {
-		cur, err := s.app.Store.Settings(r.Context())
-		if err != nil {
-			writeErr(w, err)
-			return
-		}
 		x.Workdirs = cur.Workdirs
 	} else {
 		dirs, err := resolveWorkdirs(x.Workdirs)

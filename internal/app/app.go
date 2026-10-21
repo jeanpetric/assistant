@@ -4,6 +4,7 @@ package app
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -379,10 +380,16 @@ func (a *App) launch(sess store.Session, prompt, resumeID string, done func(ctx 
 		log.Printf("session %d: %v", sess.ID, err)
 	}
 
+	system, err := a.sessionPrompt(ctx, sess)
+	if err != nil {
+		log.Printf("session %d: session prompt: %v", sess.ID, err)
+	}
+
 	go func() {
 		defer a.wg.Done()
 		bg := context.Background()
-		req := agent.Request{Agent: sess.Agent, Prompt: prompt, Workdir: sess.Workdir, Mode: sess.Mode, Model: sess.Model, ResumeID: resumeID}
+		req := agent.Request{Agent: sess.Agent, Prompt: prompt, Workdir: sess.Workdir, Mode: sess.Mode, Model: sess.Model, ResumeID: resumeID,
+			SystemPrompt: system}
 		failed := false
 		var wait waitSigns
 		var model string // as the CLI names it
@@ -923,6 +930,55 @@ func renderPrompt(tmpl string, task store.Task, context string) (string, error) 
 	var buf bytes.Buffer
 	err = t.Execute(&buf, PromptData{Task: task, Fields: task.Fields, Context: context})
 	return strings.TrimSpace(buf.String()), err
+}
+
+// SessionPromptData is what the session prompt (Settings.SessionPrompt) can
+// reference, e.g. "{{.Project.Name}}", "{{.Task.ID}}" or "{{.Session.Workdir}}".
+// Task is zero for a standalone session.
+type SessionPromptData struct {
+	Project store.Project
+	Task    store.Task
+	Session store.Session
+}
+
+// RenderSessionPrompt renders the session prompt template for d.
+func RenderSessionPrompt(tmpl string, d SessionPromptData) (string, error) {
+	t, err := template.New("session").Option("missingkey=zero").Parse(tmpl)
+	if err != nil {
+		return "", err
+	}
+	var buf bytes.Buffer
+	err = t.Execute(&buf, d)
+	return strings.TrimSpace(buf.String()), err
+}
+
+// sessionPrompt is the settings' session prompt for sess, rendered afresh each
+// turn so it follows renames. A session without a project gets the first one,
+// where tasks go when no project is named.
+func (a *App) sessionPrompt(ctx context.Context, sess store.Session) (string, error) {
+	set, err := a.Store.Settings(ctx)
+	if err != nil || strings.TrimSpace(set.SessionPrompt) == "" {
+		return "", err
+	}
+	d := SessionPromptData{Session: sess}
+	if sess.TaskID != 0 {
+		if d.Task, err = a.Store.Task(ctx, sess.TaskID); err != nil {
+			return "", err
+		}
+	}
+	project := cmp.Or(d.Task.ProjectID, sess.ProjectID)
+	if project != 0 {
+		d.Project, err = a.Store.Project(ctx, project)
+	} else {
+		var ps []store.Project
+		if ps, err = a.Store.Projects(ctx); len(ps) > 0 {
+			d.Project = ps[0]
+		}
+	}
+	if err != nil {
+		return "", err
+	}
+	return RenderSessionPrompt(set.SessionPrompt, d)
 }
 
 // Limits on what TaskBrief takes from each task the brief's task builds on.

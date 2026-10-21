@@ -105,6 +105,10 @@ func TestArgs(t *testing.T) {
 	if got := r.Args(Request{Fork: true}); strings.Contains(strings.Join(got, " "), "fork") {
 		t.Fatalf("there is nothing to fork without a session to resume: %v", got)
 	}
+	got = ClaudeRunner{}.Args(Request{ResumeID: "s1", SystemPrompt: "You run in the app."})
+	if want := []string{"-p", "--output-format", "stream-json", "--verbose", "--resume", "s1", "--append-system-prompt", "You run in the app."}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("system prompt: %v", got)
+	}
 }
 
 // TestClaudeRunnerWithFakeCLI runs a shell script standing in for the claude binary.

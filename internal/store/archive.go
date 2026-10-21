@@ -16,14 +16,24 @@ type Settings struct {
 	ArchiveAfterMinutes int    `json:"archive_after_minutes"`
 	// Working directories agents can be started in, offered as a dropdown.
 	Workdirs []string `json:"workdirs"`
+	// SessionPrompt is a template appended to every agent turn's system
+	// prompt (see app.SessionPromptData); empty sends nothing.
+	SessionPrompt string `json:"session_prompt"`
 }
+
+// DefaultSessionPrompt tells an agent it runs inside the app, so "add a task"
+// means a task on this board even when the working directory is another repo.
+const DefaultSessionPrompt = `You are running as a session of the "assistant" app: a task board the user drives you from, which you can reach through its MCP tools (create_task, get_task, search_tasks, start_session, ...). ` +
+	`This session belongs to the app's project "{{.Project.Name}}" (project_id {{.Project.ID}}){{if .Task.ID}}, on task #{{.Task.ID}} "{{.Task.Title}}"{{end}}; it is session #{{.Session.ID}}. ` +
+	`Your working directory ({{.Session.Workdir}}) is only where you run, not where tasks live. ` +
+	`When the user asks to add, open, find, move or start a task, they mean a task in the assistant app: use its MCP tools, and for new tasks use project_id {{.Project.ID}} unless they name another project.`
 
 func (s *Store) Settings(ctx context.Context) (Settings, error) {
 	var x Settings
 	var lane sql.NullInt64
 	var dirs string
-	err := s.db.QueryRowContext(ctx, `SELECT archive_lane_id, archive_after_minutes, workdirs FROM settings WHERE id = 1`).
-		Scan(&lane, &x.ArchiveAfterMinutes, &dirs)
+	err := s.db.QueryRowContext(ctx, `SELECT archive_lane_id, archive_after_minutes, workdirs, session_prompt FROM settings WHERE id = 1`).
+		Scan(&lane, &x.ArchiveAfterMinutes, &dirs, &x.SessionPrompt)
 	if err != nil {
 		return x, err
 	}
@@ -37,8 +47,8 @@ func (s *Store) SaveSettings(ctx context.Context, x Settings) error {
 		x.Workdirs = []string{}
 	}
 	dirs, _ := json.Marshal(x.Workdirs)
-	return affected(s.db.ExecContext(ctx, `UPDATE settings SET archive_lane_id = ?, archive_after_minutes = ?, workdirs = ? WHERE id = 1`,
-		x.ArchiveLaneID, x.ArchiveAfterMinutes, string(dirs)))
+	return affected(s.db.ExecContext(ctx, `UPDATE settings SET archive_lane_id = ?, archive_after_minutes = ?, workdirs = ?, session_prompt = ? WHERE id = 1`,
+		x.ArchiveLaneID, x.ArchiveAfterMinutes, string(dirs), x.SessionPrompt))
 }
 
 // ArchiveTask takes the task off the board; it keeps its lane. Archiving an

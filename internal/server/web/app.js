@@ -1600,7 +1600,7 @@ async function renderSettings() {
       : h('p', { class: 'muted' }, 'No rules yet.'));
 
   view.replaceChildren(h('div', { style: 'max-width:900px' }, projects, lanes, workdirsPanel(settings.workdirs, rerender), rulesPanel,
-    skillsPanel(skills, b, rerender), archivePanel(b.lanes, settings), trelloPanel(b, trello, rerender), fields));
+    skillsPanel(skills, b, rerender), sessionPromptPanel(settings), archivePanel(b.lanes, settings), trelloPanel(b, trello, rerender), fields));
 }
 
 // ---------- skills ----------
@@ -1729,6 +1729,21 @@ function workdirsPanel(dirs, rerender) {
         if (e.key === 'Enter' && e.target.value.trim()) save([...dirs, e.target.value]);
       },
     }));
+}
+
+// The prompt added to every agent turn, telling the agent which app and project it runs for.
+function sessionPromptPanel(settings) {
+  const text = h('textarea', { class: 'mono', rows: 8 });
+  text.value = settings.session_prompt;
+  const save = async () => {
+    const cur = await api('GET', '/api/settings');
+    await api('PUT', '/api/settings', { ...cur, session_prompt: text.value });
+    toast('Saved');
+  };
+  return h('div', { class: 'panel' }, h('h2', {}, 'Session prompt'),
+    h('p', { class: 'muted small' }, 'Added to the system prompt of every agent turn, so a session in another repo still knows it runs for this app. ' +
+      'Template fields: {{.Project.Name}}, {{.Project.ID}}, {{.Task.ID}}, {{.Task.Title}}, {{.Session.ID}}, {{.Session.Workdir}}. Empty sends nothing.'),
+    text, h('div', { class: 'row', style: 'margin-top:6px' }, h('button', { onclick: save }, 'Save')));
 }
 
 // Auto-archive: which lane, and how long a task stays there first.

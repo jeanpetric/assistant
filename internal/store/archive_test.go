@@ -272,3 +272,42 @@ func TestArchiveMigrationKeepsData(t *testing.T) {
 		t.Fatalf("settings = %+v", x)
 	}
 }
+
+// Upgrading adds the default session prompt and keeps the other settings.
+func TestSessionPromptMigrationKeepsSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const n = 25 // migrations before the session prompt
+	for _, m := range migrations[:n] {
+		if _, err := db.Exec(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, q := range []string{
+		fmt.Sprintf(`PRAGMA user_version = %d`, n),
+		`UPDATE settings SET archive_after_minutes = 42, workdirs = '["/a"]'`,
+		`INSERT INTO tasks (id, title, lane_id, position, created_at, updated_at) VALUES (1, 'kept', 1, 0, 0, 0)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(q, err)
+		}
+	}
+	db.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	x, err := s.Settings(ctx)
+	if err != nil || x.ArchiveAfterMinutes != 42 || strings.Join(x.Workdirs, ",") != "/a" || x.SessionPrompt != DefaultSessionPrompt {
+		t.Fatalf("settings = %+v, %v", x, err)
+	}
+	if task, err := s.Task(ctx, 1); err != nil || task.Title != "kept" {
+		t.Fatalf("task = %+v, %v", task, err)
+	}
+}

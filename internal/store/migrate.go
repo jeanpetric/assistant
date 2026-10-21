@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 )
 
 // migrations are applied in order; PRAGMA user_version tracks progress.
@@ -389,6 +390,12 @@ ALTER TABLE transition_rules ADD COLUMN skill_id INTEGER REFERENCES skills(id) O
 	// The CLI a session runs on; sessions from before are claude's.
 	`
 ALTER TABLE sessions ADD COLUMN agent TEXT NOT NULL DEFAULT 'claude';
+`,
+	// A prompt appended to every agent turn, so a session knows the app and
+	// project it runs for whatever its working directory.
+	`
+ALTER TABLE settings ADD COLUMN session_prompt TEXT NOT NULL DEFAULT '';
+UPDATE settings SET session_prompt = '` + strings.ReplaceAll(DefaultSessionPrompt, "'", "''") + `';
 `,
 }
 

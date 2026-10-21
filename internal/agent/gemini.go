@@ -50,6 +50,11 @@ func (r GeminiRunner) Run(ctx context.Context, req Request, emit func(Event)) er
 	if command == "" {
 		command = "gemini"
 	}
+	// The gemini CLI can only replace its system prompt, not add to it, so
+	// the addition leads the turn's prompt instead.
+	if req.SystemPrompt != "" {
+		req.Prompt = req.SystemPrompt + "\n\n---\n\n" + req.Prompt
+	}
 	var p GeminiParser
 	err := runCLI(ctx, command, r.Args(req), req, func(line []byte) {
 		for _, ev := range p.Line(line) {

@@ -104,6 +104,14 @@ func TestGeminiRunnerWithFakeCLI(t *testing.T) {
 	if args, _ := os.ReadFile(filepath.Join(dir, "args")); !strings.HasPrefix(string(args), "--output-format stream-json") {
 		t.Errorf("args = %q", args)
 	}
+	// gemini has no flag to add to its system prompt; the addition leads the prompt.
+	err = rs.Run(context.Background(), Request{Agent: Gemini, Prompt: "do it", SystemPrompt: "You run in the app.", Workdir: t.TempDir()}, func(Event) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if in, _ := os.ReadFile(filepath.Join(dir, "stdin")); string(in) != "You run in the app.\n\n---\n\ndo it" {
+		t.Errorf("prompt with system prompt = %q", in)
+	}
 }
 
 func TestGeminiRunnerRefusesFork(t *testing.T) {
