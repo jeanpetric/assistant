@@ -294,9 +294,8 @@ dialog::backdrop { background: rgba(0, 0, 0, .35); }
 .task-dialog { width: min(1200px, 94vw); max-height: 90vh; overflow-y: auto; padding: 12px 18px 18px; }
 .task-dialog-bar { position: sticky; top: -12px; z-index: 1; display: flex; align-items: center; gap: 6px; margin: -12px -18px 8px; padding: 8px 12px; background: var(--surface); border-bottom: 1px solid var(--border); }
 .task-dialog .task-side { position: static; max-height: none; }
-.task-page-bar { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
 /* The title takes the bar's left, pushing its buttons to the right. */
-.task-dialog-bar .title-input, .task-page-bar .title-input { flex: 1; min-width: 0; margin: 0; }
+.task-dialog-bar .title-input { flex: 1; min-width: 0; margin: 0; }
 /* The watch eye: faint until the task is watched. */
 .watch-toggle { opacity: .45; }
 .watch-toggle.on { opacity: 1; border-color: var(--accent); }

@@ -177,7 +177,7 @@ function route() {
   const r = {
     board: renderBoard,
     list: renderList,
-    task: () => renderTask(Number(parts[1]), Number(parts[3]) || 0),
+    task: () => renderTaskLink(Number(parts[1]), Number(parts[3]) || 0),
     sessions: renderSessions,
     session: () => renderSession(Number(parts[1])),
     archive: renderArchive,
@@ -205,8 +205,8 @@ function drawProjectSelect() {
 function switchProject(id) {
   state.projectId = id;
   remember('project', id);
-  // Pages showing one task stay on it; the others redraw for the project.
-  if (!/^#\/(task|session|sessions|memory|settings)\b/.test(location.hash)) route();
+  // Pages showing one session or memory stay on it; the others redraw for the project.
+  if (!/^#\/(session|sessions|memory|settings)\b/.test(location.hash)) route();
   else loadBoard();
 }
 
@@ -278,11 +278,11 @@ function outcomeBadge(taskId, st) {
   return h('a', {
     class: 'badge outcome-' + st.status, href: sessionHref({ task_id: taskId, id: st.session_id }),
     title: (st.reason ? `${o[1]}: ${st.reason}` : o[1]) + ' — open the session',
-    onclick: e => { e.stopPropagation(); closeTaskDialog(); },
+    onclick: e => { e.preventDefault(); e.stopPropagation(); openTaskDialog(taskId, st.session_id); },
   }, o[0]);
 }
 
-// A task's whole agent status, for its own page.
+// A task's whole agent status, for its dialog.
 function agentStatusEl(taskId, st) {
   if (!st) return null;
   if (st.status === 'running') return runningBadge(1);
@@ -377,11 +377,8 @@ function runningMeta(ctx, lim) {
 }
 
 function card(t) {
-  // A click opens the task in a dialog over the board; ⌘/Ctrl-click goes straight to its full page.
-  const el = h('article', {
-    class: 'card', draggable: 'true',
-    onclick: e => { if (e.metaKey || e.ctrlKey) location.hash = `#/task/${t.id}`; else openTaskDialog(t.id); },
-  },
+  // A click opens the task in a dialog over the board.
+  const el = h('article', { class: 'card', draggable: 'true', onclick: () => openTaskDialog(t.id) },
     h('div', { class: 'card-title' }, t.title),
     h('div', { class: 'card-meta' }, watchedBadge(t), kindBadge(t.kind), dueBadge(t), buildsOnBadge(t), needsInputBadge(state.board.needs_input[t.id]), runningBadge(state.board.running[t.id]), outcomeBadge(t.id, state.board.agent_status[t.id]), fieldLinks(t)),
     runningMeta(state.board.running_context[t.id], state.board.running_limits[t.id]));
@@ -454,7 +451,7 @@ async function renderList() {
       .filter(t => !laneSel.value || t.lane_id === Number(laneSel.value))
       .filter(t => !q || (t.title + ' ' + t.description).toLowerCase().includes(q))
       .sort((a, c) => laneOrder[a.lane_id] - laneOrder[c.lane_id]); // stable: keeps the server's order within a lane
-    tbody.replaceChildren(...rows.map(t => h('tr', { class: 'clickable', onclick: () => { location.hash = `#/task/${t.id}`; } },
+    tbody.replaceChildren(...rows.map(t => h('tr', { class: 'clickable', onclick: () => openTaskDialog(t.id) },
       h('td', {}, h('div', {}, t.title), t.description ? h('div', { class: 'muted small' }, trunc(t.description, 120)) : null),
       h('td', {}, laneName(t.lane_id)),
       h('td', {}, kindBadge(t.kind) || 'task'),
@@ -479,7 +476,7 @@ async function renderArchive() {
   function draw() {
     const q = filter.value.toLowerCase();
     const rows = tasks.filter(t => !q || (t.title + ' ' + t.description).toLowerCase().includes(q));
-    tbody.replaceChildren(...rows.map(t => h('tr', { class: 'clickable', onclick: () => { location.hash = `#/task/${t.id}`; } },
+    tbody.replaceChildren(...rows.map(t => h('tr', { class: 'clickable', onclick: () => openTaskDialog(t.id) },
       h('td', {}, h('div', {}, t.title), t.description ? h('div', { class: 'muted small' }, trunc(t.description, 120)) : null),
       h('td', {}, laneName(t.lane_id)),
       h('td', {}, kindBadge(t.kind) || 'task'),
@@ -505,16 +502,15 @@ async function renderArchive() {
   filter.focus();
 }
 
-// ---------- task page ----------
+// ---------- task link ----------
 
-async function renderTask(id, focusSession) {
-  const page = await taskView(id, {
-    every,
-    leave: () => { location.hash = '#/board'; },
-    reload: route,
-  });
-  view.replaceChildren(h('div', { class: 'task-page-bar' }, page.title, page.watch), page.el);
-  page.focus(focusSession);
+// A task's link (#/task/7, #/task/7/s/3) opens the board with the task in its dialog, the session
+// (if any) scrolled to; the address goes back to the board so closing the dialog leaves it there.
+async function renderTaskLink(id, focusSession) {
+  history.replaceState(null, '', '#/board');
+  document.querySelectorAll('[data-nav]').forEach(a => a.classList.toggle('active', a.dataset.nav === 'board'));
+  await renderBoard();
+  await openTaskDialog(id, focusSession);
 }
 
 // The task description, read as rendered markdown; Edit (or a double click) swaps in the textarea, which
@@ -544,11 +540,20 @@ function descriptionField(text, save) {
   return [h('div', { class: 'row desc-bar' }, h('label', { class: 'grow' }, 'Description'), toggle, expand), view, area];
 }
 
-// ---------- task dialog: the board opens a task here first ----------
+// ---------- task dialog: every page opens a task here, over itself ----------
+
+// A click on a task link opens the task's dialog over the page on screen; ⌘/Ctrl-click still opens a new tab.
+function openTaskLink(e) {
+  const a = e.target.closest && e.target.closest('a[href^="#/task/"]');
+  const to = a && taskHash(a.getAttribute('href'));
+  if (!to || e.metaKey || e.ctrlKey || e.shiftKey || e.button) return;
+  e.preventDefault();
+  openTaskDialog(to.id, to.session);
+}
 
 const taskDialog = { el: null, timers: [], id: 0 };
 
-async function openTaskDialog(id) {
+async function openTaskDialog(id, focusSession) {
   closeTaskDialog();
   const dlg = taskDialog.el || (taskDialog.el = document.getElementById('task-dialog'));
   if (!dlg.dataset.wired) {
@@ -558,7 +563,9 @@ async function openTaskDialog(id) {
       taskDialog.timers = [];
       taskDialog.id = 0;
       dlg.replaceChildren();
+      // The page under it shows what changed in the task.
       if (location.hash === '' || location.hash.startsWith('#/board')) renderBoardInPlace();
+      else if (/^#\/(list|archive)\b/.test(location.hash)) route();
     });
     // A click on the backdrop, outside the dialog's box, closes it.
     dlg.addEventListener('click', e => {
@@ -576,17 +583,17 @@ async function openTaskDialog(id) {
     h('div', { class: 'task-dialog-bar' },
       page.title,
       page.watch,
-      h('a', { class: 'btn ghost small', href: `#/task/${id}`, title: 'Open the task as a full page' }, '⤢ Full page'),
       h('button', { class: 'ghost small', title: 'Close (Esc)', onclick: () => dlg.close() }, '✕')),
     page.el);
   if (!dlg.open) dlg.showModal();
+  page.focus(focusSession);
 }
 
 function closeTaskDialog() {
   if (taskDialog.el && taskDialog.el.open) taskDialog.el.close();
 }
 
-// The task's editor and its sessions, for the full page or the board's dialog.
+// The task's editor and its sessions, for the task dialog.
 // `every` polls for as long as the host shows it, `leave` runs once the task is
 // archived or deleted, and `reload` redraws it after a restore.
 async function taskView(id, { every, leave, reload }) {
@@ -635,11 +642,11 @@ async function taskView(id, { every, leave, reload }) {
   const due = h('input', { type: 'datetime-local', value: toLocalInput(t.due_at), onchange: () => save({ due_at: fromLocalInput(due.value) }) });
   const clearDue = h('button', { class: 'ghost small', title: 'No due time', onclick: async () => { due.value = ''; await save({ due_at: null }); } }, '✕');
 
-  // The title heads the host's top bar, left of the watch eye.
+  // The title heads the dialog's top bar, left of the watch eye.
   const title = h('input', { class: 'title-input', value: t.title, onchange: e => save({ title: e.target.value }) });
 
-  // Watching a task counts it in the ⌥K picker until it reaches Done; ⌥W clicks this icon. The host puts
-  // it in its top bar, beside Full page.
+  // Watching a task counts it in the ⌥K picker until it reaches Done; ⌥W clicks this icon. The dialog puts
+  // it in its top bar, beside close.
   const watch = h('button', {
     class: 'ghost small watch-toggle', onclick: async () => { await save({ watched: !t.watched }); drawWatch(); },
   }, '👁');
@@ -753,7 +760,7 @@ async function taskView(id, { every, leave, reload }) {
 // setIds saves a new list and resolves to the updated refs.
 function buildsOnEditor(task, refs, usedBy, setIds) {
   const el = h('div');
-  const taskLink = r => h('a', { href: `#/task/${r.id}`, onclick: closeTaskDialog }, `#${r.id} ${r.title}`, r.archived ? ' (archived)' : '');
+  const taskLink = r => h('a', { href: `#/task/${r.id}` }, `#${r.id} ${r.title}`, r.archived ? ' (archived)' : '');
   const add = taskSearch({
     placeholder: 'Add an earlier task — search any project by words or #id…',
     exclude: x => x.id === task.id || refs.some(r => r.id === x.id),
@@ -1276,10 +1283,10 @@ async function renderSessions() {
   every(3000, draw);
 }
 
-// A task's session opens with the task's project in focus.
+// A task's session opens in the task's dialog, which brings the task's project into focus.
 function openFromSessions(s) {
-  location.hash = sessionHref(s);
-  if (s.task_id && s.project_id && s.project_id !== state.projectId) switchProject(s.project_id);
+  if (s.task_id) openTaskDialog(s.task_id, s.id);
+  else location.hash = sessionHref(s);
 }
 
 function sessionHref(s) {
@@ -2108,10 +2115,10 @@ function announce(n) {
   };
 }
 
-// Opens what the notification is about: its session if it has one, else its task.
+// Opens what the notification is about in the task's dialog, scrolled to its session if it has one.
 function openNotification(n) {
-  if (n.session_id) location.hash = sessionHref({ task_id: n.task_id, id: n.session_id });
-  else if (n.task_id) location.hash = `#/task/${n.task_id}`;
+  if (n.task_id) openTaskDialog(n.task_id, n.session_id || 0);
+  else if (n.session_id) location.hash = `#/session/${n.session_id}`;
 }
 
 async function refreshGlobal() {
@@ -2167,7 +2174,7 @@ const shortcuts = [
   { keys: '⌥T', code: 'KeyT', label: 'New task, building on the open one', run: async () => newTaskDialog({ buildsOn: await shownTask() }) },
   { keys: '⌥R', code: 'KeyR', label: 'Quick reminder', run: reminderDialog },
   { keys: '⌥P', code: 'KeyP', label: 'Agent session in a new task, building on the open one', run: async () => sessionDialog({ buildsOn: await shownTask() }) },
-  { keys: '⌥C', code: 'KeyC', label: 'Copy the open task\'s link', run: () => copyTaskLink(shownTaskId(location.hash, taskDialog.id)) },
+  { keys: '⌥C', code: 'KeyC', label: 'Copy the open task\'s link', run: () => copyTaskLink(taskDialog.id) },
   { keys: '⌥W', code: 'KeyW', label: 'Watch or unwatch the open task', run: toggleWatch },
   { keys: '⌥M', code: 'KeyM', label: 'Notifications', run: toggleNotifications },
   { keys: '⌥K', code: 'KeyK', label: 'Pick a project', run: projectPicker },
@@ -2192,22 +2199,21 @@ function shortcutFor(e, inField) {
   return shortcuts.find(s => !s.code && s.keys === e.key) || null;
 }
 
-// The task on screen: the one in the board's dialog, else the task page's (#/task/7, #/task/7/s/3).
-function shownTaskId(hash, dialogId) {
-  if (dialogId) return dialogId;
-  const m = /^#\/task\/(\d+)\b/.exec(hash);
-  return m ? Number(m[1]) : 0;
-}
-
-// The task on screen (see shownTaskId), or undefined on any other page.
+// The task open in the dialog, or undefined.
 async function shownTask() {
-  const id = shownTaskId(location.hash, taskDialog.id);
+  const id = taskDialog.id;
   return id ? (await api('GET', `/api/tasks/${id}`)).task : undefined;
 }
 
 // The link that opens a task, e.g. http://localhost:6767/#/task/7.
 function taskLink(origin, id) {
   return `${origin}/#/task/${id}`;
+}
+
+// The task and session a task link points at: '#/task/7/s/3' → { id: 7, session: 3 }; null for other links.
+function taskHash(hash) {
+  const m = /^#\/task\/(\d+)(?:\/s\/(\d+))?$/.exec(hash || '');
+  return m ? { id: Number(m[1]), session: Number(m[2]) || 0 } : null;
 }
 
 function copyTaskLink(id) {
@@ -2296,18 +2302,18 @@ function watchedLabel(t, projects, lanes) {
   return [`#${t.id} ${t.title}`, where.length ? ' · ' + where.join(' · ') : ''];
 }
 
-// ⌥J: the watched tasks of every project; ↑/↓ move, Enter (or a click) opens the chosen one's page.
+// ⌥J: the watched tasks of every project; ↑/↓ move, Enter (or a click) opens the chosen one's dialog.
 async function watchedPicker() {
   const [tasks] = await Promise.all([api('GET', '/api/watched'), state.board ? null : loadBoard()]);
   if (!tasks.length) { toast('No watched tasks — ⌥W watches the open task'); return; }
   pickerDialog({
-    title: 'Watched tasks', items: tasks, start: tasks.findIndex(t => t.id === shownTaskId(location.hash, taskDialog.id)),
+    title: 'Watched tasks', items: tasks, start: tasks.findIndex(t => t.id === taskDialog.id),
     label: t => {
       const [name, where] = watchedLabel(t, state.board.projects, state.board.lanes);
       return [name, where ? h('span', { class: 'small task-search-note' }, where) : null];
     },
     help: '↑/↓ to choose, Enter opens the task, Esc closes.',
-    onPick: t => go(`#/task/${t.id}`),
+    onPick: t => openTaskDialog(t.id),
   });
 }
 
@@ -2372,6 +2378,7 @@ function drawHeaderHints() {
   drawHeaderHints();
   document.getElementById('notif-btn').addEventListener('click', toggleNotifications);
   document.getElementById('project-select').addEventListener('change', e => switchProject(Number(e.target.value)));
+  document.addEventListener('click', openTaskLink);
   window.addEventListener('hashchange', route);
   route();
   refreshGlobal();

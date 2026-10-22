@@ -28,9 +28,9 @@ func TestShortcutKeys(t *testing.T) {
 	// The table names functions defined elsewhere in app.js; a proxy stands in for them.
 	script := `
 const src = require('fs').readFileSync(process.argv.at(-1), 'utf8');
-const own = new Set(['src', 'shortcuts', 'shortcutFor', 'shownTaskId', 'taskLink', 'pickedProjectHash', 'submitOnCmdEnter']);
+const own = new Set(['src', 'shortcuts', 'shortcutFor', 'taskHash', 'taskLink', 'pickedProjectHash', 'submitOnCmdEnter']);
 const stubs = new Proxy({}, { has: (_, k) => !own.has(k) && !(k in globalThis), get: () => () => {} });
-const api = (function () { with (stubs) return eval(src + '; ({ shortcutFor, shownTaskId, taskLink, pickedProjectHash, submitOnCmdEnter })'); })();
+const api = (function () { with (stubs) return eval(src + '; ({ shortcutFor, taskHash, taskLink, pickedProjectHash, submitOnCmdEnter })'); })();
 const key = (code, key, mods = {}) => ({ code, key, altKey: false, shiftKey: false, metaKey: false, ctrlKey: false, repeat: false, ...mods });
 const cases = [
   [key('KeyB', '∫', { altKey: true }), true, '⌥B'],
@@ -69,12 +69,12 @@ for (const [hash, want] of [['#/list', '#/list'], ['#/board', '#/board'], ['', '
     process.exitCode = 1;
   }
 }
-// shownTaskId: the board's dialog wins, else the task page (with or without a focused session).
-for (const [hash, dialogId, want] of [['#/task/7', 0, 7], ['#/task/7/s/3', 0, 7], ['#/board', 12, 12], ['#/task/7', 12, 12],
-    ['#/board', 0, 0], ['', 0, 0], ['#/session/5', 0, 0], ['#/tasks/7', 0, 0], ['#/list', 0, 0]]) {
-  const got = api.shownTaskId(hash, dialogId);
-  if (got !== want) {
-    console.log(JSON.stringify({ hash, dialogId, want, got }));
+// taskHash: a task link, with or without a session, names what the task dialog opens; other links name nothing.
+for (const [hash, want] of [['#/task/7', { id: 7, session: 0 }], ['#/task/7/s/3', { id: 7, session: 3 }], ['#/board', null],
+    ['', null], [undefined, null], ['#/session/5', null], ['#/tasks/7', null], ['#/task/7x', null], ['#/list', null]]) {
+  const got = api.taskHash(hash);
+  if (JSON.stringify(got) !== JSON.stringify(want)) {
+    console.log(JSON.stringify({ hash, want, got }));
     process.exitCode = 1;
   }
 }

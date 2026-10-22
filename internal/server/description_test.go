@@ -22,12 +22,12 @@ func TestDescriptionField(t *testing.T) {
 		t.Fatal(err)
 	}
 	start := bytes.Index(js, []byte("function descriptionField("))
-	end := bytes.Index(js, []byte("// ---------- task dialog: the board opens a task here first ----------"))
+	end := bytes.Index(js, []byte("// ---------- task dialog: every page opens a task here, over itself ----------"))
 	if start < 0 || end < start {
 		t.Fatal("app.js lacks descriptionField")
 	}
 	if !bytes.Contains(js, []byte("descriptionField(t.description, text => save({ description: text }))")) {
-		t.Fatal("the task page does not use descriptionField")
+		t.Fatal("the task dialog does not use descriptionField")
 	}
 	src := filepath.Join(t.TempDir(), "desc.js")
 	if err := os.WriteFile(src, js[start:end], 0o600); err != nil {

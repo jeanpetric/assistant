@@ -72,7 +72,7 @@ func TestNewTaskDialogsBuildOnOpenTask(t *testing.T) {
 	for _, want := range []string{
 		"run: async () => newTaskDialog({ buildsOn: await shownTask() })",
 		"run: async () => sessionDialog({ buildsOn: await shownTask() })",
-		"const id = shownTaskId(location.hash, taskDialog.id);",
+		"const id = taskDialog.id;",
 		"const buildsOn = buildsOnPicker(from ? [from] : [], projectId);",
 		"mode: mode.value, context_from: buildsOn.ids() }",
 		"context_from: buildsOn.ids(), memories: memories.ids(),",
