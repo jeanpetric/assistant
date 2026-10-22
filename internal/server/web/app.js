@@ -2302,6 +2302,14 @@ function watchedLabel(t, projects, lanes) {
   return [`#${t.id} ${t.title}`, where.length ? ' · ' + where.join(' · ') : ''];
 }
 
+// The dot before a watched task in the ⌥J picker: green while an agent works on it, orange while one
+// waits for the user, grey otherwise.
+function agentDot(st) {
+  const [cls, title] = st?.status === 'running' ? ['running', 'An agent works on it']
+    : st?.status === 'needs_you' ? ['needs-you', 'The agent ' + st.reason] : ['idle', 'No agent at work'];
+  return h('span', { class: 'agent-dot ' + cls, title });
+}
+
 // ⌥J: the watched tasks of every project; ↑/↓ move, Enter (or a click) opens the chosen one's dialog.
 async function watchedPicker() {
   const [tasks] = await Promise.all([api('GET', '/api/watched'), state.board ? null : loadBoard()]);
@@ -2310,7 +2318,7 @@ async function watchedPicker() {
     title: 'Watched tasks', items: tasks, start: tasks.findIndex(t => t.id === taskDialog.id),
     label: t => {
       const [name, where] = watchedLabel(t, state.board.projects, state.board.lanes);
-      return [name, where ? h('span', { class: 'small task-search-note' }, where) : null];
+      return [agentDot(t.agent_status), name, where ? h('span', { class: 'small task-search-note' }, where) : null];
     },
     help: '↑/↓ to choose, Enter opens the task, Esc closes.',
     onPick: t => openTaskDialog(t.id),

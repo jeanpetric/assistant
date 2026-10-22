@@ -835,14 +835,33 @@ func (s *Server) searchTasks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, tasks)
 }
 
-// watchedTasks lists the watched tasks on the board, of every project.
+// watchedTask is a watched task with its agent status, if it has one.
+type watchedTask struct {
+	store.Task
+	AgentStatus *store.AgentStatus `json:"agent_status,omitempty"`
+}
+
+// watchedTasks lists the watched tasks on the board, of every project, each
+// with its agent status.
 func (s *Server) watchedTasks(w http.ResponseWriter, r *http.Request) {
 	tasks, err := s.app.Store.WatchedTasks(r.Context())
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, 200, tasks)
+	statuses, err := s.app.Store.AgentStatuses(r.Context())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	out := make([]watchedTask, len(tasks))
+	for i, t := range tasks {
+		out[i].Task = t
+		if st, ok := statuses[t.ID]; ok {
+			out[i].AgentStatus = &st
+		}
+	}
+	writeJSON(w, 200, out)
 }
 
 // archivedTasks lists one project's archived tasks (?project_id=), or all of them.

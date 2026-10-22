@@ -1175,3 +1175,42 @@ func TestWatchedTasksAPIAndTool(t *testing.T) {
 		t.Fatalf("list_watched_tasks: %s", text)
 	}
 }
+
+// Each watched task carries its agent status: running, needs you, or none.
+func TestWatchedTasksAgentStatus(t *testing.T) {
+	c := newClient(t)
+	ctx := context.Background()
+	var a, b, idle store.Task
+	for _, x := range []*store.Task{&a, &b, &idle} {
+		c.do("POST", "/api/tasks", map[string]any{"title": "t"}, 201, x)
+		c.do("PATCH", "/api/tasks/"+itoa(x.ID), map[string]any{"watched": true}, 200, nil)
+	}
+	if _, err := c.app.Store.CreateSession(ctx, store.Session{TaskID: a.ID, Title: "s"}); err != nil {
+		t.Fatal(err)
+	}
+	sb, err := c.app.Store.CreateSession(ctx, store.Session{TaskID: b.ID, Title: "s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.app.Store.SetSessionStatus(ctx, sb.ID, store.StatusIdle, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.app.Store.SetSessionNeedsInput(ctx, sb.ID, "asked a question"); err != nil {
+		t.Fatal(err)
+	}
+	var got []struct {
+		ID          int64              `json:"id"`
+		AgentStatus *store.AgentStatus `json:"agent_status"`
+	}
+	c.do("GET", "/api/watched", nil, 200, &got)
+	status := map[int64]string{}
+	for _, x := range got {
+		if x.AgentStatus != nil {
+			status[x.ID] = x.AgentStatus.Status
+		}
+	}
+	want := map[int64]string{a.ID: store.AgentRunning, b.ID: store.AgentNeedsYou}
+	if len(got) != 3 || len(status) != 2 || status[a.ID] != want[a.ID] || status[b.ID] != want[b.ID] {
+		t.Fatalf("watched = %+v", got)
+	}
+}

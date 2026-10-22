@@ -81,3 +81,43 @@ for (const [t, want] of [
 		t.Fatalf("watchedLabel: %v\n%s", err, strings.TrimSpace(string(out)))
 	}
 }
+
+// The ⌥J picker puts a dot before each watched task: green running, orange needs you, grey otherwise.
+func TestWatchedPickerAgentDot(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed")
+	}
+	js, err := webFS.ReadFile("web/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(js, []byte("agentDot(t.agent_status), name")) {
+		t.Fatal("watchedPicker lacks the agent dot")
+	}
+	start := bytes.Index(js, []byte("function agentDot("))
+	end := bytes.Index(js, []byte("// ⌥J: the watched tasks"))
+	if start < 0 || end < start {
+		t.Fatal("app.js lacks agentDot")
+	}
+	src := filepath.Join(t.TempDir(), "dot.js")
+	if err := os.WriteFile(src, js[start:end], 0o600); err != nil {
+		t.Fatal(err)
+	}
+	script := `
+const h = (tag, attrs) => attrs;
+const f = eval(require('fs').readFileSync(process.argv.at(-1), 'utf8') + '; agentDot');
+for (const [st, want] of [
+  [{ status: 'running' }, 'agent-dot running'],
+  [{ status: 'needs_you', reason: 'asked' }, 'agent-dot needs-you'],
+  [{ status: 'finished' }, 'agent-dot idle'],
+  [undefined, 'agent-dot idle'],
+]) {
+  if (f(st).class !== want) { console.log(JSON.stringify(st), f(st).class, 'want', want); process.exitCode = 1; }
+}
+`
+	out, err := exec.Command(node, "-e", script, "--", src).CombinedOutput()
+	if err != nil || len(out) > 0 {
+		t.Fatalf("agentDot: %v\n%s", err, strings.TrimSpace(string(out)))
+	}
+}

@@ -235,7 +235,7 @@ func (s *Server) mcpTools() []mcpTool {
 		},
 		{
 			Name:        "list_watched_tasks",
-			Description: "Watched tasks on the board, of every project: by project, then lane. Done ends watching a task.",
+			Description: "Watched tasks on the board, of every project: by project, then lane, each with its agent_status if it has one. Done ends watching a task.",
 			InputSchema: schema(nil, map[string]any{}),
 			call:        list("/api/watched"),
 		},
