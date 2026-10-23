@@ -142,18 +142,18 @@ function setFlag(key, on) {
 const sessionCollapsed = id => flag(`session.collapsed.${id}`);
 const setSessionCollapsed = (id, on) => setFlag(`session.collapsed.${id}`, on);
 
-// So does a turn folded to one line, by the id of its prompt.
-const turnCollapsed = id => flag(`turn.collapsed.${id}`);
-const setTurnCollapsed = (id, on) => setFlag(`turn.collapsed.${id}`, on);
+// So does a turn's prompt or reply folded to one line, by the id of the prompt; part is 'prompt' or 'reply'.
+const foldCollapsed = (part, id) => flag(`${part}.collapsed.${id}`);
+const setFoldCollapsed = (part, id, on) => setFlag(`${part}.collapsed.${id}`, on);
 
 function trunc(s, n) {
   s = (s || '').replace(/\s+/g, ' ').trim();
   return s.length > n ? s.slice(0, n) + '…' : s;
 }
 
-// The one line a folded turn shows: its prompt, its tool calls and, once it finished, when.
-function turnLine(prompt, tools, end) {
-  return [trunc(prompt, 120), tools ? (tools === 1 ? '1 tool call' : `${tools} tool calls`) : '', end ? '✓ ' + end : '']
+// The one line a folded reply shows: its tool calls and, once the turn finished, when.
+function replyLine(tools, end) {
+  return ['Reply', tools ? (tools === 1 ? '1 tool call' : `${tools} tool calls`) : '', end ? '✓ ' + end : '']
     .filter(Boolean).join(' · ');
 }
 
@@ -967,41 +967,52 @@ function messageEl(m) {
 
 const isToolMsg = m => m.kind === 'tool_use' || m.kind === 'tool_result' || m.kind === 'context';
 
-// A turn is a prompt and everything up to the next prompt. It folds to one line on its own,
-// from the chevron on the prompt, and opens again from that line.
+// A turn is a prompt and everything up to the next prompt, its reply. The prompt and the reply
+// each fold to one line on their own, from their chevron, and open again from that line.
 function turnEl(m) {
   const turn = h('div', { class: 'turn', 'data-id': m.id });
   turn.dataset.prompt = m.content;
-  turn.append(
-    h('div', {
-      class: 'turn-line', role: 'button', tabindex: 0, title: 'Expand the turn', 'aria-expanded': 'false',
-      onclick: () => flipTurn(turn, false),
-      onkeydown: e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); flipTurn(turn, false); } },
-    }),
-    h('button', {
-      class: 'turn-toggle', title: 'Fold the turn to one line', 'aria-label': 'Fold the turn', 'aria-expanded': 'true',
-      onclick: () => flipTurn(turn, true) }, h('span', { class: 'turn-caret' })),
-    messageEl(m),
-    h('div', { class: 'turn-body' }));
-  turn.classList.toggle('collapsed', turnCollapsed(m.id));
+  turn.append(foldEl('prompt', m.id, messageEl(m)), foldEl('reply', m.id, h('div', { class: 'turn-body' })));
   drawTurnLine(turn);
   return turn;
 }
 
-function setTurn(turn, on) {
-  turn.classList.toggle('collapsed', on);
-  setTurnCollapsed(turn.dataset.id, on);
+function foldEl(part, id, content) {
+  const fold = h('div', { class: 'fold ' + part, 'data-part': part });
+  fold.append(
+    h('div', {
+      class: 'turn-line', role: 'button', tabindex: 0, title: `Expand the ${part}`, 'aria-expanded': 'false',
+      onclick: () => flipFold(fold, false),
+      onkeydown: e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); flipFold(fold, false); } },
+    }),
+    h('button', {
+      class: 'turn-toggle', title: `Fold the ${part} to one line`, 'aria-label': `Fold the ${part}`, 'aria-expanded': 'true',
+      onclick: () => flipFold(fold, true) }, h('span', { class: 'turn-caret' })),
+    content);
+  fold.classList.toggle('collapsed', foldCollapsed(part, id));
+  return fold;
 }
 
-// Folding from the turn's own control hands focus to the other one, so the keyboard isn't left on a hidden element.
-function flipTurn(turn, on) {
-  setTurn(turn, on);
-  turn.querySelector(on ? '.turn-line' : '.turn-toggle').focus({ preventScroll: true });
+function setFold(fold, on) {
+  fold.classList.toggle('collapsed', on);
+  setFoldCollapsed(fold.dataset.part, fold.closest('.turn').dataset.id, on);
+}
+
+// Folds the prompt and the reply alike.
+function setTurn(turn, on) {
+  turn.querySelectorAll(':scope > .fold').forEach(f => setFold(f, on));
+}
+
+// Folding from a part's own control hands focus to the other one, so the keyboard isn't left on a hidden element.
+function flipFold(fold, on) {
+  setFold(fold, on);
+  fold.querySelector(on ? '.turn-line' : '.turn-toggle').focus({ preventScroll: true });
 }
 
 function drawTurnLine(turn) {
-  const line = turnLine(turn.dataset.prompt, turn.querySelectorAll('.tool-use').length, turn.dataset.end);
-  turn.firstElementChild.replaceChildren(h('span', { class: 'turn-caret' }), line);
+  const [prompt, reply] = turn.querySelectorAll(':scope > .fold > .turn-line');
+  prompt.replaceChildren(h('span', { class: 'turn-caret' }), trunc(turn.dataset.prompt, 120));
+  reply.replaceChildren(h('span', { class: 'turn-caret' }), replyLine(turn.querySelectorAll('.tool-use').length, turn.dataset.end));
 }
 
 // Tool calls, their output and CLI-injected context between two messages fold into one collapsed group,
@@ -1010,7 +1021,7 @@ function drawTurnLine(turn) {
 function appendMessage(body, m) {
   if (m.role === 'user' && m.kind === 'text') { body.append(turnEl(m)); return; }
   const turn = body.lastElementChild?.classList.contains('turn') ? body.lastElementChild : null;
-  const into = turn ? turn.lastElementChild : body;
+  const into = turn ? turn.querySelector('.turn-body') : body;
   if (!isToolMsg(m)) {
     into.append(messageEl(m));
   } else {
@@ -1139,7 +1150,7 @@ function sessionComponent(session, messages, task) {
         onclick: () => handoffDialog(s, refresh),
       }, 'Hand off') : null,
       !el.classList.contains('collapsed') && body.querySelectorAll(':scope > .turn').length > 1 ? h('button', {
-        class: 'ghost small', title: 'Fold every turn but the last to one line',
+        class: 'ghost small', title: 'Fold the prompt and the reply of every turn but the last',
         onclick: () => [...body.querySelectorAll(':scope > .turn')].slice(0, -1).forEach(t => setTurn(t, true)),
       }, 'Fold turns') : null,
       el.classList.contains('collapsed')

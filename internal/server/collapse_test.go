@@ -67,8 +67,8 @@ check(m.size, 0, 'keys left');
 	}
 }
 
-// A turn — a prompt and what follows it — folds to one line of its own, keeps
-// what arrives while folded, and stays folded across reloads.
+// A turn's prompt and its reply each fold to one line of their own, the reply
+// keeps what arrives while folded, and both stay folded across reloads.
 func TestTurnCollapse(t *testing.T) {
 	js, err := webFS.ReadFile("web/app.js")
 	if err != nil {
@@ -76,12 +76,15 @@ func TestTurnCollapse(t *testing.T) {
 	}
 	for _, want := range []string{
 		"if (m.role === 'user' && m.kind === 'text') { body.append(turnEl(m)); return; }",
-		"const into = turn ? turn.lastElementChild : body;",
-		"turn.classList.toggle('collapsed', turnCollapsed(m.id));",
-		"onclick: () => flipTurn(turn, false),",
-		"onclick: () => flipTurn(turn, true) }, h('span', { class: 'turn-caret' })),",
-		"turn.querySelector(on ? '.turn-line' : '.turn-toggle').focus({ preventScroll: true });",
+		"const into = turn ? turn.querySelector('.turn-body') : body;",
+		"turn.append(foldEl('prompt', m.id, messageEl(m)), foldEl('reply', m.id, h('div', { class: 'turn-body' })));",
+		"fold.classList.toggle('collapsed', foldCollapsed(part, id));",
+		"setFoldCollapsed(fold.dataset.part, fold.closest('.turn').dataset.id, on);",
+		"onclick: () => flipFold(fold, false),",
+		"onclick: () => flipFold(fold, true) }, h('span', { class: 'turn-caret' })),",
+		"fold.querySelector(on ? '.turn-line' : '.turn-toggle').focus({ preventScroll: true });",
 		"if (m.kind === 'result') turn.dataset.end = fmtTime(m.created_at);",
+		"turn.querySelectorAll(':scope > .fold').forEach(f => setFold(f, on));",
 		"[...body.querySelectorAll(':scope > .turn')].slice(0, -1).forEach(t => setTurn(t, true))",
 	} {
 		if !bytes.Contains(js, []byte(want)) {
@@ -93,8 +96,9 @@ func TestTurnCollapse(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		".turn.collapsed > :not(.turn-line) { display: none; }",
-		".turn.collapsed > .turn-line { display: block; }",
+		".fold.collapsed > :not(.turn-line) { display: none; }",
+		".fold.collapsed > .turn-line { display: block; }",
+		".fold.reply:has(> .turn-body:empty) { display: none; }",
 	} {
 		if !bytes.Contains(css, []byte(want)) {
 			t.Fatalf("style.css lacks %q", want)
@@ -108,7 +112,7 @@ func TestTurnCollapse(t *testing.T) {
 	start := bytes.Index(js, []byte("function remember("))
 	end := bytes.Index(js, []byte("// ---------- state & routing"))
 	if start < 0 || end < start {
-		t.Fatal("app.js lacks turnCollapsed")
+		t.Fatal("app.js lacks foldCollapsed")
 	}
 	src := filepath.Join(t.TempDir(), "turns.js")
 	if err := os.WriteFile(src, js[start:end], 0o600); err != nil {
@@ -117,23 +121,27 @@ func TestTurnCollapse(t *testing.T) {
 	script := `
 const m = new Map();
 globalThis.localStorage = { getItem: k => m.get(k) ?? null, setItem: (k, v) => m.set(k, String(v)), removeItem: k => m.delete(k) };
-const [is, set, isSession, line] = eval(require('fs').readFileSync(process.argv.at(-1), 'utf8') + '; [turnCollapsed, setTurnCollapsed, sessionCollapsed, turnLine]');
+const [is, set, isSession, line] = eval(require('fs').readFileSync(process.argv.at(-1), 'utf8') + '; [foldCollapsed, setFoldCollapsed, sessionCollapsed, replyLine]');
 const check = (got, want, what) => { if (got !== want) { console.log(what, JSON.stringify(got), 'want', JSON.stringify(want)); process.exitCode = 1; } };
-check(is(40), false, 'new');
-set(40, true);
-check(is(40), true, 'collapsed');
-check(is(41), false, 'other turn');
+check(is('prompt', 40), false, 'new');
+set('prompt', 40, true);
+check(is('prompt', 40), true, 'prompt folded');
+check(is('reply', 40), false, 'reply stays open');
+check(is('prompt', 41), false, 'other turn');
 check(isSession(40), false, 'session with the same id');
-set(40, false);
-check(is(40), false, 'expanded');
+set('reply', 40, true);
+check(is('reply', 40), true, 'reply folded');
+set('prompt', 40, false);
+check(is('prompt', 40), false, 'prompt expanded');
+check(is('reply', 40), true, 'reply stays folded');
+set('reply', 40, false);
 check(m.size, 0, 'keys left');
-check(line('Fix  the\nbug', 0, ''), 'Fix the bug', 'running, no tools');
-check(line('Fix', 1, ''), 'Fix · 1 tool call', 'one tool');
-check(line('Fix', 3, '14:02'), 'Fix · 3 tool calls · ✓ 14:02', 'finished');
-check(line('x'.repeat(200), 0, '').length, 121, 'long prompt');
+check(line(0, ''), 'Reply', 'running, no tools');
+check(line(1, ''), 'Reply · 1 tool call', 'one tool');
+check(line(3, '14:02'), 'Reply · 3 tool calls · ✓ 14:02', 'finished');
 `
 	out, err := exec.Command(node, "-e", script, "--", src).CombinedOutput()
 	if err != nil || len(out) > 0 {
-		t.Fatalf("turnCollapsed: %v\n%s", err, strings.TrimSpace(string(out)))
+		t.Fatalf("foldCollapsed: %v\n%s", err, strings.TrimSpace(string(out)))
 	}
 }

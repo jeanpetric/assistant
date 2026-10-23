@@ -235,16 +235,16 @@ details.session-summary { padding: 6px 14px; border-bottom: 1px solid var(--bord
 details.session-summary > summary { cursor: pointer; user-select: none; display: flex; gap: 10px; align-items: center; }
 details.session-summary > .msg { margin: 8px 0 4px; }
 details.session-summary .badge.stale { color: var(--warn); }
-.turn { position: relative; }
-.turn > .msg.user { padding-right: 32px; }
-/* The chevron sits on the prompt's first line, inside the bubble: quiet until the turn is hovered. */
+.fold { position: relative; }
+.fold.prompt > .msg.user, .fold.reply > .turn-body { padding-right: 32px; }
+/* The chevron sits on the first line of the prompt or the reply: quiet until that part is hovered. */
 .turn-toggle {
   position: absolute; top: 8px; right: 6px; width: 20px; height: 20px; padding: 0;
   display: flex; align-items: center; justify-content: center;
   background: transparent; border: 0; border-radius: 4px; color: var(--muted); opacity: .45;
   transition: opacity .12s, background .12s;
 }
-.turn:hover > .turn-toggle, .turn-toggle:focus-visible { opacity: 1; }
+.fold:hover > .turn-toggle, .turn-toggle:focus-visible { opacity: 1; }
 .turn-toggle:hover { background: color-mix(in srgb, var(--muted) 18%, transparent); color: var(--text); }
 .turn-toggle:focus-visible, .turn-line:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .turn-toggle .turn-caret { margin: 0 0 3px; transform: rotate(45deg); }
@@ -256,8 +256,11 @@ details.session-summary .badge.stale { color: var(--warn); }
   border: solid currentColor; border-width: 0 1.5px 1.5px 0; transform: rotate(-45deg);
   color: var(--muted); transition: color .12s;
 }
-.turn.collapsed > :not(.turn-line) { display: none; }
-.turn.collapsed > .turn-line { display: block; }
+.fold.reply > .turn-line { background: var(--surface-2); color: var(--muted); }
+.fold.collapsed > :not(.turn-line) { display: none; }
+.fold.collapsed > .turn-line { display: block; }
+/* A reply shows nothing, not even its chevron, until the agent's first message. */
+.fold.reply:has(> .turn-body:empty) { display: none; }
 details.tools { margin: 4px 0; font-size: 12px; color: var(--muted); }
 details.tools > summary { cursor: pointer; user-select: none; }
 details.tools > .tools-body { margin-left: 6px; padding-left: 10px; border-left: 2px solid var(--border); }
