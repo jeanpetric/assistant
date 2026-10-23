@@ -2187,6 +2187,7 @@ const shortcuts = [
   { keys: '⌥O', code: 'KeyO', label: 'Go to Memory', run: () => go('#/memory') },
   { keys: '⌥A', code: 'KeyA', label: 'Go to Archive', run: () => go('#/archive') },
   { keys: '⌥,', code: 'Comma', label: 'Go to Settings', run: () => go('#/settings') },
+  { keys: '⌥H', code: 'KeyH', label: 'Show or hide the key hints next to buttons and links', run: toggleHints },
   { keys: '/', label: 'Filter the list or archive', run: focusFilter },
   { keys: '?', label: 'Show these shortcuts', run: shortcutsDialog },
 ];
@@ -2355,13 +2356,24 @@ function shortcutsDialog() {
     h('table', { class: 'shortcuts' }, shortcuts.map(s => h('tr', {},
       h('td', {}, s.keys.split(' ').map(k => h('kbd', {}, k))), h('td', {}, s.label)))),
     h('p', { class: 'muted small' }, '⌘/Ctrl+Enter sends a prompt or reply. Esc closes a dialog or the notifications. ',
-      'Greyed keys next to buttons and links show their shortcut.'),
+      'Greyed keys next to buttons and links show their shortcut; ⌥H shows or hides them.'),
     h('div', { class: 'dialog-actions' }, h('button', { onclick: () => dlg.close() }, 'Close', hint('Esc'))));
   dlg.showModal();
 }
 
 function cancelButton(dlg) {
   return h('button', { class: 'ghost', onclick: () => dlg.close() }, 'Cancel', hint('Esc'));
+}
+
+// Key hints are hidden until ⌥H shows them; the choice survives reloads.
+function showHints(on) {
+  document.body.classList.toggle('show-hints', on);
+}
+
+function toggleHints() {
+  const on = !flag('ui.hints');
+  setFlag('ui.hints', on);
+  showHints(on);
 }
 
 // Header controls carry data-shortcut; their hint is drawn from it so markup and table stay in step.
@@ -2384,6 +2396,7 @@ function drawHeaderHints() {
   document.getElementById('shortcuts-btn').addEventListener('click', shortcutsDialog);
   document.addEventListener('keydown', onShortcut);
   drawHeaderHints();
+  showHints(flag('ui.hints'));
   document.getElementById('notif-btn').addEventListener('click', toggleNotifications);
   document.getElementById('project-select').addEventListener('change', e => switchProject(Number(e.target.value)));
   document.addEventListener('click', openTaskLink);

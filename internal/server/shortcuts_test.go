@@ -47,6 +47,8 @@ const cases = [
   [key('KeyW', '∑', { altKey: true }), true, '⌥W'],
   [key('KeyJ', '∆', { altKey: true }), true, '⌥J'],
   [key('BracketRight', '‘', { altKey: true }), true, '⌥]'],
+  [key('KeyH', '˙', { altKey: true }), true, '⌥H'],
+  [key('KeyH', '˙', { altKey: true }), false, '⌥H'],
   [key('Slash', '/'), false, '/'],
   [key('Slash', '?', { shiftKey: true }), false, '?'],
   [key('Slash', '/'), true, null],
