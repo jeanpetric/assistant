@@ -582,6 +582,7 @@ async function openTaskDialog(id, focusSession) {
   dlg.replaceChildren(
     h('div', { class: 'task-dialog-bar' },
       page.title,
+      page.done,
       page.watch,
       h('button', { class: 'ghost small', title: 'Close (Esc)', onclick: () => dlg.close() }, '✕')),
     page.el);
@@ -657,6 +658,21 @@ async function taskView(id, { every, leave, reload }) {
   };
   drawWatch();
 
+  // The lane select in the side panel; Done in the top bar (⌥D) moves the task to the lane named Done.
+  const moveTo = async laneId => {
+    const res = await api('POST', `/api/tasks/${id}/move`, { lane_id: laneId, index: -1 });
+    if (res.started.length) toast(`Started ${res.started.map(s => s.title).join(', ')}`);
+    await reloadStatus();
+  };
+  const lane = select(state.board.lanes.map(l => [l.id, l.name]), t.lane_id, { onchange: e => moveTo(Number(e.target.value)) });
+  const doneLane = state.board.lanes.find(l => l.name.toLowerCase() === 'done');
+  const done = h('button', {
+    class: 'ghost small done-toggle', title: 'Move the task to Done (⌥D)',
+    onclick: async () => { await moveTo(doneLane.id); toast('Moved to ' + doneLane.name); },
+  }, '✓ Done', hint('⌥D'));
+  const drawDone = () => done.classList.toggle('hidden', !doneLane || t.lane_id === doneLane.id || !!t.archived_at);
+  drawDone();
+
   const archived = t.archived_at
     ? h('div', { class: 'row archived-note' }, h('span', { class: 'grow' }, 'Archived ' + ago(t.archived_at)),
       h('button', { class: 'small', onclick: async () => { await api('POST', `/api/tasks/${id}/unarchive`); reload(); } }, 'Restore'))
@@ -664,7 +680,14 @@ async function taskView(id, { every, leave, reload }) {
   // The agent status, redrawn when a session's state or the lane changes.
   const agentStatus = h('div', { class: 'card-meta agent-status' });
   const drawStatus = st => agentStatus.replaceChildren(...[agentStatusEl(id, st)].filter(Boolean));
-  const reloadStatus = () => api('GET', `/api/tasks/${id}`).then(d => drawStatus(d.agent_status));
+  // Also catches a move by an agent turn's done lane while the dialog is open.
+  const reloadStatus = () => api('GET', `/api/tasks/${id}`).then(d => {
+    Object.assign(t, { lane_id: d.task.lane_id, watched: d.task.watched });
+    if (document.activeElement !== lane) lane.value = t.lane_id;
+    drawStatus(d.agent_status);
+    drawWatch();
+    drawDone();
+  });
   drawStatus(data.agent_status);
   side.append(h('div', { class: 'panel' },
     archived,
@@ -674,13 +697,7 @@ async function taskView(id, { every, leave, reload }) {
       onchange: async e => { await save({ project_id: Number(e.target.value) }); toast('Moved to ' + projectName(t.project_id)); },
     }),
     h('label', {}, 'Lane'),
-    select(state.board.lanes.map(l => [l.id, l.name]), t.lane_id, {
-      onchange: async e => {
-        const res = await api('POST', `/api/tasks/${id}/move`, { lane_id: Number(e.target.value), index: -1 });
-        if (res.started.length) toast(`Started ${res.started.map(s => s.title).join(', ')}`);
-        reloadStatus();
-      },
-    }),
+    lane,
     h('label', {}, 'Kind'),
     select(state.meta.kinds.map(k => [k, k]), t.kind, { onchange: e => save({ kind: e.target.value }) }),
     h('label', {}, 'Due — you get a notification at this time'),
@@ -746,6 +763,7 @@ async function taskView(id, { every, leave, reload }) {
   return {
     el: h('div', { class: 'task-page' }, side, main),
     title,
+    done,
     watch,
     focus: sessionId => {
       const c = sessionId && components.get(sessionId);
@@ -2176,6 +2194,7 @@ const shortcuts = [
   { keys: '⌥P', code: 'KeyP', label: 'Agent session in a new task, building on the open one', run: async () => sessionDialog({ buildsOn: await shownTask() }) },
   { keys: '⌥C', code: 'KeyC', label: 'Copy the open task\'s link', run: () => copyTaskLink(taskDialog.id) },
   { keys: '⌥W', code: 'KeyW', label: 'Watch or unwatch the open task', run: toggleWatch },
+  { keys: '⌥D', code: 'KeyD', label: 'Move the open task to Done', run: moveShownToDone },
   { keys: '⌥M', code: 'KeyM', label: 'Notifications', run: toggleNotifications },
   { keys: '⌥K', code: 'KeyK', label: 'Pick a project', run: projectPicker },
   { keys: '⌥J', code: 'KeyJ', label: 'Watched tasks', run: watchedPicker },
@@ -2226,6 +2245,14 @@ function copyTaskLink(id) {
 function toggleWatch() {
   const btn = document.querySelector('.watch-toggle');
   if (btn) btn.click(); else toast('Open a task to watch it');
+}
+
+// ⌥D: the open task's Done button.
+function moveShownToDone() {
+  const btn = document.querySelector('.done-toggle');
+  if (!btn) toast('Open a task to move it to Done');
+  else if (btn.classList.contains('hidden')) toast('The task is already done');
+  else btn.click();
 }
 
 // Where a project picked with ⌥K opens: the list when on the list, else the board.

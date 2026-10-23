@@ -14,7 +14,7 @@ func TestWatchToggleInTopBar(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"h('div', { class: 'task-dialog-bar' },\n      page.title,\n      page.watch,\n      h('button', { class: 'ghost small', title: 'Close (Esc)'",
+		"h('div', { class: 'task-dialog-bar' },\n      page.title,\n      page.done,\n      page.watch,\n      h('button', { class: 'ghost small', title: 'Close (Esc)'",
 		"class: 'ghost small watch-toggle'",
 	} {
 		if !bytes.Contains(js, []byte(want)) {
@@ -68,5 +68,27 @@ func TestTasksOpenInDialog(t *testing.T) {
 	}
 	if bytes.Contains(js, []byte("location.hash = `#/task/")) {
 		t.Fatal("app.js still navigates to a task's page")
+	}
+}
+
+// Done in the task dialog's top bar (⌥D) moves the task to the lane named Done; it hides once the task
+// is there or archived. A move, by hand or by an agent turn, redraws the lane select and the button.
+func TestDoneButtonInTopBar(t *testing.T) {
+	js, err := webFS.ReadFile("web/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"const doneLane = state.board.lanes.find(l => l.name.toLowerCase() === 'done');",
+		"onclick: async () => { await moveTo(doneLane.id); toast('Moved to ' + doneLane.name); },\n  }, '✓ Done', hint('⌥D'));",
+		"done.classList.toggle('hidden', !doneLane || t.lane_id === doneLane.id || !!t.archived_at);",
+		"h('label', {}, 'Lane'),\n    lane,",
+		"if (document.activeElement !== lane) lane.value = t.lane_id;",
+		"{ keys: '⌥D', code: 'KeyD', label: 'Move the open task to Done', run: moveShownToDone },",
+		"const btn = document.querySelector('.done-toggle');",
+	} {
+		if !bytes.Contains(js, []byte(want)) {
+			t.Fatalf("app.js lacks %q", want)
+		}
 	}
 }
