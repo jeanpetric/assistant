@@ -1311,9 +1311,19 @@ async function renderSessions() {
   if (!state.board) await loadBoard();
   const statusSel = select([['', 'All statuses'], ['running', 'Running'], ['idle', 'Idle'], ['error', 'Error'],
     ['cancelled', 'Cancelled'], ['interrupted', 'Interrupted']], '', { onchange: draw });
+  const search = h('input', { type: 'search', placeholder: 'Search by words of the task title or description…', value: recall('sessions-search') });
   const tbody = h('tbody');
+  const empty = h('p', { class: 'muted' });
+  let seq = 0, timer = 0;
   async function draw() {
-    const xs = await api('GET', '/api/sessions' + (statusSel.value ? `?status=${statusSel.value}` : ''));
+    const q = search.value.trim(), n = ++seq;
+    remember('sessions-search', q);
+    const params = new URLSearchParams();
+    if (statusSel.value) params.set('status', statusSel.value);
+    if (q) params.set('q', q);
+    const xs = await api('GET', '/api/sessions' + (params.size ? '?' + params : ''));
+    if (n !== seq) return;
+    empty.textContent = xs.length ? '' : q ? 'No session\'s task has these words.' : 'No agent sessions yet.';
     tbody.replaceChildren(...xs.map(s => h('tr', { class: 'clickable', onclick: () => openFromSessions(s) },
       h('td', {}, h('span', { class: 'badge status-' + s.status }, s.status === 'running' ? h('span', { class: 'pulse' }) : null, s.status),
         needsInputBadge(s.needs_input ? 1 : 0, 'The agent ' + s.needs_input),
@@ -1327,7 +1337,10 @@ async function renderSessions() {
   view.replaceChildren(h('div', { class: 'panel' },
     h('div', { class: 'toolbar' }, h('h2', { class: 'grow', style: 'flex:1' }, 'Agent sessions'), statusSel,
       h('button', { onclick: sessionDialog }, '▶ New session')),
-    h('table', {}, h('thead', {}, h('tr', {}, ['Status', 'Project', 'Task / session', 'Latest', 'Trigger', 'Updated'].map(x => h('th', {}, x)))), tbody)));
+    search,
+    h('table', {}, h('thead', {}, h('tr', {}, ['Status', 'Project', 'Task / session', 'Latest', 'Trigger', 'Updated'].map(x => h('th', {}, x)))), tbody),
+    empty));
+  search.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(draw, 150); });
   await draw();
   every(3000, draw);
 }

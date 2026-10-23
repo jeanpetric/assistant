@@ -371,8 +371,9 @@ func (s *Server) mcpTools() []mcpTool {
 			InputSchema: schema(nil, map[string]any{
 				"task_id": prop("integer", "Only this task's sessions"),
 				"status":  map[string]any{"type": "string", "enum": []string{"running", "idle", "error", "cancelled", "interrupted"}},
+				"q":       prop("string", "Only sessions whose task's title or description holds every word of this (case-insensitive)"),
 			}),
-			call: list("/api/sessions", "task_id", "status"),
+			call: list("/api/sessions", "task_id", "status", "q"),
 			post: sessionsWithoutSummaries,
 		},
 		{

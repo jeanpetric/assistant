@@ -60,3 +60,45 @@ func TestSearchTasks(t *testing.T) {
 }
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
+
+func TestSearchSessions(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	cache, _ := s.CreateTask(ctx, Task{Title: "Caching layer", Description: "Use Redis"})
+	other, _ := s.CreateTask(ctx, Task{Title: "Docs", Description: "100% coverage"})
+	a, _ := s.CreateSession(ctx, Session{TaskID: cache.ID, Mode: "plan"})
+	b, _ := s.CreateSession(ctx, Session{TaskID: other.ID, Mode: "plan"})
+	s.CreateSession(ctx, Session{Mode: "plan", Title: "caching"}) // standalone: no task to match
+	s.SetSessionStatus(ctx, a.ID, StatusIdle, "")
+	ids := func(status, q string) []int64 {
+		xs, err := s.SearchSessions(ctx, 0, status, q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := []int64{}
+		for _, x := range xs {
+			out = append(out, x.ID)
+		}
+		return out
+	}
+	eq := func(name string, got, want []int64) {
+		t.Helper()
+		if len(got) != len(want) {
+			t.Fatalf("%s = %v, want %v", name, got, want)
+		}
+		for i := range got {
+			if got[i] != want[i] {
+				t.Fatalf("%s = %v, want %v", name, got, want)
+			}
+		}
+	}
+	eq("title", ids("", "CACHING"), []int64{a.ID})
+	eq("description", ids("", "redis"), []int64{a.ID})
+	eq("every word", ids("", "caching redis"), []int64{a.ID})
+	eq("no match", ids("", "caching docs"), []int64{})
+	eq("literal %", ids("", "100%"), []int64{b.ID})
+	eq("with status", ids(StatusRunning, "caching"), []int64{})
+	if all := ids("", ""); len(all) != 3 {
+		t.Fatalf("empty query = %v", all)
+	}
+}

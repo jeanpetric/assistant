@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -133,9 +134,23 @@ func (s *Store) Session(ctx context.Context, id int64) (Session, error) {
 // Sessions lists sessions, newest activity first. taskID 0 means all tasks;
 // an empty status means any status.
 func (s *Store) Sessions(ctx context.Context, taskID int64, status string) ([]Session, error) {
+	return s.SearchSessions(ctx, taskID, status, "")
+}
+
+// SearchSessions is Sessions narrowed to those whose task's title or
+// description holds each word of the query (case-insensitive); sessions
+// without a task match only an empty query.
+func (s *Store) SearchSessions(ctx context.Context, taskID int64, status, query string) ([]Session, error) {
+	where := []string{`(? = 0 OR s.task_id = ?)`, `(? = '' OR s.status = ?)`}
+	args := []any{taskID, taskID, status, status}
+	for _, w := range strings.Fields(query) {
+		like := "%" + likeEscaper.Replace(w) + "%"
+		where = append(where, `(t.title LIKE ? ESCAPE '\' OR t.description LIKE ? ESCAPE '\')`)
+		args = append(args, like, like)
+	}
 	rows, err := s.db.QueryContext(ctx, `SELECT `+sessionCols+` FROM sessions s LEFT JOIN tasks t ON t.id = s.task_id
-		WHERE (? = 0 OR s.task_id = ?) AND (? = '' OR s.status = ?)
-		ORDER BY s.updated_at DESC, s.id DESC`, taskID, taskID, status, status)
+		WHERE `+strings.Join(where, " AND ")+`
+		ORDER BY s.updated_at DESC, s.id DESC`, args...)
 	if err != nil {
 		return nil, err
 	}

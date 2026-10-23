@@ -1052,7 +1052,7 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 	taskID, _ := strconv.ParseInt(r.URL.Query().Get("task_id"), 10, 64)
-	xs, err := s.app.Store.Sessions(r.Context(), taskID, r.URL.Query().Get("status"))
+	xs, err := s.app.Store.SearchSessions(r.Context(), taskID, r.URL.Query().Get("status"), r.URL.Query().Get("q"))
 	if err != nil {
 		writeErr(w, err)
 		return

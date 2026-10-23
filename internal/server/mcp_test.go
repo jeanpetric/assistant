@@ -150,6 +150,12 @@ func TestMCPTaskTools(t *testing.T) {
 	if text, _ = c.tool("list_sessions", map[string]any{"task_id": task.ID, "status": "idle"}); !strings.Contains(text, `"task_id":`) {
 		t.Fatalf("list_sessions: %s", text)
 	}
+	if text, _ = c.tool("list_sessions", map[string]any{"q": "renamed"}); !strings.Contains(text, `"task_id":`) {
+		t.Fatalf("list_sessions by task title: %s", text)
+	}
+	if text, _ = c.tool("list_sessions", map[string]any{"q": "renamed nowhere"}); text != "[]" {
+		t.Fatalf("list_sessions with no match: %s", text)
+	}
 
 	if text, isErr = c.tool("archive_task", map[string]any{"task_id": task.ID}); isErr || !strings.Contains(text, `"archived_at":"`) {
 		t.Fatalf("archive_task: %s", text)
