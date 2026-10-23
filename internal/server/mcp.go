@@ -460,9 +460,15 @@ func (s *Server) mcpTools() []mcpTool {
 		},
 		{
 			Name:        "send_message",
-			Description: "Continue an idle agent session with a new message.",
+			Description: "Continue an agent session with a new message. While its agent works, the message is queued (the result says queued: true) and starts the next turn once the current one ends.",
 			InputSchema: schema([]string{"session_id", "text"}, map[string]any{"session_id": prop("integer", "Session id"), "text": prop("string", "Message")}),
 			call:        byID("POST", "/api/sessions/%d/messages", "session_id", true),
+		},
+		{
+			Name:        "delete_queued_message",
+			Description: "Drop a message queued for an agent session's next turn before it is sent (ids are in the session's queued list).",
+			InputSchema: schema([]string{"queued_message_id"}, map[string]any{"queued_message_id": prop("integer", "Queued message id")}),
+			call:        byID("DELETE", "/api/queued-messages/%d", "queued_message_id", false),
 		},
 	}
 }

@@ -84,6 +84,7 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/sessions/{id}/skill", s.runSkill)
 	m.HandleFunc("POST /api/sessions/{id}/summary", s.summarizeSession)
 	m.HandleFunc("POST /api/sessions/{id}/memory", s.memorizeSession)
+	m.HandleFunc("DELETE /api/queued-messages/{id}", s.deleteQueuedMessage)
 
 	m.HandleFunc("GET /api/rules", s.listRules)
 	m.HandleFunc("POST /api/rules", s.saveRule)

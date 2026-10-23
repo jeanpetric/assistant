@@ -1114,11 +1114,26 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, badRequest{"text is required"})
 		return
 	}
-	if err := s.app.SendMessage(r.Context(), id, in.Text); err != nil {
+	queued, err := s.app.SendMessage(r.Context(), id, in.Text)
+	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	w.WriteHeader(202)
+	writeJSON(w, 202, map[string]bool{"queued": queued})
+}
+
+// deleteQueuedMessage drops a message queued for a session's next turn.
+func (s *Server) deleteQueuedMessage(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.app.Store.DeleteQueuedMessage(r.Context(), id); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(204)
 }
 
 // updateSession changes where the task moves when the session's turn finishes.

@@ -132,7 +132,7 @@ func TestSessionLifecycle(t *testing.T) {
 		t.Fatalf("defaults not applied: %+v", got)
 	}
 
-	if err := a.SendMessage(ctx, sess.ID, "now fix it"); err != nil {
+	if _, err := a.SendMessage(ctx, sess.ID, "now fix it"); err != nil {
 		t.Fatal(err)
 	}
 	a.Wait()
@@ -172,14 +172,129 @@ func TestSessionErrorAndCancel(t *testing.T) {
 	r.err = nil
 	r.block = make(chan struct{})
 	sess, _ = a.StartSession(ctx, StartOpts{TaskID: task.ID, Prompt: "long"})
-	if err := a.SendMessage(ctx, sess.ID, "again"); !errors.Is(err, ErrBusy) {
-		t.Fatalf("expected ErrBusy, got %v", err)
+	if queued, err := a.SendMessage(ctx, sess.ID, "again"); err != nil || !queued {
+		t.Fatalf("a message to a running session should be queued: %v %v", queued, err)
 	}
 	a.Cancel(sess.ID)
 	a.Wait()
 	got, _ = a.Store.Session(ctx, sess.ID)
 	if got.Status != store.StatusCancelled {
 		t.Fatalf("expected cancelled, got %+v", got)
+	}
+	// Stopping the turn does not send the queued message; it waits.
+	if len(got.Queued) != 1 || got.Queued[0].Content != "again" || len(r.requests()) != 2 {
+		t.Fatalf("queue after cancel = %+v, %d requests", got.Queued, len(r.requests()))
+	}
+}
+
+// A message sent while the agent works waits in the queue and starts the next
+// turn once the running one ends, before the done-lane move; several go in order.
+func TestQueuedMessages(t *testing.T) {
+	a, r := newApp(t)
+	ctx := context.Background()
+	lanes := lanesByName(t, a)
+	task, _ := a.Store.CreateTask(ctx, store.Task{Title: "T", LaneID: lanes["In progress"]})
+	done := lanes["Done"]
+
+	r.block = make(chan struct{})
+	sess, err := a.StartSession(ctx, StartOpts{TaskID: task.ID, Prompt: "first", DoneLaneID: &done})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, text := range []string{"second", "dropped", "third"} {
+		if queued, err := a.SendMessage(ctx, sess.ID, text); err != nil || !queued {
+			t.Fatalf("send %q: queued %v, %v", text, queued, err)
+		}
+	}
+	got, _ := a.Store.Session(ctx, sess.ID)
+	if len(got.Queued) != 3 || got.Queued[0].Content != "second" || got.Queued[2].Content != "third" {
+		t.Fatalf("queue = %+v", got.Queued)
+	}
+	if err := a.Store.DeleteQueuedMessage(ctx, got.Queued[1].ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Store.DeleteQueuedMessage(ctx, got.Queued[1].ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("deleting it twice: %v", err)
+	}
+	if tk, _ := a.Store.Task(ctx, task.ID); tk.LaneID != lanes["In progress"] {
+		t.Fatalf("task moved while the agent worked: lane %d", tk.LaneID)
+	}
+	close(r.block)
+	a.Wait() // a turn starts the next before it counts as finished
+	reqs := r.requests()
+	var prompts []string
+	for _, q := range reqs {
+		prompts = append(prompts, q.Prompt)
+	}
+	if strings.Join(prompts, "|") != "first|second|third" || reqs[1].ResumeID != "claude-1" || reqs[2].ResumeID != "claude-1" {
+		t.Fatalf("requests = %+v", reqs)
+	}
+	msgs, _ := a.Store.Messages(ctx, sess.ID, 0)
+	var users []string
+	for _, m := range msgs {
+		if m.Role == "user" {
+			users = append(users, m.Content)
+		}
+	}
+	if strings.Join(users, "|") != "first|second|third" {
+		t.Fatalf("user messages = %v", users)
+	}
+	if tk, _ := a.Store.Task(ctx, task.ID); tk.LaneID != done {
+		t.Fatalf("task should move to done after the last queued turn, lane %d", tk.LaneID)
+	}
+
+	// An idle session takes a message at once.
+	if queued, err := a.SendMessage(ctx, sess.ID, "now"); err != nil || queued {
+		t.Fatalf("idle send: queued %v, %v", queued, err)
+	}
+	a.Wait()
+	if n := len(r.requests()); n != 4 {
+		t.Fatalf("%d requests", n)
+	}
+}
+
+// An agent that asks a question the user already answered in the queue does
+// not wait for input.
+func TestQueuedAnswerSkipsNeedsInput(t *testing.T) {
+	a, r := newApp(t)
+	ctx := context.Background()
+	task, _ := a.Store.CreateTask(ctx, store.Task{Title: "T"})
+	r.result = func(req agent.Request) string {
+		if req.Prompt == "ask" {
+			return "Which branch?"
+		}
+		return "ok"
+	}
+	r.block = make(chan struct{})
+	sess, _ := a.StartSession(ctx, StartOpts{TaskID: task.ID, Prompt: "ask"})
+	a.SendMessage(ctx, sess.ID, "main")
+	close(r.block)
+	a.Wait()
+	got, _ := a.Store.Session(ctx, sess.ID)
+	if got.NeedsInput != "" || len(r.requests()) != 2 {
+		t.Fatalf("session %+v, %d requests", got, len(r.requests()))
+	}
+	if ns, _ := a.Store.Notifications(ctx, false); slices.ContainsFunc(ns, func(n store.Notification) bool {
+		return strings.Contains(n.Message, "needs your input")
+	}) {
+		t.Fatalf("notified: %+v", ns)
+	}
+}
+
+// A failed turn still hands the session to the queued message.
+func TestQueuedMessageAfterError(t *testing.T) {
+	a, r := newApp(t)
+	ctx := context.Background()
+	task, _ := a.Store.CreateTask(ctx, store.Task{Title: "T"})
+	r.failOn = "boom"
+	r.block = make(chan struct{})
+	sess, _ := a.StartSession(ctx, StartOpts{TaskID: task.ID, Prompt: "boom"})
+	a.SendMessage(ctx, sess.ID, "retry")
+	close(r.block)
+	a.Wait()
+	got, _ := a.Store.Session(ctx, sess.ID)
+	if got.Status != store.StatusIdle || len(got.Queued) != 0 || r.requests()[1].Prompt != "retry" {
+		t.Fatalf("session %+v, requests %+v", got, r.requests())
 	}
 }
 
@@ -229,7 +344,7 @@ func TestRateLimits(t *testing.T) {
 	r.mu.Lock()
 	r.limits = &agent.RateLimits{FiveHour: &agent.LimitWindow{UsedPercent: 30, ResetsAt: now.Add(time.Hour)}}
 	r.mu.Unlock()
-	if err := a.SendMessage(ctx, sess.ID, "more"); err != nil {
+	if _, err := a.SendMessage(ctx, sess.ID, "more"); err != nil {
 		t.Fatal(err)
 	}
 	a.Wait()
@@ -305,7 +420,7 @@ func TestStandaloneSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.Wait()
-	if err := a.SendMessage(ctx, sess.ID, "more"); err != nil {
+	if _, err := a.SendMessage(ctx, sess.ID, "more"); err != nil {
 		t.Fatal(err)
 	}
 	a.Wait()
@@ -717,7 +832,7 @@ func TestShutdownInterruptsAndResume(t *testing.T) {
 		t.Fatalf("shutdown should mark interrupted, got %+v", got)
 	}
 	// Nothing new starts once shut down, e.g. skills after a turn that just finished.
-	if err := a.SendMessage(ctx, sess.ID, "more"); !errors.Is(err, ErrStopping) {
+	if _, err := a.SendMessage(ctx, sess.ID, "more"); !errors.Is(err, ErrStopping) {
 		t.Fatalf("send after shutdown: %v", err)
 	}
 
@@ -1515,7 +1630,7 @@ func TestGeminiSession(t *testing.T) {
 		t.Fatalf("summary should come from the transcript, on gemini: %+v", sum)
 	}
 
-	if err := a.SendMessage(ctx, sess.ID, "more"); err != nil {
+	if _, err := a.SendMessage(ctx, sess.ID, "more"); err != nil {
 		t.Fatal(err)
 	}
 	a.Wait()

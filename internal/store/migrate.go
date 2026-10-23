@@ -433,6 +433,17 @@ UPDATE notifications SET archived_at = CAST(unixepoch('subsec') * 1000 AS INTEGE
 WHERE archived_at IS NULL AND task_id IN (SELECT id FROM tasks WHERE lane_id IN
 	(SELECT id FROM lanes WHERE lower(name) = 'done' UNION SELECT archive_lane_id FROM settings WHERE id = 1));
 `,
+	// Messages sent to a session while its agent works wait here, oldest
+	// first, and each starts the session's next turn once the previous ends.
+	`
+CREATE TABLE queued_messages (
+	id INTEGER PRIMARY KEY,
+	session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+	content TEXT NOT NULL,
+	created_at INTEGER NOT NULL
+);
+CREATE INDEX queued_messages_session ON queued_messages(session_id, id);
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

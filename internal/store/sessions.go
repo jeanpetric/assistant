@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"time"
 )
@@ -50,8 +51,16 @@ type Session struct {
 	SummaryUpto  int64      `json:"summary_upto"`
 	SummaryAt    *time.Time `json:"summary_at"`
 	SummaryStale bool       `json:"summary_stale"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
+	// Queued: messages sent while the agent worked, oldest first; each starts
+	// the next turn once the one before ends.
+	Queued    []QueuedMessage `json:"queued"`
+	CreatedAt time.Time       `json:"created_at"`
+	UpdatedAt time.Time       `json:"updated_at"`
+}
+
+type QueuedMessage struct {
+	ID      int64  `json:"id"`
+	Content string `json:"content"`
 }
 
 type Message struct {
@@ -67,17 +76,23 @@ const sessionCols = `s.id, COALESCE(s.task_id, 0), COALESCE(t.title, ''), COALES
 	(SELECT MAX(c.id) FROM sessions c WHERE c.parent_id = s.id), s.claude_session_id, s.cost_usd, s.error, s.created_at, s.updated_at,
 	COALESCE((SELECT content FROM messages m WHERE m.session_id = s.id AND m.kind IN ('text', 'result', 'error') ORDER BY m.id DESC LIMIT 1), ''),
 	s.summary, s.summary_upto, s.summary_at, COALESCE((SELECT MAX(m.id) FROM messages m WHERE m.session_id = s.id), 0), s.needs_input, s.seen,
-	s.context_tokens, s.context_window`
+	s.context_tokens, s.context_window,
+	(SELECT json_group_array(json_object('id', q.id, 'content', q.content)) FROM
+		(SELECT id, content FROM queued_messages WHERE session_id = s.id ORDER BY id) q)`
 
 func scanSession(sc interface{ Scan(...any) error }) (Session, error) {
 	var x Session
 	var created, updated int64
 	var doneLane, parent, child, summaryAt sql.NullInt64
 	var lastID int64
+	var queued string
 	err := sc.Scan(&x.ID, &x.TaskID, &x.TaskTitle, &x.ProjectID, &x.Title, &x.Status, &x.Mode, &x.Agent, &x.Model, &x.Workdir, &x.Trigger,
 		&doneLane, &parent, &child, &x.ClaudeSessionID, &x.CostUSD, &x.Error, &created, &updated, &x.LastMessage,
 		&x.Summary, &x.SummaryUpto, &summaryAt, &lastID, &x.NeedsInput, &x.Seen,
-		&x.ContextTokens, &x.ContextWindow)
+		&x.ContextTokens, &x.ContextWindow, &queued)
+	if err == nil {
+		err = json.Unmarshal([]byte(queued), &x.Queued)
+	}
 	x.DoneLaneID, x.ParentID, x.ChildID = fromNullID(doneLane), fromNullID(parent), fromNullID(child)
 	x.SummaryAt = fromNullMillis(summaryAt)
 	x.SummaryStale = x.Summary != "" && lastID > x.SummaryUpto
@@ -361,4 +376,20 @@ func (s *Store) Messages(ctx context.Context, sessionID, after int64) ([]Message
 		out = append(out, m)
 	}
 	return out, rows.Err()
+}
+
+// QueueMessage keeps a message for the session's next turn.
+func (s *Store) QueueMessage(ctx context.Context, sessionID int64, content string) (QueuedMessage, error) {
+	res, err := s.db.ExecContext(ctx, `INSERT INTO queued_messages (session_id, content, created_at) VALUES (?, ?, ?)`,
+		sessionID, content, s.ts())
+	if err != nil {
+		return QueuedMessage{}, err
+	}
+	id, _ := res.LastInsertId()
+	return QueuedMessage{ID: id, Content: content}, nil
+}
+
+// DeleteQueuedMessage drops a queued message before it is sent.
+func (s *Store) DeleteQueuedMessage(ctx context.Context, id int64) error {
+	return affected(s.db.ExecContext(ctx, `DELETE FROM queued_messages WHERE id = ?`, id))
 }

@@ -17,7 +17,7 @@ func TestWorkingIndicator(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"const el = h('div', { class: 'session' }, head, summary, body, working, limits, foot);",
+		"const el = h('div', { class: 'session' }, head, summary, body, working, queued, limits, foot);",
 		"if (c.session.status !== 'running') { working.replaceChildren(); return; }",
 		"if (m.role === 'user') turnStart = Date.parse(m.created_at);",
 		"if (m.id <= last) continue;",

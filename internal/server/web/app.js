@@ -1037,6 +1037,8 @@ function sessionComponent(session, messages, task) {
   // Below the transcript while a turn runs, from the moment it starts, so a
   // turn shows it is under way before the agent's first message or tool call.
   const working = h('div', { class: 'working' });
+  // Messages sent while the agent works, under "Working…"; each starts the next turn once the one before ends.
+  const queued = h('div', { class: 'queued' });
   let turnStart = 0; // when the prompt of the latest turn was sent
   const input = h('textarea', { rows: 2, placeholder: 'Reply to continue this session… (⌘↵ to send)' });
   const send = h('button', {}, 'Send', hint('⌘↵'));
@@ -1061,7 +1063,7 @@ function sessionComponent(session, messages, task) {
   // What tasks building on this one get instead of the transcript; collapsed
   // until opened, and the open state survives redraws.
   const summary = h('details', { class: 'session-summary' });
-  const el = h('div', { class: 'session' }, head, summary, body, working, limits, foot);
+  const el = h('div', { class: 'session' }, head, summary, body, working, queued, limits, foot);
   const c = { el, session, lastId: () => last };
   // Collapsed, only the head shows; the title toggles it too.
   c.setCollapsed = on => {
@@ -1144,8 +1146,11 @@ function sessionComponent(session, messages, task) {
         ? h('button', { class: 'ghost small', title: 'Expand the session', onclick: () => c.setCollapsed(false) }, '▸')
         : h('button', { class: 'ghost small', title: 'Collapse the session to its head', onclick: () => c.setCollapsed(true) }, '▾'),
     ].filter(Boolean));
-    send.disabled = running || !s.claude_session_id;
-    if (runSkill) runSkill.disabled = send.disabled;
+    // While the agent works a reply is queued; the first turn may not have its agent session yet.
+    send.disabled = !running && !s.claude_session_id;
+    input.placeholder = running ? 'The agent is working: a reply waits in the queue until it finishes… (⌘↵ to queue)'
+      : 'Reply to continue this session… (⌘↵ to send)';
+    if (runSkill) runSkill.disabled = running || !s.claude_session_id;
     drawLimits();
     drawSummary();
   }
@@ -1189,6 +1194,20 @@ function sessionComponent(session, messages, task) {
     working.replaceChildren(h('span', { class: 'pulse' }), 'Working…', h('span', { class: 'muted small' }, fmtElapsed(secs)));
   }
 
+  function drawQueued() {
+    queued.replaceChildren(...(c.session.queued || []).map(q => h('div', { class: 'queued-msg' },
+      h('span', { class: 'label' }, 'Queued'),
+      h('span', { class: 'text' }, q.content),
+      h('button', {
+        class: 'ghost small', title: 'Don\'t send this message',
+        onclick: async () => {
+          await api('DELETE', `/api/queued-messages/${q.id}`);
+          c.session.queued = c.session.queued.filter(x => x.id !== q.id);
+          drawQueued();
+        },
+      }, '✕'))));
+  }
+
   // The countdowns and the turn's elapsed time tick even when nothing else changes.
   c.drawLimits = () => { drawLimits(); drawWorking(); };
   c.drawHead = drawHead;
@@ -1204,6 +1223,7 @@ function sessionComponent(session, messages, task) {
     }
     drawHead();
     drawWorking();
+    drawQueued();
   };
   c.update(session, messages);
   return c;

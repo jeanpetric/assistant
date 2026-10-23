@@ -1538,3 +1538,61 @@ func TestDoneNotificationMigrationArchivesOnlyDoneTasks(t *testing.T) {
 		t.Fatalf("done task's notification: %q %v %v", msg, read, archived)
 	}
 }
+
+// Sessions made before messages could be queued keep their data and start
+// with an empty queue.
+func TestQueuedMessagesMigrationKeepsSessions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const n = 31 // before queued messages
+	for _, m := range migrations[:n] {
+		if _, err := db.Exec(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, q := range []string{
+		fmt.Sprintf(`PRAGMA user_version = %d`, n),
+		`INSERT INTO tasks (id, title, description, lane_id, position, created_at, updated_at) VALUES (1, 'task', '', 2, 0, 0, 0)`,
+		`INSERT INTO sessions (id, task_id, title, status, mode, workdir, trigger, claude_session_id, created_at, updated_at)
+			VALUES (1, 1, 'work', 'idle', 'plan', '/repo', 'manual', 'c-1', 0, 0)`,
+		`INSERT INTO messages (session_id, role, kind, content, created_at) VALUES (1, 'user', 'text', 'hello', 0)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(q, err)
+		}
+	}
+	db.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	sess, err := s.Session(ctx, 1)
+	if err != nil || sess.Title != "work" || sess.ClaudeSessionID != "c-1" || sess.Queued == nil || len(sess.Queued) != 0 {
+		t.Fatalf("session = %+v, %v", sess, err)
+	}
+	if msgs, _ := s.Messages(ctx, 1, 0); len(msgs) != 1 || msgs[0].Content != "hello" {
+		t.Fatalf("messages = %+v", msgs)
+	}
+	q, err := s.QueueMessage(ctx, 1, "next")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sess, _ := s.Session(ctx, 1); len(sess.Queued) != 1 || sess.Queued[0] != q {
+		t.Fatalf("queued = %+v", sess.Queued)
+	}
+	// Deleting the session drops its queue.
+	if _, err := s.db.Exec(`DELETE FROM sessions WHERE id = 1`); err != nil {
+		t.Fatal(err)
+	}
+	var left int
+	s.db.QueryRow(`SELECT COUNT(*) FROM queued_messages`).Scan(&left)
+	if left != 0 {
+		t.Fatalf("%d queued messages left", left)
+	}
+}

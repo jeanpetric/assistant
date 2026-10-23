@@ -214,23 +214,52 @@ func (a *App) StartSessionInNewTask(ctx context.Context, o StartOpts) (store.Ses
 	return sess, err
 }
 
-// SendMessage continues an idle session with a follow-up prompt.
-func (a *App) SendMessage(ctx context.Context, sessionID int64, text string) error {
+// SendMessage continues an idle session with a follow-up prompt. While the
+// session's agent works, the prompt is queued instead (queued is true): it
+// starts the next turn once this one ends (see sendQueued).
+func (a *App) SendMessage(ctx context.Context, sessionID int64, text string) (queued bool, err error) {
 	sess, err := a.Store.Session(ctx, sessionID)
 	if err != nil {
-		return err
+		return false, err
 	}
+	// Queue under the lock: a turn frees the session under it before it
+	// looks at the queue, so the message is either seen there or sent now.
 	a.mu.Lock()
-	_, busy := a.running[sessionID]
-	a.mu.Unlock()
-	if busy {
-		return ErrBusy
+	if _, busy := a.running[sessionID]; busy {
+		_, err := a.Store.QueueMessage(ctx, sessionID, text)
+		a.mu.Unlock()
+		return err == nil, err
 	}
+	a.mu.Unlock()
 	if sess.ClaudeSessionID == "" {
-		return ErrNoResume
+		return false, ErrNoResume
 	}
 	a.answered(ctx, sess)
-	return a.launch(sess, text, sess.ClaudeSessionID, nil)
+	return false, a.launch(sess, text, sess.ClaudeSessionID, nil)
+}
+
+func (a *App) hasQueued(ctx context.Context, sessionID int64) bool {
+	sess, err := a.Store.Session(ctx, sessionID)
+	return err == nil && len(sess.Queued) > 0
+}
+
+// sendQueued starts the session's next turn with the oldest message queued
+// while it worked, and reports whether it did. A message stays queued if the
+// session cannot take it now.
+func (a *App) sendQueued(ctx context.Context, sessionID int64) bool {
+	sess, err := a.Store.Session(ctx, sessionID)
+	if err != nil || len(sess.Queued) == 0 || sess.ClaudeSessionID == "" {
+		return false
+	}
+	q := sess.Queued[0]
+	if err := a.launch(sess, q.Content, sess.ClaudeSessionID, nil); err != nil {
+		return false
+	}
+	a.answered(ctx, sess)
+	if err := a.Store.DeleteQueuedMessage(ctx, q.ID); err != nil {
+		log.Printf("session %d: queued message %d: %v", sessionID, q.ID, err)
+	}
+	return true
 }
 
 // ResumePrompt is sent to an agent whose turn was cut short.
@@ -454,7 +483,8 @@ func (a *App) launch(sess store.Session, prompt, resumeID string, done func(ctx 
 			status = store.StatusError
 		}
 		a.Store.SetSessionStatus(bg, sess.ID, status, msg)
-		if reason := wait.reason(); status == store.StatusIdle && reason != "" {
+		// A message the user queued meanwhile is their answer already.
+		if reason := wait.reason(); status == store.StatusIdle && reason != "" && !a.hasQueued(bg, sess.ID) {
 			a.needsInput(bg, sess, reason)
 		}
 		// Free the session first: what follows may start its next turn.
@@ -462,11 +492,23 @@ func (a *App) launch(sess store.Session, prompt, resumeID string, done func(ctx 
 		delete(a.running, sess.ID)
 		a.mu.Unlock()
 		cancel()
+		// A message the user queued meanwhile goes next, before the skills and
+		// moves that follow a turn: those wait for the turn it starts. A
+		// stopped turn keeps the queue until a later one ends.
+		ended := status == store.StatusIdle || status == store.StatusError
+		if ended && done == nil && a.sendQueued(bg, sess.ID) {
+			return
+		}
 		switch {
 		case done != nil:
 			done(bg, status)
 		case status == store.StatusIdle:
 			a.afterTurn(bg, sess.ID, startLane)
+		}
+		// done may have started another turn (the next skill); the queue then
+		// waits for that one.
+		if ended {
+			a.sendQueued(bg, sess.ID)
 		}
 	}()
 	return nil
