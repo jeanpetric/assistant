@@ -1155,6 +1155,36 @@ func TestWatchTask(t *testing.T) {
 	}
 }
 
+// A task, or a session's new task, can start out watched.
+func TestCreateWatched(t *testing.T) {
+	c := newClient(t)
+	var task store.Task
+	c.do("POST", "/api/tasks", map[string]any{"title": "Watch from the start", "watched": true}, 201, &task)
+	if !task.Watched {
+		t.Fatalf("created unwatched: %+v", task)
+	}
+	text, isErr := c.tool("create_task", map[string]any{"title": "Via MCP", "watched": true})
+	if isErr || json.Unmarshal([]byte(text), &task) != nil || !task.Watched {
+		t.Fatalf("create_task: %s", text)
+	}
+	var sess store.Session
+	c.do("POST", "/api/sessions", map[string]any{"prompt": "hello", "watched": true}, 201, &sess)
+	c.app.Wait()
+	var got struct {
+		Task store.Task `json:"task"`
+	}
+	c.do("GET", "/api/tasks/"+itoa(sess.TaskID), nil, 200, &got)
+	if !got.Task.Watched {
+		t.Fatalf("session's task unwatched: %+v", got.Task)
+	}
+	c.do("POST", "/api/sessions", map[string]any{"prompt": "plain"}, 201, &sess)
+	c.app.Wait()
+	c.do("GET", "/api/tasks/"+itoa(sess.TaskID), nil, 200, &got)
+	if got.Task.Watched {
+		t.Fatalf("session's task watched by default: %+v", got.Task)
+	}
+}
+
 func TestWatchedTasksAPIAndTool(t *testing.T) {
 	c := newClient(t)
 	var a, b store.Task

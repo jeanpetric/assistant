@@ -918,6 +918,7 @@ type sessionInput struct {
 	DoneLaneID     *int64  `json:"done_lane_id"` // task sessions only
 	ProjectID      int64   `json:"project_id"`   // standalone sessions only: runs in the project's directory
 	ContextFrom    []int64 `json:"context_from"` // standalone sessions only: the tasks its new task builds on
+	Watched        bool    `json:"watched"`      // standalone sessions only: watch its new task
 }
 
 func (in *sessionInput) validate() error {
@@ -1001,7 +1002,7 @@ func (s *Server) startStandaloneSession(w http.ResponseWriter, r *http.Request) 
 	}
 	sess, err := s.app.StartSessionInNewTask(r.Context(), app.StartOpts{
 		Prompt: in.Prompt, Title: in.Title, Mode: in.Mode, Agent: in.Agent, Model: in.Model, Workdir: in.Workdir, ProjectID: in.ProjectID,
-		ContextFrom: in.ContextFrom,
+		ContextFrom: in.ContextFrom, Watched: in.Watched,
 	})
 	if err != nil {
 		writeErr(w, err)

@@ -74,8 +74,28 @@ func TestNewTaskDialogsBuildOnOpenTask(t *testing.T) {
 		"run: async () => sessionDialog({ buildsOn: await shownTask() })",
 		"const id = taskDialog.id;",
 		"const buildsOn = buildsOnPicker(from ? [from] : [], projectId);",
-		"mode: mode.value, context_from: buildsOn.ids() }",
+		"mode: mode.value, context_from: buildsOn.ids(), watched: watch }",
 		"context_from: buildsOn.ids(), memories: memories.ids(),",
+	} {
+		if !bytes.Contains(js, []byte(want)) {
+			t.Fatalf("app.js lacks %q", want)
+		}
+	}
+}
+
+// ⌘⇧↵, or the "& watch" button, in the new task and new session dialogs creates the task watched.
+func TestNewTaskDialogsCreateWatched(t *testing.T) {
+	js, err := webFS.ReadFile("web/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"submit(e.shiftKey);",
+		"submitOnCmdEnter([prompt], start);",
+		"h('button', { class: 'ghost', onclick: () => start(true) }, 'Start & watch', hint('⌘⇧↵')),",
+		"memories: memories.ids(), watched: watch,",
+		"h('button', { class: 'ghost', onclick: () => create(true) }, 'Create & watch', hint('⌘⇧↵')),",
+		"h('button', { onclick: () => create() }, 'Create', hint('⌘↵'))",
 	} {
 		if !bytes.Contains(js, []byte(want)) {
 			t.Fatalf("app.js lacks %q", want)

@@ -1347,9 +1347,10 @@ async function sessionDialog(opts = {}) {
   const [model, modelList] = modelInput(recall('session.model'));
   const agentSel = agentSelect(recall('session.agent'), model, modelList);
   const mode = select(modeOptions(false), recall('session.mode') || state.meta.default_mode);
-  const start = async () => {
+  // watch: the new task starts out watched (⌘⇧↵).
+  const start = async (watch = false) => {
     if (!prompt.value.trim()) return;
-    const s = await api('POST', '/api/sessions', { prompt: prompt.value, project_id: projectId, agent: agentSel.value, model: model.value, mode: mode.value, context_from: buildsOn.ids() });
+    const s = await api('POST', '/api/sessions', { prompt: prompt.value, project_id: projectId, agent: agentSel.value, model: model.value, mode: mode.value, context_from: buildsOn.ids(), watched: watch });
     remember('session.agent', agentSel.value);
     remember('session.model', model.value);
     remember('session.mode', mode.value);
@@ -1358,7 +1359,7 @@ async function sessionDialog(opts = {}) {
     if (next) go(next);
     else toast(`Task #${s.task_id} created, session started`);
   };
-  prompt.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) start(); });
+  submitOnCmdEnter([prompt], start);
   dlg.replaceChildren(h('h2', {}, 'New agent session'),
     h('label', {}, 'Prompt'), prompt,
     h('p', { class: 'muted small' }, 'A new task holds the session: its title is the first line of the prompt, its description the whole prompt.'),
@@ -1368,7 +1369,9 @@ async function sessionDialog(opts = {}) {
       h('div', { class: 'grow' }, h('label', {}, 'Agent'), agentSel),
       h('div', { class: 'grow' }, h('label', {}, 'Model'), model, modelList),
       h('div', { class: 'grow' }, h('label', {}, 'Mode'), mode)),
-    h('div', { class: 'dialog-actions' }, cancelButton(dlg), h('button', { onclick: start }, 'Start', hint('⌘↵'))));
+    h('div', { class: 'dialog-actions' }, cancelButton(dlg),
+      h('button', { class: 'ghost', onclick: () => start(true) }, 'Start & watch', hint('⌘⇧↵')),
+      h('button', { onclick: () => start() }, 'Start', hint('⌘↵'))));
   dlg.showModal();
   prompt.focus();
 }
@@ -2033,12 +2036,13 @@ async function newTaskDialog(opts = {}) {
   const buildsOn = buildsOnPicker(from ? [from] : [], from ? from.project_id : state.projectId);
   if (opts.memory) memories.add(opts.memory);
   if (from) (await api('GET', `/api/tasks/${from.id}`)).memories.forEach(memories.add);
-  const create = async () => {
+  // watch: the task starts out watched (⌘⇧↵).
+  const create = async (watch = false) => {
     if (!title.value.trim()) return;
     if (due.value) askNotificationPermission();
     const t = await api('POST', '/api/tasks', {
       title: title.value, description: desc.value, kind: kind.value, lane_id: Number(lane.value), due_at: fromLocalInput(due.value),
-      project_id: Number(project.value), context_from: buildsOn.ids(), memories: memories.ids(),
+      project_id: Number(project.value), context_from: buildsOn.ids(), memories: memories.ids(), watched: watch,
     });
     dlg.close();
     // Back to the board, on the new task's project, where the task now shows.
@@ -2056,7 +2060,9 @@ async function newTaskDialog(opts = {}) {
     h('label', {}, 'Project'), project,
     h('div', { class: 'row' }, h('div', { class: 'grow' }, h('label', {}, 'Kind'), kind), h('div', { class: 'grow' }, h('label', {}, 'Lane'), lane)),
     h('label', {}, 'Due (optional) — you get a notification at this time'), due,
-    h('div', { class: 'dialog-actions' }, cancelButton(dlg), h('button', { onclick: create }, 'Create', hint('⌘↵')))].filter(Boolean));
+    h('div', { class: 'dialog-actions' }, cancelButton(dlg),
+      h('button', { class: 'ghost', onclick: () => create(true) }, 'Create & watch', hint('⌘⇧↵')),
+      h('button', { onclick: () => create() }, 'Create', hint('⌘↵')))].filter(Boolean));
   dlg.showModal();
   title.focus();
 }
@@ -2260,11 +2266,12 @@ function pickedProjectHash(hash) {
   return /^#\/list\b/.test(hash) ? '#/list' : '#/board';
 }
 
-// Makes ⌘↵ (Ctrl↵ elsewhere) in any of the fields call submit, e.g. from a dialog's textarea.
+// Makes ⌘↵ (Ctrl↵ elsewhere) in any of the fields call submit, e.g. from a dialog's textarea;
+// submit gets whether ⇧ was held too (⌘⇧↵), which the new task and session dialogs take as "and watch it".
 function submitOnCmdEnter(fields, submit) {
   for (const f of fields) {
     f.addEventListener('keydown', e => {
-      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.repeat) { e.preventDefault(); submit(); }
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.repeat) { e.preventDefault(); submit(e.shiftKey); }
     });
   }
 }
@@ -2382,7 +2389,7 @@ function shortcutsDialog() {
   dlg.replaceChildren(h('h2', {}, 'Keyboard shortcuts'),
     h('table', { class: 'shortcuts' }, shortcuts.map(s => h('tr', {},
       h('td', {}, s.keys.split(' ').map(k => h('kbd', {}, k))), h('td', {}, s.label)))),
-    h('p', { class: 'muted small' }, '⌘/Ctrl+Enter sends a prompt or reply. Esc closes a dialog or the notifications. ',
+    h('p', { class: 'muted small' }, '⌘/Ctrl+Enter sends a prompt or reply; with ⇧ too, a new task or agent session starts out watched. Esc closes a dialog or the notifications. ',
       'Greyed keys next to buttons and links show their shortcut; ⌥H shows or hides them.'),
     h('div', { class: 'dialog-actions' }, h('button', { onclick: () => dlg.close() }, 'Close', hint('Esc'))));
   dlg.showModal();

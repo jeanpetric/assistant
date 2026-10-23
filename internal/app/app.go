@@ -109,6 +109,7 @@ type StartOpts struct {
 	// ContextFrom: the tasks StartSessionInNewTask's task builds on; the first
 	// prompt starts with their results and the memories the task inherits.
 	ContextFrom []int64
+	Watched     bool // StartSessionInNewTask's task starts out watched
 }
 
 // StartSession creates a session, for the task if one is given, and runs its
@@ -181,7 +182,7 @@ func (a *App) StartSessionInNewTask(ctx context.Context, o StartOpts) (store.Ses
 	if strings.TrimSpace(o.Prompt) == "" {
 		return store.Session{}, errors.New("prompt is required")
 	}
-	t := store.Task{Title: firstLine(o.Prompt, 80), ProjectID: o.ProjectID, ContextFrom: o.ContextFrom}
+	t := store.Task{Title: firstLine(o.Prompt, 80), ProjectID: o.ProjectID, ContextFrom: o.ContextFrom, Watched: o.Watched}
 	set, err := a.Store.Settings(ctx)
 	if err != nil {
 		return store.Session{}, err

@@ -187,6 +187,7 @@ func (s *Server) mcpTools() []mcpTool {
 				"title": prop("string", "Short title"), "description": prop("string", "Markdown description"), "project_id": pProjectID,
 				"kind": pKind, "lane_id": pLaneID, "workdir": pWorkdir, "due_at": pDueAt, "fields": pFields, "context_from": pContextFrom,
 				"memories": pMemories,
+				"watched":  prop("boolean", "Watch the task: the project picker counts watched tasks; moving it to Done stops watching"),
 			}),
 			call: fixed("POST", "/api/tasks", true),
 		},

@@ -396,9 +396,9 @@ func (s *Store) CreateTask(ctx context.Context, t Task) (Task, error) {
 		}
 		now := s.ts()
 		res, err := tx.ExecContext(ctx, `
-			INSERT INTO tasks (title, description, kind, project_id, lane_id, position, workdir, due_at, lane_changed_at, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, `+nextPosition+`, ?, ?, ?, ?, ?)`,
-			t.Title, t.Description, t.Kind, t.ProjectID, t.LaneID, t.ProjectID, t.LaneID, t.Workdir, toNullMillis(t.DueAt), now, now, now)
+			INSERT INTO tasks (title, description, kind, project_id, lane_id, position, workdir, due_at, lane_changed_at, created_at, updated_at, watched)
+			VALUES (?, ?, ?, ?, ?, `+nextPosition+`, ?, ?, ?, ?, ?, ?)`,
+			t.Title, t.Description, t.Kind, t.ProjectID, t.LaneID, t.ProjectID, t.LaneID, t.Workdir, toNullMillis(t.DueAt), now, now, now, boolInt(t.Watched))
 		if err != nil {
 			return err
 		}
