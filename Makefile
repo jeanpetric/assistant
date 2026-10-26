@@ -1,4 +1,4 @@
-.PHONY: build test run start stop restart reset
+.PHONY: build test run start stop restart reset backup
 
 build:
 	go build -o assistant ./cmd/assistant
@@ -21,6 +21,10 @@ stop:
 restart: build
 	scripts/stop.sh
 	scripts/start.sh
+
+# Consistent copy of the database into ~/.assistant/backups, safe while the app runs.
+backup:
+	scripts/backup.sh
 
 # Wipes all data (after a backup); asks for confirmation first.
 reset: build
