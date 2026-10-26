@@ -575,6 +575,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	t.Fields = s.app.WithLinkFields(r.Context(), t.Description, t.Fields)
 	t, err := s.app.Store.CreateTask(r.Context(), t)
 	if err != nil {
 		writeErr(w, err)
@@ -729,7 +730,24 @@ func (s *Server) updateTask(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Links a new description holds go to fields that are empty and not set
+	// or cleared by this request.
+	have := cur.Fields
 	cur.Fields = in.Fields
+	if in.Description != nil {
+		if have == nil {
+			have = map[string]string{}
+		}
+		for k, v := range in.Fields {
+			have[k] = v
+		}
+		for k, v := range s.app.LinkFields(r.Context(), cur.Description, have) {
+			if cur.Fields == nil {
+				cur.Fields = map[string]string{}
+			}
+			cur.Fields[k] = v
+		}
+	}
 	if in.ProjectID != nil {
 		if err := s.checkProject(r.Context(), *in.ProjectID); err != nil {
 			writeErr(w, err)

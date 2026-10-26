@@ -134,6 +134,7 @@ func (a *App) importCard(ctx context.Context, b store.TrelloBoard, card trello.C
 	if t.Title == "" {
 		t.Title = "(untitled Trello card)"
 	}
+	t.Fields = a.WithLinkFields(ctx, t.Description, t.Fields)
 	if b.ProjectID != nil {
 		t.ProjectID = *b.ProjectID
 	}

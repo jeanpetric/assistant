@@ -193,6 +193,7 @@ func (a *App) StartSessionInNewTask(ctx context.Context, o StartOpts) (store.Ses
 	if desc := strings.TrimSpace(o.Prompt); desc != t.Title {
 		t.Description = desc
 	}
+	t.Fields = a.WithLinkFields(ctx, t.Description, t.Fields)
 	t, err = a.Store.CreateTask(ctx, t)
 	if err != nil {
 		return store.Session{}, err
@@ -437,9 +438,11 @@ func (a *App) launch(sess store.Session, prompt, resumeID string, done func(ctx 
 			SystemPrompt: system}
 		failed := false
 		var wait waitSigns
+		var prs openedPRs
 		var model string // as the CLI names it
 		err := a.Runner.Run(ctx, req, func(ev agent.Event) {
 			wait.see(ev)
+			prs.see(ev)
 			if ev.ClaudeSessionID != "" && ev.ClaudeSessionID != sess.ClaudeSessionID {
 				sess.ClaudeSessionID = ev.ClaudeSessionID
 				a.Store.SetClaudeSessionID(bg, sess.ID, ev.ClaudeSessionID)
@@ -483,6 +486,7 @@ func (a *App) launch(sess store.Session, prompt, resumeID string, done func(ctx 
 			status = store.StatusError
 		}
 		a.Store.SetSessionStatus(bg, sess.ID, status, msg)
+		a.recordPR(bg, sess.TaskID, prs)
 		// A message the user queued meanwhile is their answer already.
 		if reason := wait.reason(); status == store.StatusIdle && reason != "" && !a.hasQueued(bg, sess.ID) {
 			a.needsInput(bg, sess, reason)

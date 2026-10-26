@@ -27,8 +27,9 @@ type fakeRunner struct {
 	// If set, the final reply and the error of a request; otherwise "ok" and err.
 	result func(agent.Request) string
 	fail   func(agent.Request) error
-	tools  []string // if set, emitted as tool_use events
-	denied []string // if set, the result's permission denials
+	tools  []string      // if set, emitted as tool_use events
+	events []agent.Event // if set, emitted before the result
+	denied []string      // if set, the result's permission denials
 	// If set, the session's model, the context sizes after each message and
 	// the result's context windows.
 	model   string
@@ -61,7 +62,7 @@ func (f *fakeRunner) Run(ctx context.Context, req agent.Request, emit func(agent
 		}
 	}
 	f.mu.Lock()
-	result, fail, failOn, err, tools, denied := f.result, f.fail, f.failOn, f.err, f.tools, f.denied
+	result, fail, failOn, err, tools, denied, events := f.result, f.fail, f.failOn, f.err, f.tools, f.denied, f.events
 	f.mu.Unlock()
 	if fail != nil {
 		if err := fail(req); err != nil {
@@ -75,6 +76,9 @@ func (f *fakeRunner) Run(ctx context.Context, req agent.Request, emit func(agent
 	emit(agent.Event{Role: "assistant", Kind: "text", Content: "echo: " + req.Prompt})
 	for _, t := range tools {
 		emit(agent.Event{Role: "assistant", Kind: "tool_use", Content: t})
+	}
+	for _, ev := range events {
+		emit(ev)
 	}
 	emit(agent.Event{Role: "system", Kind: "result", Content: reply, CostUSD: 0.5, Denied: denied, ContextWindows: windows})
 	if failOn != "" && strings.HasPrefix(req.Prompt, failOn) {

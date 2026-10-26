@@ -224,6 +224,25 @@ func TestTaskDueAt(t *testing.T) {
 	}
 }
 
+func TestTaskLinkFieldsFromDescription(t *testing.T) {
+	c := newClient(t)
+	var task store.Task
+	c.do("POST", "/api/tasks", map[string]any{"title": "Fix", "description": "From https://app.productive.io/1-org/tasks/42"}, 201, &task)
+	if task.Fields["productive"] != "https://app.productive.io/1-org/tasks/42" {
+		t.Fatalf("created %+v", task.Fields)
+	}
+	c.do("PATCH", "/api/tasks/"+itoa(task.ID), map[string]any{"description": "PR https://github.com/o/r/pull/4, was https://app.productive.io/1-org/tasks/7"}, 200, &task)
+	if task.Fields["pull_request"] != "https://github.com/o/r/pull/4" || task.Fields["productive"] != "https://app.productive.io/1-org/tasks/42" {
+		t.Fatalf("updated %+v", task.Fields)
+	}
+	c.do("PATCH", "/api/tasks/"+itoa(task.ID), map[string]any{"fields": map[string]string{"pull_request": ""}}, 200, &task)
+	var got store.Task // decoding into task would keep its old fields
+	c.do("PATCH", "/api/tasks/"+itoa(task.ID), map[string]any{"title": "Fix it"}, 200, &got)
+	if _, ok := got.Fields["pull_request"]; ok || got.Fields["productive"] == "" {
+		t.Fatalf("a cleared field came back: %+v", got.Fields)
+	}
+}
+
 func TestGuard(t *testing.T) {
 	c := newClient(t)
 	post := func(ct, origin, host string) int {

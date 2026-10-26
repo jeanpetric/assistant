@@ -1672,7 +1672,7 @@ async function renderSettings() {
   const fLabel = h('input', { placeholder: 'Label' });
   const fType = select([['url', 'Link'], ['text', 'Text']], 'url');
   const fields = h('div', { class: 'panel' }, h('h2', {}, 'Task fields'),
-    h('p', { class: 'muted small' }, 'Extra attributes every task can have: links to Productive, PRs, Slack threads…'),
+    h('p', { class: 'muted small' }, 'Extra attributes every task can have: links to Productive, PRs, Slack threads… The url fields productive, pull_request, slack and trello fill themselves from a link of their kind in the task\'s description, and pull_request from the PR an agent opens.'),
     h('table', {}, h('tbody', {}, b.fields.map(f => h('tr', {},
       h('td', {}, h('code', {}, f.key)), h('td', {}, f.label), h('td', { class: 'muted' }, f.type),
       h('td', {}, h('button', {
