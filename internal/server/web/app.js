@@ -2208,7 +2208,11 @@ async function refreshGlobal() {
 async function toggleNotifications() {
   const panel = document.getElementById('notif-panel');
   if (!panel.classList.contains('hidden')) { panel.classList.add('hidden'); return; }
-  const notes = await api('GET', '/api/notifications');
+  drawNotifications(panel, await api('GET', '/api/notifications'));
+  panel.classList.remove('hidden');
+}
+
+function drawNotifications(panel, notes) {
   const head = h('div', { class: 'notif-head' }, h('strong', {}, 'Notifications'),
     notes.length ? h('button', {
       class: 'small ghost', title: 'Take them all off this list',
@@ -2227,9 +2231,19 @@ async function toggleNotifications() {
       refreshGlobal();
       openNotification(n);
     },
-  }, h('div', {}, n.message), h('div', { class: 'muted small' }, (n.task_title ? n.task_title + ' · ' : '') + ago(n.created_at))))
+  }, h('div', { class: 'notif-body' },
+    h('div', {}, n.message), h('div', { class: 'muted small' }, (n.task_title ? n.task_title + ' · ' : '') + ago(n.created_at))),
+  // Archives just this one; the panel stays open.
+  h('button', {
+    class: 'ghost small notif-archive', title: 'Archive',
+    onclick: async e => {
+      e.stopPropagation();
+      await api('POST', `/api/notifications/${n.id}/archive`);
+      drawNotifications(panel, notes.filter(x => x.id !== n.id));
+      refreshGlobal();
+    },
+  }, '✕')))
     : [h('div', { class: 'notif muted' }, 'Nothing here.')]));
-  panel.classList.remove('hidden');
 }
 
 // ---------- keyboard shortcuts ----------

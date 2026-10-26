@@ -283,7 +283,10 @@ details.tool pre { white-space: pre-wrap; word-break: break-word; background: va
   position: sticky; top: 0; display: flex; justify-content: space-between; align-items: center;
   padding: 8px 12px; background: var(--surface); border-bottom: 1px solid var(--border);
 }
-.notif { padding: 10px 12px; border-bottom: 1px solid var(--border); }
+.notif { display: flex; gap: 6px; align-items: flex-start; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+.notif-body { flex: 1; min-width: 0; }
+.notif-archive { flex: none; opacity: .5; }
+.notif-archive:hover { opacity: 1; }
 .notif.unread { border-left: 3px solid var(--accent); }
 
 dialog {

@@ -276,6 +276,12 @@ func (s *Store) ArchiveNotifications(ctx context.Context) error {
 	return err
 }
 
+// ArchiveNotification takes one notification off the panel, marking it read if it wasn't.
+func (s *Store) ArchiveNotification(ctx context.Context, id int64) error {
+	now := s.ts()
+	return affected(s.db.ExecContext(ctx, `UPDATE notifications SET archived_at = COALESCE(archived_at, ?), read_at = COALESCE(read_at, ?) WHERE id = ?`, now, now, id))
+}
+
 func (s *Store) MarkNotificationRead(ctx context.Context, id int64) error {
 	return affected(s.db.ExecContext(ctx, `UPDATE notifications SET read_at = ? WHERE id = ?`, s.ts(), id))
 }

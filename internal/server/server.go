@@ -111,6 +111,7 @@ func (s *Server) routes() {
 
 	m.HandleFunc("GET /api/notifications", s.listNotifications)
 	m.HandleFunc("POST /api/notifications/{id}/read", s.readNotification)
+	m.HandleFunc("POST /api/notifications/{id}/archive", s.archiveNotification)
 	m.HandleFunc("POST /api/notifications/archive", s.archiveNotifications)
 
 	m.HandleFunc("POST /mcp", s.mcp)

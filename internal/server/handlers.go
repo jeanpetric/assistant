@@ -1651,6 +1651,19 @@ func (s *Server) readNotification(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(204)
 }
 
+func (s *Server) archiveNotification(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.app.Store.ArchiveNotification(r.Context(), id); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(204)
+}
+
 func (s *Server) archiveNotifications(w http.ResponseWriter, r *http.Request) {
 	if err := s.app.Store.ArchiveNotifications(r.Context()); err != nil {
 		writeErr(w, err)

@@ -345,6 +345,8 @@ func TestStaticUI(t *testing.T) {
 		"if (e.key === 'Escape' && closeNotifications()) { e.preventDefault(); return; }",
 		// The notifications panel archives them all at once.
 		"api('POST', '/api/notifications/archive')",
+		// …or one at a time, from the icon in its corner, without opening it.
+		"api('POST', `/api/notifications/${n.id}/archive`)",
 		// A project's directory is picked in Settings and shown as the default for its tasks.
 		"function taskWorkdir(t)", "workdir.addEventListener('change', saveProject)", "`Default (${taskWorkdir(task)})`",
 		// The new task dialog drops its missing "Builds on" line instead of drawing "null".
@@ -963,11 +965,13 @@ func TestNeedsInputOnBoardAndNotification(t *testing.T) {
 	if len(notes) != 1 || notes[0].SessionID == nil || *notes[0].SessionID != sess.ID {
 		t.Fatalf("notifications = %+v", notes)
 	}
-	c.do("POST", "/api/notifications/archive", nil, 204, nil)
+	c.do("POST", "/api/notifications/"+itoa(notes[0].ID)+"/archive", nil, 204, nil)
 	c.do("GET", "/api/notifications", nil, 200, &notes)
 	if len(notes) != 0 {
-		t.Fatalf("after archiving all: %+v", notes)
+		t.Fatalf("after archiving it: %+v", notes)
 	}
+	c.do("POST", "/api/notifications/999/archive", nil, 404, nil)
+	c.do("POST", "/api/notifications/archive", nil, 204, nil)
 
 	c.do("DELETE", "/api/sessions/"+itoa(sess.ID)+"/needs-input", nil, 204, nil)
 	b.NeedsInput = nil

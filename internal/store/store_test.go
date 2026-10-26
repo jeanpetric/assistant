@@ -1028,6 +1028,28 @@ func TestStandaloneSessionKeepsProject(t *testing.T) {
 	}
 }
 
+func TestArchiveNotification(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	s.Notify(ctx, nil, "keep")
+	s.Notify(ctx, nil, "drop")
+	ns, _ := s.Notifications(ctx, false)
+	if err := s.ArchiveNotification(ctx, ns[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Notifications(ctx, false); len(got) != 1 || got[0].Message != "keep" {
+		t.Fatalf("after archiving one: %+v", got)
+	}
+	var unread int
+	s.db.QueryRow(`SELECT COUNT(*) FROM notifications WHERE id = ? AND read_at IS NULL`, ns[0].ID).Scan(&unread)
+	if unread != 0 {
+		t.Fatal("archived one left unread")
+	}
+	if err := s.ArchiveNotification(ctx, 999); err != ErrNotFound {
+		t.Fatalf("missing one: %v", err)
+	}
+}
+
 func TestArchiveNotifications(t *testing.T) {
 	s := open(t)
 	ctx := context.Background()
