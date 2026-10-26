@@ -765,11 +765,13 @@ async function taskView(id, { every, leave, reload }) {
     title,
     done,
     watch,
+    // Scrolls to the end of the linked session, or else of the newest open one, where its latest turn and
+    // the reply box are: a long transcript is read from its bottom up.
     focus: sessionId => {
-      const c = sessionId && components.get(sessionId);
+      const c = sessionId ? components.get(sessionId) : [...components.values()].reverse().find(c => !c.el.classList.contains('collapsed'));
       if (!c) return;
       if (c.el.classList.contains('collapsed')) c.setCollapsed(false); // a link to a session opens it
-      c.el.scrollIntoView();
+      c.el.scrollIntoView({ block: 'end' });
     },
   };
 }
