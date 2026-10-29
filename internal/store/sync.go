@@ -46,6 +46,7 @@ var localTables = map[string]bool{
 	"sync_outbox": true,
 	"sync_rows":   true,
 	"sync_keys":   true, // keys a hub accepts
+	"id_leases":   true, // id blocks a hub gave out
 	// Messages wait for the agent process, which runs on the session's node.
 	"queued_messages": true,
 }
@@ -193,68 +194,90 @@ func keyWhere(tbl string) string {
 func (s *Store) ExportChanges(ctx context.Context, since int64, limit int) ([]Change, error) {
 	var changes []Change
 	err := s.tx(ctx, func(tx *sql.Tx) error {
-		upto := int64(math.MaxInt64)
-		if limit > 0 {
-			err := tx.QueryRowContext(ctx, `SELECT seq FROM sync_outbox WHERE seq > ? ORDER BY seq LIMIT 1 OFFSET ?`,
-				since, limit-1).Scan(&upto)
-			if err != nil && !errors.Is(err, sql.ErrNoRows) {
-				return err
-			}
-		}
-		rows, err := tx.QueryContext(ctx, `SELECT MAX(o.seq), o.tbl, o.pk_json, r.changed_at_ms, r.node_id, r.deleted
-			FROM sync_outbox o JOIN sync_rows r ON r.tbl = o.tbl AND r.pk_json = o.pk_json
-			WHERE o.seq > ? AND o.seq <= ? GROUP BY o.tbl, o.pk_json ORDER BY 1`, since, upto)
+		upto, err := outboxUpto(ctx, tx, since, limit)
 		if err != nil {
 			return err
 		}
-		for rows.Next() {
-			var c Change
-			var key string
-			if err := rows.Scan(&c.Seq, &c.Table, &key, &c.ChangedAtMs, &c.NodeID, &c.Deleted); err != nil {
-				rows.Close()
-				return err
-			}
-			c.Key = json.RawMessage(key)
-			changes = append(changes, c)
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return err
-		}
-		objects := map[string]string{} // table → json_object(...) of its columns
-		for i := range changes {
-			c := &changes[i]
-			if c.Deleted {
-				continue
-			}
-			obj, ok := objects[c.Table]
-			if !ok {
-				cols, err := tableColumns(ctx, tx, c.Table)
-				if err != nil {
-					return err
-				}
-				pairs := make([]string, len(cols))
-				for j, col := range cols {
-					pairs[j] = fmt.Sprintf(`'%s', "%s"`, col, col)
-				}
-				obj = "json_object(" + strings.Join(pairs, ", ") + ")"
-				objects[c.Table] = obj
-			}
-			var row string
-			err := tx.QueryRowContext(ctx, `SELECT `+obj+` FROM "`+c.Table+`" WHERE `+keyWhere(c.Table), string(c.Key)).Scan(&row)
-			switch {
-			case errors.Is(err, sql.ErrNoRows):
-				// Gone without a trace (deleted while sync was off).
-				c.Deleted = true
-			case err != nil:
-				return err
-			default:
-				c.Row = json.RawMessage(row)
-			}
-		}
-		return nil
+		changes, err = exportTx(ctx, tx, since, upto, 0)
+		return err
 	})
 	return changes, err
+}
+
+// outboxUpto is the last outbox entry of the limit (0: all) after since.
+func outboxUpto(ctx context.Context, tx *sql.Tx, since int64, limit int) (int64, error) {
+	upto := int64(math.MaxInt64)
+	if limit > 0 {
+		err := tx.QueryRowContext(ctx, `SELECT seq FROM sync_outbox WHERE seq > ? ORDER BY seq LIMIT 1 OFFSET ?`,
+			since, limit-1).Scan(&upto)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return 0, err
+		}
+	}
+	return upto, nil
+}
+
+// exportTx is ExportChanges for the outbox entries since < seq <= upto,
+// leaving out the rows whose last entry came from node except (0: none).
+func exportTx(ctx context.Context, tx *sql.Tx, since, upto, except int64) ([]Change, error) {
+	var changes []Change
+	// With MAX, SQLite takes o.node_id from the row with the highest seq.
+	rows, err := tx.QueryContext(ctx, `SELECT MAX(o.seq), o.node_id, o.tbl, o.pk_json, r.changed_at_ms, r.node_id, r.deleted
+		FROM sync_outbox o JOIN sync_rows r ON r.tbl = o.tbl AND r.pk_json = o.pk_json
+		WHERE o.seq > ? AND o.seq <= ? GROUP BY o.tbl, o.pk_json ORDER BY 1`, since, upto)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var c Change
+		var key string
+		var from int64
+		if err := rows.Scan(&c.Seq, &from, &c.Table, &key, &c.ChangedAtMs, &c.NodeID, &c.Deleted); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if except != 0 && from == except {
+			continue
+		}
+		c.Key = json.RawMessage(key)
+		changes = append(changes, c)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	objects := map[string]string{} // table → json_object(...) of its columns
+	for i := range changes {
+		c := &changes[i]
+		if c.Deleted {
+			continue
+		}
+		obj, ok := objects[c.Table]
+		if !ok {
+			cols, err := tableColumns(ctx, tx, c.Table)
+			if err != nil {
+				return nil, err
+			}
+			pairs := make([]string, len(cols))
+			for j, col := range cols {
+				pairs[j] = fmt.Sprintf(`'%s', "%s"`, col, col)
+			}
+			obj = "json_object(" + strings.Join(pairs, ", ") + ")"
+			objects[c.Table] = obj
+		}
+		var row string
+		err := tx.QueryRowContext(ctx, `SELECT `+obj+` FROM "`+c.Table+`" WHERE `+keyWhere(c.Table), string(c.Key)).Scan(&row)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			// Gone without a trace (deleted while sync was off).
+			c.Deleted = true
+		case err != nil:
+			return nil, err
+		default:
+			c.Row = json.RawMessage(row)
+		}
+	}
+	return changes, nil
 }
 
 // AckOutbox drops the outbox entries up to and including seq: they are
@@ -275,28 +298,35 @@ func (s *Store) AckOutbox(ctx context.Context, seq int64) error {
 // and renames are recorded as this node's own changes.
 func (s *Store) ApplyChanges(ctx context.Context, changes []Change) error {
 	return s.tx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `PRAGMA defer_foreign_keys = ON`); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, `UPDATE sync_state SET applying = 1 WHERE id = 1`); err != nil {
-			return err
-		}
-		a := applier{ctx: ctx, tx: tx, columns: map[string]map[string]bool{}, check: map[string]bool{}}
-		for _, c := range changes {
-			if err := a.apply(c); err != nil {
-				return fmt.Errorf("%s %s: %w", c.Table, c.Key, err)
-			}
-		}
-		if _, err := tx.ExecContext(ctx, `UPDATE sync_state SET applying = 0 WHERE id = 1`); err != nil {
-			return err
-		}
-		for _, r := range a.renamed {
-			if _, err := tx.ExecContext(ctx, `UPDATE "`+r.tbl+`" SET "`+r.col+`" = "`+r.col+`" WHERE `+keyWhere(r.tbl), r.key); err != nil {
-				return err
-			}
-		}
-		return a.fixReferences()
+		_, err := applyTx(ctx, tx, changes)
+		return err
 	})
+}
+
+// applyTx is ApplyChanges in tx; it returns the changed rows (table, key)
+// in the order of changes.
+func applyTx(ctx context.Context, tx *sql.Tx, changes []Change) ([][2]string, error) {
+	if _, err := tx.ExecContext(ctx, `PRAGMA defer_foreign_keys = ON`); err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE sync_state SET applying = 1 WHERE id = 1`); err != nil {
+		return nil, err
+	}
+	a := applier{ctx: ctx, tx: tx, columns: map[string]map[string]bool{}, check: map[string]bool{}}
+	for _, c := range changes {
+		if err := a.apply(c); err != nil {
+			return nil, fmt.Errorf("%s %s: %w", c.Table, c.Key, err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE sync_state SET applying = 0 WHERE id = 1`); err != nil {
+		return nil, err
+	}
+	for _, r := range a.renamed {
+		if _, err := tx.ExecContext(ctx, `UPDATE "`+r.tbl+`" SET "`+r.col+`" = "`+r.col+`" WHERE `+keyWhere(r.tbl), r.key); err != nil {
+			return nil, err
+		}
+	}
+	return a.changed, a.fixReferences()
 }
 
 type renamed struct{ tbl, col, key string }
@@ -307,6 +337,7 @@ type applier struct {
 	columns map[string]map[string]bool // table → its columns
 	check   map[string]bool            // tables whose references may be broken
 	renamed []renamed
+	changed [][2]string // rows the changes changed: table, key
 }
 
 func (a *applier) apply(c Change) error {
@@ -357,6 +388,9 @@ func (a *applier) apply(c Change) error {
 	_, err = a.tx.ExecContext(a.ctx, `INSERT INTO sync_rows (tbl, pk_json, changed_at_ms, node_id, deleted) VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT (tbl, pk_json) DO UPDATE SET changed_at_ms = excluded.changed_at_ms, node_id = excluded.node_id, deleted = excluded.deleted`,
 		c.Table, key, ms, node, c.Deleted)
+	if err == nil {
+		a.changed = append(a.changed, [2]string{c.Table, key})
+	}
 	return err
 }
 

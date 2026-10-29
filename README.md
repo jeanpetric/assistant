@@ -133,16 +133,21 @@ Settings live in `~/.assistant/config.json` (created with defaults on first run)
   "agent": "claude",
   "mode": "bypassPermissions",
   "trello_key": "",
-  "trello_token": ""
+  "trello_token": "",
+  "sync_listen": ""
 }
 ```
 
 Every key also has a flag that overrides the file for one run: `-port`, `-db`, `-claude`,
-`-claude-args`, `-gemini`, `-gemini-args`, `-workdir`, `-agent`, `-mode`, `-trello-key`, `-trello-token`, plus `-config` to point at another file. Avoid ports
+`-claude-args`, `-gemini`, `-gemini-args`, `-workdir`, `-agent`, `-mode`, `-trello-key`, `-trello-token`, `-sync-listen`, plus `-config` to point at another file. Avoid ports
 6665–6669: browsers refuse them.
 
 Agents run with your user's permissions. The server only binds to 127.0.0.1 and rejects
 non-JSON writes, foreign `Origin`s and foreign `Host` headers so that web pages can't drive it.
+
+`sync_listen` (e.g. `127.0.0.1:6768`) makes this node the sync hub: a second listener serves
+only `/sync/*` (push, pull, lease, snapshot), and only to requests signed by a key in
+`sync_keys`. The UI, API and MCP stay on the loopback port above. Empty (the default): no hub.
 
 ## MCP server
 

@@ -17,6 +17,7 @@ type Store struct {
 	db        *sql.DB
 	now       func() time.Time
 	leasedIDs bool // see SetLeasedIDs
+	hub       bool // see SetHub
 }
 
 // Open opens (or creates) the database at path and applies migrations.

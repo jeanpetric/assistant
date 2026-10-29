@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -21,6 +22,7 @@ import (
 	"github.com/jeanpetric/assistant/internal/config"
 	"github.com/jeanpetric/assistant/internal/server"
 	"github.com/jeanpetric/assistant/internal/store"
+	"github.com/jeanpetric/assistant/internal/syncauth"
 	"github.com/jeanpetric/assistant/internal/trello"
 )
 
@@ -39,6 +41,7 @@ func main() {
 	flag.StringVar(&f.Mode, "mode", "", "default permission mode: "+strings.Join(agent.Modes, ", ")+" (config: mode)")
 	flag.StringVar(&f.TrelloKey, "trello-key", "", "Trello API key (config: trello_key)")
 	flag.StringVar(&f.TrelloToken, "trello-token", "", "Trello API token (config: trello_token)")
+	flag.StringVar(&f.SyncListen, "sync-listen", "", "address to serve /sync/* on as the sync hub, e.g. 127.0.0.1:6768; empty: not a hub (config: sync_listen)")
 	flag.Parse()
 
 	cfg, err := config.Load(*configPath, home)
@@ -70,6 +73,8 @@ func main() {
 			cfg.TrelloKey = f.TrelloKey
 		case "trello-token":
 			cfg.TrelloToken = f.TrelloToken
+		case "sync-listen":
+			cfg.SyncListen = f.SyncListen
 		}
 	})
 	// Always loopback: agents run with your permissions.
@@ -104,6 +109,12 @@ func main() {
 		go a.RunTrelloSync(ctx, time.Minute)
 	}
 
+	if cfg.SyncListen != "" {
+		if err := serveSync(ctx, st, cfg.SyncListen); err != nil {
+			log.Fatal(err)
+		}
+	}
+
 	srv := &http.Server{Addr: addr, Handler: server.New(a), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()
@@ -116,4 +127,25 @@ func main() {
 		log.Fatal(err)
 	}
 	a.Shutdown()
+}
+
+// serveSync makes this node the sync hub on addr: its changes are logged for
+// the other nodes, and it takes its new ids from blocks it leases itself.
+func serveSync(ctx context.Context, st *store.Store, addr string) error {
+	if err := st.SetSyncEnabled(ctx, true); err != nil {
+		return err
+	}
+	st.SetHub(true)
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("sync_listen: %w", err)
+	}
+	v := syncauth.NewVerifier(st.SyncKeyNode)
+	go func() {
+		if err := server.ServeSync(ctx, ln, server.NewSyncHub(st).Handler(v)); err != nil {
+			log.Printf("sync: %v", err)
+		}
+	}()
+	log.Printf("sync hub listening on http://%s", addr)
+	return nil
 }

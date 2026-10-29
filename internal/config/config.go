@@ -25,6 +25,9 @@ type Config struct {
 	// set turns the Trello sync on.
 	TrelloKey   string `json:"trello_key"`
 	TrelloToken string `json:"trello_token"`
+	// SyncListen, when set (e.g. 127.0.0.1:6768), makes this node the sync
+	// hub: /sync/* is served there, and only there, to signed requests.
+	SyncListen string `json:"sync_listen"`
 }
 
 func Defaults(home string) Config {

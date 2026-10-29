@@ -55,8 +55,8 @@ func (s *Store) AddBlock(ctx context.Context, tbl string, from, to int64) error 
 }
 
 // nextID takes the id for a new row of tbl from its lowest block, skipping
-// ids already in use. Without a block it is the table's highest plus one,
-// unless ids are leased only.
+// ids already in use. Without a block a hub leases itself one; other nodes
+// go on from the table's highest, unless ids are leased only.
 func (s *Store) nextID(ctx context.Context, tx *sql.Tx, tbl string) (int64, error) {
 	if !idTables[tbl] {
 		return 0, fmt.Errorf("no id blocks for table %q", tbl)
@@ -65,6 +65,12 @@ func (s *Store) nextID(ctx context.Context, tx *sql.Tx, tbl string) (int64, erro
 		var next, end int64
 		err := tx.QueryRowContext(ctx, `SELECT next_id, end_id FROM id_blocks WHERE tbl = ? ORDER BY next_id LIMIT 1`, tbl).
 			Scan(&next, &end)
+		if errors.Is(err, sql.ErrNoRows) && s.hub {
+			if _, _, err := s.leaseTx(ctx, tx, tbl, 0); err != nil {
+				return 0, err
+			}
+			continue
+		}
 		if errors.Is(err, sql.ErrNoRows) {
 			if s.leasedIDs {
 				return 0, fmt.Errorf("%s: %w", tbl, ErrNoIDs)

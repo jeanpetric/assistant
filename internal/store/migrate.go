@@ -502,6 +502,18 @@ CREATE TABLE sync_keys (
 	revoked_at INTEGER
 );
 `,
+	// The id blocks a hub gave out, its own included, per table: new blocks
+	// start above every one of them. Local: leasing is the hub's business.
+	`
+CREATE TABLE id_leases (
+	tbl TEXT NOT NULL,
+	start_id INTEGER NOT NULL,
+	end_id INTEGER NOT NULL,
+	node_id INTEGER NOT NULL,
+	created_at INTEGER NOT NULL,
+	PRIMARY KEY (tbl, start_id)
+);
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {
