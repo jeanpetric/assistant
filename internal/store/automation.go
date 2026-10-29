@@ -7,8 +7,8 @@ import (
 	"time"
 )
 
-// Rule acts when a task of ProjectID (any project when nil) moves into
-// ToLaneID (from FromLaneID, or from any lane when FromLaneID is nil): it
+// Rule acts when a task of Kind (any kind when empty) and ProjectID (any
+// project when nil) moves into ToLaneID (from FromLaneID, or from any lane when FromLaneID is nil): it
 // starts an agent session with Prompt, runs SkillID in the task's latest
 // session, or, with neither, moves the task to DoneLaneID once an agent turn
 // on it finishes.
@@ -16,6 +16,7 @@ type Rule struct {
 	ID         int64  `json:"id"`
 	Name       string `json:"name"`
 	ProjectID  *int64 `json:"project_id"`
+	Kind       string `json:"kind"`
 	FromLaneID *int64 `json:"from_lane_id"`
 	ToLaneID   int64  `json:"to_lane_id"`
 	Prompt     string `json:"prompt"`
@@ -56,13 +57,13 @@ type Notification struct {
 
 // ---- rules ----
 
-const ruleCols = `id, name, project_id, from_lane_id, to_lane_id, prompt, skill_id, mode, workdir, done_lane_id, enabled`
+const ruleCols = `id, name, project_id, kind, from_lane_id, to_lane_id, prompt, skill_id, mode, workdir, done_lane_id, enabled`
 
 func scanRule(sc interface{ Scan(...any) error }) (Rule, error) {
 	var r Rule
 	var project, from, skill, doneLane sql.NullInt64
 	var enabled int
-	err := sc.Scan(&r.ID, &r.Name, &project, &from, &r.ToLaneID, &r.Prompt, &skill, &r.Mode, &r.Workdir, &doneLane, &enabled)
+	err := sc.Scan(&r.ID, &r.Name, &project, &r.Kind, &from, &r.ToLaneID, &r.Prompt, &skill, &r.Mode, &r.Workdir, &doneLane, &enabled)
 	r.ProjectID, r.FromLaneID, r.SkillID, r.DoneLaneID = fromNullID(project), fromNullID(from), fromNullID(skill), fromNullID(doneLane)
 	r.Enabled = enabled == 1
 	return r, err
@@ -89,24 +90,28 @@ func (s *Store) Rules(ctx context.Context) ([]Rule, error) {
 	return s.queryRules(ctx, `SELECT `+ruleCols+` FROM transition_rules ORDER BY id`)
 }
 
-// MatchingRules returns enabled rules for a move from -> to of a task in the project.
-// A project's rule overrides any-project rules for the same transition (same
-// from and to lanes), so the move doesn't start both.
-func (s *Store) MatchingRules(ctx context.Context, projectID, from, to int64) ([]Rule, error) {
+// MatchingRules returns enabled rules for a move from -> to of a task of this
+// kind in the project. A project's rule matching the task overrides
+// any-project rules for the same transition (same from and to lanes), so the
+// move doesn't start both.
+func (s *Store) MatchingRules(ctx context.Context, kind string, projectID, from, to int64) ([]Rule, error) {
 	return s.queryRules(ctx, `SELECT `+ruleCols+` FROM transition_rules r
-		WHERE enabled = 1 AND to_lane_id = ? AND (from_lane_id IS NULL OR from_lane_id = ?)
+		WHERE enabled = 1 AND to_lane_id = ? AND (from_lane_id IS NULL OR from_lane_id = ?) AND (kind = '' OR kind = ?)
 			AND (project_id = ? OR project_id IS NULL AND NOT EXISTS (SELECT 1 FROM transition_rules o
-				WHERE o.enabled = 1 AND o.project_id = ? AND o.to_lane_id = r.to_lane_id AND o.from_lane_id IS r.from_lane_id))
-		ORDER BY id`, to, from, projectID, projectID)
+				WHERE o.enabled = 1 AND o.project_id = ? AND (o.kind = '' OR o.kind = ?)
+					AND o.to_lane_id = r.to_lane_id AND o.from_lane_id IS r.from_lane_id))
+		ORDER BY id`, to, from, kind, projectID, projectID, kind)
 }
 
 // DoneLaneInto returns the done lane of the first enabled rule into lane `to`
-// that has one, from any lane, preferring the project's rules; nil if none.
-func (s *Store) DoneLaneInto(ctx context.Context, projectID, to int64) (*int64, error) {
+// that has one and matches a task of this kind, from any lane, preferring the
+// project's rules; nil if none.
+func (s *Store) DoneLaneInto(ctx context.Context, kind string, projectID, to int64) (*int64, error) {
 	var lane int64
 	err := s.db.QueryRowContext(ctx, `SELECT done_lane_id FROM transition_rules
 		WHERE enabled = 1 AND to_lane_id = ? AND done_lane_id IS NOT NULL AND (project_id = ? OR project_id IS NULL)
-		ORDER BY project_id IS NULL, id LIMIT 1`, to, projectID).Scan(&lane)
+			AND (kind = '' OR kind = ?)
+		ORDER BY project_id IS NULL, id LIMIT 1`, to, projectID, kind).Scan(&lane)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -126,17 +131,17 @@ func (s *Store) Rule(ctx context.Context, id int64) (Rule, error) {
 
 func (s *Store) SaveRule(ctx context.Context, r Rule) (Rule, error) {
 	if r.ID == 0 {
-		id, err := s.insert(ctx, "transition_rules", `INSERT INTO transition_rules (id, name, project_id, from_lane_id, to_lane_id, prompt, skill_id,
-			mode, workdir, done_lane_id, enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, r.Name, r.ProjectID, r.FromLaneID, r.ToLaneID, r.Prompt,
+		id, err := s.insert(ctx, "transition_rules", `INSERT INTO transition_rules (id, name, project_id, kind, from_lane_id, to_lane_id, prompt, skill_id,
+			mode, workdir, done_lane_id, enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, r.Name, r.ProjectID, r.Kind, r.FromLaneID, r.ToLaneID, r.Prompt,
 			r.SkillID, r.Mode, r.Workdir, r.DoneLaneID, boolInt(r.Enabled))
 		if err != nil {
 			return r, err
 		}
 		r.ID = id
 	} else {
-		err := affected(s.db.ExecContext(ctx, `UPDATE transition_rules SET name = ?, project_id = ?, from_lane_id = ?, to_lane_id = ?,
+		err := affected(s.db.ExecContext(ctx, `UPDATE transition_rules SET name = ?, project_id = ?, kind = ?, from_lane_id = ?, to_lane_id = ?,
 			prompt = ?, skill_id = ?, mode = ?, workdir = ?, done_lane_id = ?, enabled = ? WHERE id = ?`,
-			r.Name, r.ProjectID, r.FromLaneID, r.ToLaneID, r.Prompt, r.SkillID, r.Mode, r.Workdir, r.DoneLaneID, boolInt(r.Enabled), r.ID))
+			r.Name, r.ProjectID, r.Kind, r.FromLaneID, r.ToLaneID, r.Prompt, r.SkillID, r.Mode, r.Workdir, r.DoneLaneID, boolInt(r.Enabled), r.ID))
 		if err != nil {
 			return r, err
 		}

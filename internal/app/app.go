@@ -200,7 +200,7 @@ func (a *App) StartSessionInNewTask(ctx context.Context, o StartOpts) (store.Ses
 	}
 	o.TaskID = t.ID
 	if o.DoneLaneID == nil {
-		if o.DoneLaneID, err = a.Store.DoneLaneInto(ctx, t.ProjectID, t.LaneID); err != nil {
+		if o.DoneLaneID, err = a.Store.DoneLaneInto(ctx, t.Kind, t.ProjectID, t.LaneID); err != nil {
 			_ = a.Store.DeleteTask(ctx, t.ID)
 			return store.Session{}, err
 		}
@@ -803,7 +803,7 @@ func (a *App) MoveTask(ctx context.Context, taskID, laneID int64, index int) ([]
 	if err != nil {
 		return nil, err
 	}
-	rules, err := a.Store.MatchingRules(ctx, task.ProjectID, from, laneID)
+	rules, err := a.Store.MatchingRules(ctx, task.Kind, task.ProjectID, from, laneID)
 	if err != nil {
 		return nil, err
 	}

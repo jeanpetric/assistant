@@ -520,6 +520,10 @@ CREATE TABLE id_leases (
 ALTER TABLE sync_state ADD COLUMN pulled_seq INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE sync_state ADD COLUMN synced_at INTEGER NOT NULL DEFAULT 0;
 `,
+	// Transition rules for one kind of task ('': any kind, every rule so far).
+	`
+ALTER TABLE transition_rules ADD COLUMN kind TEXT NOT NULL DEFAULT '';
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

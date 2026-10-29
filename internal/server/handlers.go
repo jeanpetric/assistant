@@ -1345,6 +1345,10 @@ func (s *Server) saveRule(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	if rule.Kind != "" && !slices.Contains(taskKinds, rule.Kind) {
+		writeErr(w, badRequest{"unknown kind " + rule.Kind})
+		return
+	}
 	if rule.ProjectID != nil && *rule.ProjectID == 0 {
 		rule.ProjectID = nil // any project
 	}

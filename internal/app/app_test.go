@@ -593,6 +593,24 @@ func TestMoveTaskFiresRules(t *testing.T) {
 	a.Wait()
 }
 
+func TestMoveTaskFiresRulesForItsKind(t *testing.T) {
+	a, _ := newApp(t)
+	ctx := context.Background()
+	lanes := lanesByName(t, a)
+	todo, wip := lanes["Todo"], lanes["In progress"]
+	a.Store.SaveRule(ctx, store.Rule{Name: "Code it", Kind: "coding", FromLaneID: &todo, ToLaneID: wip, Enabled: true, Prompt: "/p-dev:code"})
+
+	research, _ := a.Store.CreateTask(ctx, store.Task{Title: "Look into it", Kind: "research", LaneID: todo})
+	if started, _ := a.MoveTask(ctx, research.ID, wip, 0); len(started) != 0 {
+		t.Fatalf("coding rule fired for a research task: %+v", started)
+	}
+	coding, _ := a.Store.CreateTask(ctx, store.Task{Title: "Build it", Kind: "coding", LaneID: todo})
+	if started, _ := a.MoveTask(ctx, coding.ID, wip, 0); len(started) != 1 || started[0].Trigger != "rule:Code it" {
+		t.Fatalf("started = %+v", started)
+	}
+	a.Wait()
+}
+
 func TestDoneLaneMovesTaskAfterSuccessfulTurn(t *testing.T) {
 	a, r := newApp(t)
 	ctx := context.Background()

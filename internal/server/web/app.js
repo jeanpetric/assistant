@@ -1688,12 +1688,13 @@ async function renderSettings() {
     h('div', { class: 'row' }, h('h2', { class: 'grow' }, 'Transition rules'), h('button', { onclick: () => ruleDialog(null, b, skills, rerender) }, '+ Add rule')),
     h('p', { class: 'muted small' }, 'When a task moves between lanes, start an agent session automatically, run a skill in the task\'s latest session, ' +
       'or move the task on once an agent turn on it finishes. ' +
-      'A project\'s rule replaces any-project rules for the same transition.'),
-    rules.length ? h('table', {}, h('thead', {}, h('tr', {}, ['', 'Rule', 'Project', 'Transition', 'Action', 'Mode', 'When done', ''].map(x => h('th', {}, x)))),
+      'A project\'s rule replaces any-project rules for the same transition. A rule for a kind fires only for tasks of that kind.'),
+    rules.length ? h('table', {}, h('thead', {}, h('tr', {}, ['', 'Rule', 'Project', 'Kind', 'Transition', 'Action', 'Mode', 'When done', ''].map(x => h('th', {}, x)))),
       h('tbody', {}, rules.map(r => h('tr', {},
         h('td', {}, h('input', { type: 'checkbox', checked: r.enabled, onchange: async e => { await api('PUT', `/api/rules/${r.id}`, { ...r, enabled: e.target.checked }); } })),
         h('td', {}, r.name),
         h('td', { class: 'small' }, r.project_id ? projectName(r.project_id) : 'Any'),
+        h('td', { class: 'small' }, r.kind || 'Any'),
         h('td', {}, `${laneLabel(r.from_lane_id)} → ${laneLabel(r.to_lane_id)}`),
         h('td', { class: 'small' }, isMoveRule(r) ? `Move to ${laneLabel(r.done_lane_id)} after an agent turn` : r.skill_id ? 'Skill: ' + ((skills.find(sk => sk.id === r.skill_id) || {}).name || '?') : h('code', {}, trunc(r.prompt, 80))),
         h('td', { class: 'muted small' }, r.skill_id || isMoveRule(r) ? '—' : r.mode || 'app default'),
@@ -1946,7 +1947,7 @@ function ruleBody(rule, v) {
   if (move && v.moveTo === v.to) return [null, 'Move the task to a lane other than To, the lane the rule watches'];
   return [{
     ...rule, name: v.name, prompt: session ? v.prompt : '', skill_id: skill, mode: session ? v.mode : '',
-    workdir: session ? v.workdir : '', project_id: v.project ? Number(v.project) : null,
+    workdir: session ? v.workdir : '', project_id: v.project ? Number(v.project) : null, kind: v.kind || '',
     from_lane_id: v.from ? Number(v.from) : null, to_lane_id: Number(v.to),
     done_lane_id: move ? Number(v.moveTo) : v.doneLane ? Number(v.doneLane) : null,
   }, null];
@@ -1964,11 +1965,12 @@ function ruleDialog(rule, b, skills, done) {
   const lanes = b.lanes;
   // Automated sessions usually end in review, so new rules default to a Review lane if there is one.
   const review = lanes.find(l => /review/i.test(l.name));
-  rule = rule || { name: '', project_id: null, from_lane_id: null, to_lane_id: lanes[0].id, prompt: '{{.Context}}\n\n', skill_id: null,
+  rule = rule || { name: '', project_id: null, kind: '', from_lane_id: null, to_lane_id: lanes[0].id, prompt: '{{.Context}}\n\n', skill_id: null,
     mode: '', workdir: '', done_lane_id: review ? review.id : null, enabled: true };
   const dlg = document.getElementById('dialog');
   const name = h('input', { value: rule.name, placeholder: 'e.g. Start coding' });
   const project = select([['', 'Any project'], ...b.projects.map(p => [p.id, p.name])], rule.project_id ?? '');
+  const kind = select([['', 'Any kind'], ...state.meta.kinds.map(k => [k, k])], rule.kind || '');
   const from = select([['', 'Any lane'], ...lanes.map(l => [l.id, l.name])], rule.from_lane_id ?? '');
   const to = select(lanes.map(l => [l.id, l.name]), rule.to_lane_id);
   const action = select([['', 'Start a new agent session with a prompt'],
@@ -2003,7 +2005,8 @@ function ruleDialog(rule, b, skills, done) {
   showOpts();
   dlg.replaceChildren(h('h2', {}, rule.id ? 'Edit rule' : 'New rule'),
     h('label', {}, 'Name'), name,
-    h('label', {}, 'Tasks in project'), project,
+    h('div', { class: 'row' }, h('div', { class: 'grow' }, h('label', {}, 'Tasks in project'), project),
+      h('div', { class: 'grow' }, h('label', {}, 'Of kind'), kind)),
     h('div', { class: 'row' }, h('div', { class: 'grow' }, h('label', {}, 'From'), from), h('div', { class: 'grow' }, h('label', {}, 'To'), to)),
     h('label', {}, 'Then'), action,
     sessionOpts, moveOpts, doneOpts,
@@ -2012,7 +2015,7 @@ function ruleDialog(rule, b, skills, done) {
       h('button', {
         onclick: async () => {
           const [body, err] = ruleBody(rule, {
-            name: name.value, project: project.value, from: from.value, to: to.value, action: action.value,
+            name: name.value, project: project.value, kind: kind.value, from: from.value, to: to.value, action: action.value,
             prompt: prompt.value, mode: mode.value, workdir: workdir.value, moveTo: moveTo.value, doneLane: doneLane.value,
           });
           if (err) return toast(err);

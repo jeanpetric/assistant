@@ -176,7 +176,7 @@ func TestSyncCursorMigrationKeepsData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	n := len(migrations) - 1 // before pulled_seq and synced_at
+	n := migrationWith(t, "ADD COLUMN pulled_seq") // before pulled_seq and synced_at
 	for _, m := range migrations[:n] {
 		if _, err := db.Exec(m); err != nil {
 			t.Fatal(err)

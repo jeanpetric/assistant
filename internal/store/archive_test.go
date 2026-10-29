@@ -320,7 +320,7 @@ func TestSessionLaneMigration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	n := len(migrations) - 1 // migrations before the session lane
+	n := migrationWith(t, "ADD COLUMN session_lane_id") // migrations before the session lane
 	for _, m := range migrations[:n] {
 		if _, err := db.Exec(m); err != nil {
 			t.Fatal(err)

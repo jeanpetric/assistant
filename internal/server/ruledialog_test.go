@@ -50,6 +50,10 @@ if (b || !err) fail('no name', err);
 if (err || b.prompt !== '{{.Context}}' || b.mode !== 'plan' || b.done_lane_id !== null) fail('session', err, JSON.stringify(b));
 [b, err] = body({}, { ...v, action: '7', doneLane: '5' });
 if (err || b.skill_id !== 7 || b.prompt !== '' || b.done_lane_id !== 5) fail('skill', err, JSON.stringify(b));
+[b, err] = body({ kind: 'coding' }, { ...v, action: '7', kind: 'coding' });
+if (err || b.kind !== 'coding') fail('kind', err, JSON.stringify(b));
+[b, err] = body({ kind: 'coding' }, { ...v, kind: '' });
+if (err || b.kind !== '') fail('any kind', err, JSON.stringify(b));
 // Move to never offers To, so the dialog can't pick the lane the rule watches.
 const lanes = [{ id: 2, name: 'Todo' }, { id: 3, name: 'In progress' }, { id: 4, name: 'Review' }];
 let [opts, pick] = toLanes(lanes, '4', 4);

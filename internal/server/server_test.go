@@ -117,6 +117,7 @@ func TestBoardFlow(t *testing.T) {
 	c.do("POST", "/api/rules", map[string]any{"name": "Kickoff", "to_lane_id": wip, "prompt": "Work on {{.Task.Title}}", "enabled": true}, 200, &rule)
 	c.do("POST", "/api/rules", map[string]any{"name": "Bad", "to_lane_id": wip, "prompt": "{{.Broken"}, 400, nil)
 	c.do("POST", "/api/rules", map[string]any{"name": "Bad", "to_lane_id": wip, "prompt": "x", "mode": "yolo"}, 400, nil)
+	c.do("POST", "/api/rules", map[string]any{"name": "Bad", "to_lane_id": wip, "prompt": "x", "kind": "nope"}, 400, nil)
 
 	var moved struct {
 		Started []store.Session `json:"started"`

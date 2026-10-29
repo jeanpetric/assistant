@@ -182,7 +182,7 @@ func TestLeasesMigrationKeepsData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	n := len(migrations) - 1 // before id_leases
+	n := migrationWith(t, "CREATE TABLE id_leases") // before id_leases
 	for _, m := range migrations[:n] {
 		if _, err := db.Exec(m); err != nil {
 			t.Fatal(err)

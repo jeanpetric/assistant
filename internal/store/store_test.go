@@ -7,9 +7,23 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
+
+// migrationWith returns the index of the migration containing sql: the number
+// of migrations before it.
+func migrationWith(t *testing.T, sql string) int {
+	t.Helper()
+	for i, m := range migrations {
+		if strings.Contains(m, sql) {
+			return i
+		}
+	}
+	t.Fatalf("no migration contains %q", sql)
+	return 0
+}
 
 func open(t *testing.T) *Store {
 	t.Helper()
@@ -1179,16 +1193,16 @@ func TestRulesPerProjectAndSkill(t *testing.T) {
 	if err != nil || *mine.ProjectID != p.ID || *mine.SkillID != sk.ID {
 		t.Fatalf("rule = %+v, %v", mine, err)
 	}
-	if got, _ := s.MatchingRules(ctx, 1, 2, 3); len(got) != 1 || got[0].ID != any.ID {
+	if got, _ := s.MatchingRules(ctx, "task", 1, 2, 3); len(got) != 1 || got[0].ID != any.ID {
 		t.Fatalf("other project matches %+v", got)
 	}
-	if got, _ := s.MatchingRules(ctx, p.ID, 2, 3); len(got) != 1 || got[0].ID != mine.ID {
+	if got, _ := s.MatchingRules(ctx, "task", p.ID, 2, 3); len(got) != 1 || got[0].ID != mine.ID {
 		t.Fatalf("own project's rule should override the any-project one: %+v", got)
 	}
 	// Only for the same transition: an any-project rule from a specific lane still fires.
 	two := int64(2)
 	fromTwo, _ := s.SaveRule(ctx, Rule{Name: "from two", FromLaneID: &two, ToLaneID: 3, Prompt: "p", Enabled: true})
-	if got, _ := s.MatchingRules(ctx, p.ID, 2, 3); len(got) != 2 || got[0].ID != mine.ID || got[1].ID != fromTwo.ID {
+	if got, _ := s.MatchingRules(ctx, "task", p.ID, 2, 3); len(got) != 2 || got[0].ID != mine.ID || got[1].ID != fromTwo.ID {
 		t.Fatalf("own project matches %+v", got)
 	}
 	// A disabled project rule overrides nothing.
@@ -1196,7 +1210,7 @@ func TestRulesPerProjectAndSkill(t *testing.T) {
 	if _, err := s.SaveRule(ctx, mine); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := s.MatchingRules(ctx, p.ID, 2, 3); len(got) != 2 || got[0].ID != any.ID {
+	if got, _ := s.MatchingRules(ctx, "task", p.ID, 2, 3); len(got) != 2 || got[0].ID != any.ID {
 		t.Fatalf("disabled project rule matches %+v", got)
 	}
 	if err := s.DeleteRule(ctx, fromTwo.ID); err != nil {
@@ -1219,6 +1233,80 @@ func TestRulesPerProjectAndSkill(t *testing.T) {
 	}
 	if _, err := s.Rule(ctx, any.ID); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRulesPerKind(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	p, _ := s.CreateProject(ctx, Project{Name: "Backyard"})
+	four := int64(4)
+	any, _ := s.SaveRule(ctx, Rule{Name: "any", ToLaneID: 3, Prompt: "p", Enabled: true})
+	coding, err := s.SaveRule(ctx, Rule{Name: "coding", Kind: "coding", ToLaneID: 3, Prompt: "p", DoneLaneID: &four, Enabled: true})
+	if err != nil || coding.Kind != "coding" {
+		t.Fatalf("rule = %+v, %v", coding, err)
+	}
+	if got, _ := s.MatchingRules(ctx, "research", 1, 2, 3); len(got) != 1 || got[0].ID != any.ID {
+		t.Fatalf("research task matches %+v", got)
+	}
+	if got, _ := s.MatchingRules(ctx, "coding", 1, 2, 3); len(got) != 2 || got[0].ID != any.ID || got[1].ID != coding.ID {
+		t.Fatalf("coding task matches %+v", got)
+	}
+	if lane, _ := s.DoneLaneInto(ctx, "research", 1, 3); lane != nil {
+		t.Fatalf("research task's done lane = %v", *lane)
+	}
+	if lane, _ := s.DoneLaneInto(ctx, "coding", 1, 3); lane == nil || *lane != 4 {
+		t.Fatalf("coding task's done lane = %v", lane)
+	}
+	// A project's rule overrides any-project rules only for the tasks it matches.
+	mine, _ := s.SaveRule(ctx, Rule{Name: "mine", ProjectID: &p.ID, Kind: "coding", ToLaneID: 3, Prompt: "p", Enabled: true})
+	if got, _ := s.MatchingRules(ctx, "coding", p.ID, 2, 3); len(got) != 1 || got[0].ID != mine.ID {
+		t.Fatalf("project's coding rule should override: %+v", got)
+	}
+	if got, _ := s.MatchingRules(ctx, "research", p.ID, 2, 3); len(got) != 1 || got[0].ID != any.ID {
+		t.Fatalf("project's coding rule overrode for a research task: %+v", got)
+	}
+	coding.Kind = ""
+	if coding, _ = s.SaveRule(ctx, coding); coding.Kind != "" {
+		t.Fatalf("kind not cleared: %+v", coding)
+	}
+}
+
+func TestRuleKindMigrationKeepsRules(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := migrationWith(t, "transition_rules ADD COLUMN kind")
+	for _, m := range migrations[:n] {
+		if _, err := db.Exec(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, q := range []string{
+		fmt.Sprintf(`PRAGMA user_version = %d`, n),
+		`INSERT INTO transition_rules (id, name, from_lane_id, to_lane_id, prompt, mode, workdir, done_lane_id, enabled)
+			VALUES (7, 'Code', 2, 3, 'p', 'plan', '/w', 4, 1)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(q, err)
+		}
+	}
+	db.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	r, err := s.Rule(ctx, 7)
+	if err != nil || r.Name != "Code" || r.Kind != "" || *r.FromLaneID != 2 || r.ToLaneID != 3 || r.Prompt != "p" || *r.DoneLaneID != 4 || !r.Enabled {
+		t.Fatalf("rule = %+v, %v", r, err)
+	}
+	if got, _ := s.MatchingRules(ctx, "coding", 1, 2, 3); len(got) != 1 || got[0].ID != 7 {
+		t.Fatalf("migrated rule matches %+v", got)
 	}
 }
 
