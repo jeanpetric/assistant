@@ -126,13 +126,13 @@ func (s *Store) Rule(ctx context.Context, id int64) (Rule, error) {
 
 func (s *Store) SaveRule(ctx context.Context, r Rule) (Rule, error) {
 	if r.ID == 0 {
-		res, err := s.db.ExecContext(ctx, `INSERT INTO transition_rules (name, project_id, from_lane_id, to_lane_id, prompt, skill_id, mode, workdir,
-			done_lane_id, enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, r.Name, r.ProjectID, r.FromLaneID, r.ToLaneID, r.Prompt, r.SkillID,
-			r.Mode, r.Workdir, r.DoneLaneID, boolInt(r.Enabled))
+		id, err := s.insert(ctx, "transition_rules", `INSERT INTO transition_rules (id, name, project_id, from_lane_id, to_lane_id, prompt, skill_id,
+			mode, workdir, done_lane_id, enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, r.Name, r.ProjectID, r.FromLaneID, r.ToLaneID, r.Prompt,
+			r.SkillID, r.Mode, r.Workdir, r.DoneLaneID, boolInt(r.Enabled))
 		if err != nil {
 			return r, err
 		}
-		r.ID, _ = res.LastInsertId()
+		r.ID = id
 	} else {
 		err := affected(s.db.ExecContext(ctx, `UPDATE transition_rules SET name = ?, project_id = ?, from_lane_id = ?, to_lane_id = ?,
 			prompt = ?, skill_id = ?, mode = ?, workdir = ?, done_lane_id = ?, enabled = ? WHERE id = ?`,
@@ -200,12 +200,12 @@ func (s *Store) Schedule(ctx context.Context, id int64) (Schedule, error) {
 
 func (s *Store) SaveSchedule(ctx context.Context, x Schedule) (Schedule, error) {
 	if x.ID == 0 {
-		res, err := s.db.ExecContext(ctx, `INSERT INTO schedules (task_id, cron, action, prompt, mode, done_lane_id, enabled, next_run_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, x.TaskID, x.Cron, x.Action, x.Prompt, x.Mode, x.DoneLaneID, boolInt(x.Enabled), toNullMillis(x.NextRunAt))
+		id, err := s.insert(ctx, "schedules", `INSERT INTO schedules (id, task_id, cron, action, prompt, mode, done_lane_id, enabled, next_run_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, x.TaskID, x.Cron, x.Action, x.Prompt, x.Mode, x.DoneLaneID, boolInt(x.Enabled), toNullMillis(x.NextRunAt))
 		if err != nil {
 			return x, err
 		}
-		x.ID, _ = res.LastInsertId()
+		x.ID = id
 	} else {
 		err := affected(s.db.ExecContext(ctx, `UPDATE schedules SET cron = ?, action = ?, prompt = ?, mode = ?, done_lane_id = ?, enabled = ?,
 			next_run_at = ? WHERE id = ?`, x.Cron, x.Action, x.Prompt, x.Mode, x.DoneLaneID, boolInt(x.Enabled), toNullMillis(x.NextRunAt), x.ID))
@@ -236,9 +236,9 @@ func (s *Store) Notify(ctx context.Context, taskID *int64, msg string) error {
 // panel clear.
 func (s *Store) NotifySession(ctx context.Context, taskID, sessionID *int64, msg string) error {
 	now := s.ts()
-	_, err := s.db.ExecContext(ctx, `INSERT INTO notifications (task_id, session_id, message, created_at, read_at, archived_at)
-		SELECT ?1, ?2, ?3, ?4, done, done FROM (SELECT CASE WHEN EXISTS
-			(SELECT 1 FROM tasks WHERE id = ?1 AND lane_id IN (`+doneLanes+`)) THEN ?4 END AS done)`,
+	_, err := s.insert(ctx, "notifications", `INSERT INTO notifications (id, task_id, session_id, message, created_at, read_at, archived_at)
+		SELECT ?1, ?2, ?3, ?4, ?5, done, done FROM (SELECT CASE WHEN EXISTS
+			(SELECT 1 FROM tasks WHERE id = ?2 AND lane_id IN (`+doneLanes+`)) THEN ?5 END AS done)`,
 		taskID, sessionID, msg, now)
 	return err
 }

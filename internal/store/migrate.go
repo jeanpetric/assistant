@@ -444,6 +444,24 @@ CREATE TABLE queued_messages (
 );
 CREATE INDEX queued_messages_session ON queued_messages(session_id, id);
 `,
+	// Sync groundwork: which node this database is (1 for the computer it
+	// started on), and blocks of ids each table's new rows take theirs from,
+	// so rows made on different nodes never share an id. No blocks yet: ids
+	// go on from the table's highest, as before. Both tables stay local.
+	`
+CREATE TABLE sync_node (
+	id INTEGER PRIMARY KEY CHECK (id = 1),
+	node_id INTEGER NOT NULL
+);
+INSERT INTO sync_node (id, node_id) VALUES (1, 1);
+CREATE TABLE id_blocks (
+	tbl TEXT NOT NULL,
+	next_id INTEGER NOT NULL,
+	end_id INTEGER NOT NULL,
+	PRIMARY KEY (tbl, end_id),
+	CHECK (next_id <= end_id)
+);
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

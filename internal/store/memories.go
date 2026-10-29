@@ -110,16 +110,16 @@ func (s *Store) CreateMemory(ctx context.Context, x Memory) (Memory, error) {
 	var id int64
 	err := s.tx(ctx, func(tx *sql.Tx) error {
 		now := s.ts()
-		res, err := tx.ExecContext(ctx, `INSERT INTO memories (name, description, created_at, updated_at) VALUES (?, ?, ?, ?)`,
+		var err error
+		id, err = s.insertTx(ctx, tx, "memories", `INSERT INTO memories (id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
 			x.Name, x.Description, now, now)
 		if err != nil {
 			return memoryErr(err)
 		}
-		id, _ = res.LastInsertId()
 		if strings.TrimSpace(x.Body) == "" {
 			return nil
 		}
-		_, err = setMemoryBody(ctx, tx, MemoryRevision{MemoryID: id, Body: x.Body, Source: SourceUser}, now)
+		_, err = s.setMemoryBody(ctx, tx, MemoryRevision{MemoryID: id, Body: x.Body, Source: SourceUser}, now)
 		return err
 	})
 	if err != nil {
@@ -167,7 +167,7 @@ func (s *Store) SetMemoryBody(ctx context.Context, rev MemoryRevision, base *int
 			return nil
 		}
 		changed = true
-		out, err = setMemoryBody(ctx, tx, rev, s.ts())
+		out, err = s.setMemoryBody(ctx, tx, rev, s.ts())
 		return err
 	})
 	return out, changed, err
@@ -189,20 +189,20 @@ func (s *Store) AppendMemoryNote(ctx context.Context, rev MemoryRevision) (Memor
 			body += "\n\n"
 		}
 		rev.Body = body + strings.TrimSpace(rev.Body)
-		out, err = setMemoryBody(ctx, tx, rev, s.ts())
+		out, err = s.setMemoryBody(ctx, tx, rev, s.ts())
 		return err
 	})
 	return out, err
 }
 
-func setMemoryBody(ctx context.Context, tx *sql.Tx, rev MemoryRevision, now int64) (MemoryRevision, error) {
+func (s *Store) setMemoryBody(ctx context.Context, tx *sql.Tx, rev MemoryRevision, now int64) (MemoryRevision, error) {
 	rev.Body = strings.TrimSpace(rev.Body)
-	res, err := tx.ExecContext(ctx, `INSERT INTO memory_revisions (memory_id, body, source, session_id, task_id, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		rev.MemoryID, rev.Body, rev.Source, rev.SessionID, rev.TaskID, now)
+	var err error
+	rev.ID, err = s.insertTx(ctx, tx, "memory_revisions", `INSERT INTO memory_revisions (id, memory_id, body, source, session_id, task_id, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`, rev.MemoryID, rev.Body, rev.Source, rev.SessionID, rev.TaskID, now)
 	if err != nil {
 		return rev, err
 	}
-	rev.ID, _ = res.LastInsertId()
 	rev.CreatedAt = fromMillis(now)
 	_, err = tx.ExecContext(ctx, `UPDATE memories SET body = ?, revision = ?, updated_at = ? WHERE id = ?`, rev.Body, rev.ID, now, rev.MemoryID)
 	return rev, err

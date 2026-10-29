@@ -14,8 +14,9 @@ import (
 var ErrNotFound = errors.New("not found")
 
 type Store struct {
-	db  *sql.DB
-	now func() time.Time
+	db        *sql.DB
+	now       func() time.Time
+	leasedIDs bool // see SetLeasedIDs
 }
 
 // Open opens (or creates) the database at path and applies migrations.

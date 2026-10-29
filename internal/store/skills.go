@@ -127,12 +127,12 @@ func (s *Store) SaveSkill(ctx context.Context, x Skill) (Skill, error) {
 	err := s.tx(ctx, func(tx *sql.Tx) error {
 		now := s.ts()
 		if x.ID == 0 {
-			res, err := tx.ExecContext(ctx, `INSERT INTO skills (name, description, body, artifact, model, created_at, updated_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?)`, x.Name, x.Description, x.Body, boolInt(x.Artifact), x.Model, now, now)
+			id, err := s.insertTx(ctx, tx, "skills", `INSERT INTO skills (id, name, description, body, artifact, model, created_at, updated_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, x.Name, x.Description, x.Body, boolInt(x.Artifact), x.Model, now, now)
 			if err != nil {
 				return err
 			}
-			x.ID, _ = res.LastInsertId()
+			x.ID = id
 		} else {
 			err := affected(tx.ExecContext(ctx, `UPDATE skills SET name = ?, description = ?, body = ?, artifact = ?, model = ?, updated_at = ?
 				WHERE id = ?`, x.Name, x.Description, x.Body, boolInt(x.Artifact), x.Model, now, x.ID))
@@ -144,7 +144,8 @@ func (s *Store) SaveSkill(ctx context.Context, x Skill) (Skill, error) {
 			}
 		}
 		for _, a := range x.Automations {
-			_, err := tx.ExecContext(ctx, `INSERT INTO skill_automations (skill_id, kind, project_id, lane_id, enabled) VALUES (?, ?, ?, ?, ?)`,
+			_, err := s.insertTx(ctx, tx, "skill_automations", `INSERT INTO skill_automations (id, skill_id, kind, project_id, lane_id, enabled)
+				VALUES (?, ?, ?, ?, ?, ?)`,
 				x.ID, a.Kind, a.ProjectID, a.LaneID, boolInt(a.Enabled))
 			if err != nil {
 				return err
@@ -203,12 +204,12 @@ func (s *Store) MatchingSkills(ctx context.Context, kind string, projectID, lane
 
 func (s *Store) AddArtifact(ctx context.Context, x Artifact) (Artifact, error) {
 	now := s.ts()
-	res, err := s.db.ExecContext(ctx, `INSERT INTO artifacts (task_id, session_id, skill, content, created_at) VALUES (?, ?, ?, ?, ?)`,
+	id, err := s.insert(ctx, "artifacts", `INSERT INTO artifacts (id, task_id, session_id, skill, content, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
 		x.TaskID, x.SessionID, x.Skill, x.Content, now)
 	if err != nil {
 		return x, err
 	}
-	x.ID, _ = res.LastInsertId()
+	x.ID = id
 	x.CreatedAt = fromMillis(now)
 	return x, nil
 }

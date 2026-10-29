@@ -53,13 +53,13 @@ func (s *Store) TrelloBoard(ctx context.Context, id int64) (TrelloBoard, error) 
 }
 
 func (s *Store) AddTrelloBoard(ctx context.Context, b TrelloBoard) (TrelloBoard, error) {
-	res, err := s.db.ExecContext(ctx, `INSERT INTO trello_boards (board, project_id, lane_id, done_lane_id) VALUES (?, ?, ?, ?)`,
+	id, err := s.insert(ctx, "trello_boards", `INSERT INTO trello_boards (id, board, project_id, lane_id, done_lane_id) VALUES (?, ?, ?, ?, ?)`,
 		b.Board, b.ProjectID, b.LaneID, b.DoneLaneID)
 	if err != nil {
 		return b, err
 	}
-	b.ID, err = res.LastInsertId()
-	return b, err
+	b.ID = id
+	return b, nil
 }
 
 func (s *Store) UpdateTrelloBoard(ctx context.Context, b TrelloBoard) error {

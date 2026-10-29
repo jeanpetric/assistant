@@ -52,13 +52,12 @@ func (s *Store) Project(ctx context.Context, id int64) (Project, error) {
 }
 
 func (s *Store) CreateProject(ctx context.Context, p Project) (Project, error) {
-	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO projects (name, color, workdir, position) VALUES (?, ?, ?, (SELECT COALESCE(MAX(position), -1) + 1 FROM projects))`,
+	id, err := s.insert(ctx, "projects",
+		`INSERT INTO projects (id, name, color, workdir, position) VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(position), -1) + 1 FROM projects))`,
 		p.Name, p.Color, p.Workdir)
 	if err != nil {
 		return Project{}, err
 	}
-	id, _ := res.LastInsertId()
 	return s.Project(ctx, id)
 }
 

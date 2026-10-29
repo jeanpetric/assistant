@@ -103,15 +103,14 @@ func scanSession(sc interface{ Scan(...any) error }) (Session, error) {
 
 func (s *Store) CreateSession(ctx context.Context, x Session) (Session, error) {
 	now := s.ts()
-	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO sessions (task_id, project_id, title, status, mode, agent, model, workdir, trigger, done_lane_id, parent_id, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	id, err := s.insert(ctx, "sessions", `
+		INSERT INTO sessions (id, task_id, project_id, title, status, mode, agent, model, workdir, trigger, done_lane_id, parent_id, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sql.NullInt64{Int64: x.TaskID, Valid: x.TaskID != 0}, sql.NullInt64{Int64: x.ProjectID, Valid: x.TaskID == 0 && x.ProjectID != 0}, x.Title, StatusRunning, x.Mode, agentOrClaude(x.Agent), x.Model, x.Workdir, x.Trigger,
 		x.DoneLaneID, x.ParentID, now, now)
 	if err != nil {
 		return Session{}, err
 	}
-	id, _ := res.LastInsertId()
 	return s.Session(ctx, id)
 }
 
@@ -359,13 +358,13 @@ func (s *Store) MarkInterrupted(ctx context.Context) error {
 
 func (s *Store) AddMessage(ctx context.Context, m Message) (Message, error) {
 	now := s.ts()
-	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO messages (session_id, role, kind, content, created_at) VALUES (?, ?, ?, ?, ?)`,
+	id, err := s.insert(ctx, "messages",
+		`INSERT INTO messages (id, session_id, role, kind, content, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
 		m.SessionID, m.Role, m.Kind, m.Content, now)
 	if err != nil {
 		return m, err
 	}
-	m.ID, _ = res.LastInsertId()
+	m.ID = id
 	m.CreatedAt = fromMillis(now)
 	_, err = s.db.ExecContext(ctx, `UPDATE sessions SET updated_at = ? WHERE id = ?`, now, m.SessionID)
 	return m, err
@@ -395,12 +394,11 @@ func (s *Store) Messages(ctx context.Context, sessionID, after int64) ([]Message
 
 // QueueMessage keeps a message for the session's next turn.
 func (s *Store) QueueMessage(ctx context.Context, sessionID int64, content string) (QueuedMessage, error) {
-	res, err := s.db.ExecContext(ctx, `INSERT INTO queued_messages (session_id, content, created_at) VALUES (?, ?, ?)`,
+	id, err := s.insert(ctx, "queued_messages", `INSERT INTO queued_messages (id, session_id, content, created_at) VALUES (?, ?, ?, ?)`,
 		sessionID, content, s.ts())
 	if err != nil {
 		return QueuedMessage{}, err
 	}
-	id, _ := res.LastInsertId()
 	return QueuedMessage{ID: id, Content: content}, nil
 }
 
