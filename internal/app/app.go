@@ -217,7 +217,8 @@ func (a *App) StartSessionInNewTask(ctx context.Context, o StartOpts) (store.Ses
 
 // SendMessage continues an idle session with a follow-up prompt. While the
 // session's agent works, the prompt is queued instead (queued is true): it
-// starts the next turn once this one ends (see sendQueued).
+// starts the next turn once this one ends (see sendQueued). Either way it
+// answers the questions the session asked on its task's thread.
 func (a *App) SendMessage(ctx context.Context, sessionID int64, text string) (queued bool, err error) {
 	sess, err := a.Store.Session(ctx, sessionID)
 	if err != nil {
@@ -229,11 +230,17 @@ func (a *App) SendMessage(ctx context.Context, sessionID int64, text string) (qu
 	if _, busy := a.running[sessionID]; busy {
 		_, err := a.Store.QueueMessage(ctx, sessionID, text)
 		a.mu.Unlock()
+		if err == nil {
+			err = a.Store.AnswerSessionQuestions(ctx, sessionID)
+		}
 		return err == nil, err
 	}
 	a.mu.Unlock()
 	if sess.ClaudeSessionID == "" {
 		return false, ErrNoResume
+	}
+	if err := a.Store.AnswerSessionQuestions(ctx, sessionID); err != nil {
+		return false, err
 	}
 	a.answered(ctx, sess)
 	return false, a.launch(sess, text, sess.ClaudeSessionID, nil)
@@ -488,7 +495,8 @@ func (a *App) launch(sess store.Session, prompt, resumeID string, done func(ctx 
 		a.Store.SetSessionStatus(bg, sess.ID, status, msg)
 		a.recordPR(bg, sess.TaskID, prs)
 		// A message the user queued meanwhile is their answer already.
-		if reason := wait.reason(); status == store.StatusIdle && reason != "" && !a.hasQueued(bg, sess.ID) {
+		// A question on the task's thread flagged the session already.
+		if reason := wait.reason(); status == store.StatusIdle && reason != "" && !a.hasQueued(bg, sess.ID) && !a.waitsForAnswer(bg, sess.ID) {
 			a.needsInput(bg, sess, reason)
 		}
 		// Free the session first: what follows may start its next turn.
@@ -560,9 +568,16 @@ func (a *App) Limits(sessionID int64) agent.RateLimits {
 // (or, failing that, to the lane a rule set for after a turn) and, if other tasks build on it, the session's summary is written; the
 // task's memories are updated from the session.
 // A skill turn that does not finish successfully ends the chain there.
+// A session waiting for the answer to its question on the task's thread runs
+// no skills and does not move the task: its turn after the answer does.
 func (a *App) afterTurn(ctx context.Context, sessionID, startLane int64) {
 	sess, err := a.Store.Session(ctx, sessionID)
 	if err != nil {
+		return
+	}
+	if sess.NeedsInput != "" && a.waitsForAnswer(ctx, sess.ID) {
+		a.summarizeForUsers(ctx, sess)
+		a.memorizeAfterTurn(ctx, sess)
 		return
 	}
 	var skills []store.Skill
@@ -1042,9 +1057,18 @@ func RenderSessionPrompt(tmpl string, d SessionPromptData) (string, error) {
 }
 
 // sessionPrompt is the settings' session prompt for sess, rendered afresh each
-// turn so it follows renames. A session without a project gets the first one,
-// where tasks go when no project is named.
+// turn so it follows renames, then for a session on a task the ActivityNote.
+// A session without a project gets the first one, where tasks go when no
+// project is named.
 func (a *App) sessionPrompt(ctx context.Context, sess store.Session) (string, error) {
+	prompt, err := a.settingsPrompt(ctx, sess)
+	if err != nil || sess.TaskID == 0 {
+		return prompt, err
+	}
+	return strings.TrimSpace(prompt + "\n\n" + fmt.Sprintf(ActivityNote, sess.TaskID, sess.ID)), nil
+}
+
+func (a *App) settingsPrompt(ctx context.Context, sess store.Session) (string, error) {
 	set, err := a.Store.Settings(ctx)
 	if err != nil || strings.TrimSpace(set.SessionPrompt) == "" {
 		return "", err

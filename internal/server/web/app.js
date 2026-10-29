@@ -738,11 +738,33 @@ async function taskView(id, { every, leave, reload }) {
   data.sessions.forEach(addSession);
 
   const artifacts = artifactsPanel(id, data.artifacts);
-  const main = h('div', {}, sessionPanel.el, artifacts.el, sessionsEl,
+  const sessionsTab = h('div', {}, sessionPanel.el, artifacts.el, sessionsEl,
     data.sessions.length ? null : h('p', { class: 'muted' }, 'No agent sessions yet.'));
+
+  // --- tabs: the sessions in full, or the activity thread their agents and the user keep ---
+  const activity = activityPanel(id, data.activity, { openSession: sid => focus(sid), onChange: () => drawTabs() });
+  const tabSessions = h('button', { class: 'tab', onclick: () => showTab('sessions') }, 'Sessions');
+  const tabActivity = h('button', { class: 'tab', onclick: () => showTab('activity') });
+  const drawTabs = () => {
+    const open = activity.openCount();
+    tabActivity.replaceChildren('Activity', activity.count() ? h('span', { class: 'pill' }, activity.count()) : null,
+      open ? h('span', { class: 'badge needs-input' }, open > 1 ? `✋ ${open} questions` : '✋ question') : null);
+  };
+  const showTab = name => {
+    remember('task.tab', name);
+    sessionsTab.classList.toggle('hidden', name !== 'sessions');
+    activity.el.classList.toggle('hidden', name !== 'activity');
+    tabSessions.classList.toggle('active', name === 'sessions');
+    tabActivity.classList.toggle('active', name === 'activity');
+  };
+  drawTabs();
+  // An open question shows first; otherwise the tab last looked at.
+  showTab(activity.openCount() || recall('task.tab') === 'activity' ? 'activity' : 'sessions');
+  const main = h('div', {}, h('div', { class: 'task-tabs' }, tabSessions, tabActivity), sessionsTab, activity.el);
   let sessionsState = JSON.stringify(data.sessions.map(s => [s.id, s.status, s.needs_input, s.seen]));
   every(2000, async () => {
     components.forEach(c => c.drawLimits());
+    activity.reload();
     const list = await api('GET', `/api/sessions?task_id=${id}`);
     const now = JSON.stringify(list.map(s => [s.id, s.status, s.needs_input, s.seen]).reverse());
     if (now !== sessionsState) { sessionsState = now; reloadStatus(); }
@@ -761,19 +783,105 @@ async function taskView(id, { every, leave, reload }) {
     if (finished) artifacts.reload();
   });
 
+  // Scrolls to the end of the linked session, or else of the newest open one, where its latest turn and
+  // the reply box are: a long transcript is read from its bottom up. 'activity' opens the thread at its
+  // newest message and the box to answer in.
+  function focus(sessionId) {
+    if (sessionId === 'activity' || (!sessionId && activity.isShown())) {
+      showTab('activity');
+      activity.focus();
+      return;
+    }
+    if (sessionId) showTab('sessions');
+    const c = sessionId ? components.get(sessionId) : [...components.values()].reverse().find(c => !c.el.classList.contains('collapsed'));
+    if (!c) return;
+    if (c.el.classList.contains('collapsed')) c.setCollapsed(false); // a link to a session opens it
+    c.el.scrollIntoView({ block: 'end' });
+  }
+
   return {
     el: h('div', { class: 'task-page' }, side, main),
     title,
     done,
     watch,
-    // Scrolls to the end of the linked session, or else of the newest open one, where its latest turn and
-    // the reply box are: a long transcript is read from its bottom up.
-    focus: sessionId => {
-      const c = sessionId ? components.get(sessionId) : [...components.values()].reverse().find(c => !c.el.classList.contains('collapsed'));
-      if (!c) return;
-      if (c.el.classList.contains('collapsed')) c.setCollapsed(false); // a link to a session opens it
-      c.el.scrollIntoView({ block: 'end' });
-    },
+    focus,
+  };
+}
+
+// The task's activity thread: short messages from its agent sessions (each linking to its session) and
+// the user, oldest first. Open questions stand out with an Answer button. The user's message answers the
+// question picked, or else the latest open one, and goes to the session that asked; with none open it
+// only joins the thread, where the task's next agent reads it.
+function activityPanel(taskId, messages, { openSession, onChange }) {
+  let xs = messages || [];
+  let shown = JSON.stringify(xs);
+  let answerTo = 0; // the question picked with Answer; 0: the latest open one
+  const list = h('div', { class: 'activity-list' });
+  const target = h('div', { class: 'muted small activity-target' });
+  const input = h('textarea', { rows: 2, placeholder: 'Message the task\'s agents… (⌘↵ to send)' });
+  const send = h('button', {}, 'Send', hint('⌘↵'));
+  const openQuestions = () => xs.filter(m => m.question && !m.answered_at);
+  const author = m => m.session_id
+    ? h('a', {
+      href: '#', class: 'activity-author', title: 'Open the session',
+      onclick: e => { e.preventDefault(); openSession(m.session_id); },
+    }, `${m.session_title || 'Session'} · #${m.session_id}`)
+    : h('strong', { class: 'activity-author' }, 'You');
+  const drawTarget = () => {
+    const open = openQuestions();
+    if (!open.some(m => m.id === answerTo)) answerTo = 0;
+    const q = open.find(m => m.id === answerTo) || open[open.length - 1];
+    target.replaceChildren(...(q
+      ? ['Answers ', h('em', {}, trunc(q.body, 80)), ` — goes to ${q.session_title || 'the session that asked'}, which continues`,
+        answerTo ? h('button', { class: 'ghost small', title: 'Answer the latest open question instead', onclick: () => { answerTo = 0; drawTarget(); } }, '✕') : null]
+      : ['No open question: the message stays on the thread and starts no session.']));
+  };
+  const draw = () => {
+    list.replaceChildren(...(xs.length ? xs.map(m => {
+      const open = m.question && !m.answered_at;
+      return h('div', { class: 'activity-msg' + (m.session_id ? '' : ' mine') + (open ? ' open' : '') },
+        h('div', { class: 'activity-head' }, author(m),
+          h('span', { class: 'muted small', title: fmtTime(m.created_at) }, ago(m.created_at)),
+          m.question ? h('span', { class: 'badge' + (open ? ' needs-input' : '') }, open ? '✋ question' : 'answered') : null,
+          open ? h('button', { class: 'ghost small', onclick: () => { answerTo = m.id; drawTarget(); input.focus(); } }, 'Answer') : null),
+        h('div', { class: 'md' }, markdown(m.body)));
+    }) : [h('p', { class: 'muted' }, 'No activity yet: the agents working on this task post short notes and questions here.')]));
+    drawTarget();
+  };
+  const reload = async () => {
+    const now = await api('GET', `/api/tasks/${taskId}/messages`);
+    const j = JSON.stringify(now);
+    if (j === shown) return;
+    shown = j;
+    xs = now;
+    draw();
+    onChange();
+  };
+  const submit = async () => {
+    const body = input.value.trim();
+    if (!body || send.disabled) return;
+    send.disabled = true;
+    try {
+      const res = await api('POST', `/api/tasks/${taskId}/messages`, answerTo ? { body, answer_to: answerTo } : { body });
+      input.value = '';
+      answerTo = 0;
+      if (res.answered_id) toast(res.queued ? 'Answer queued: the session is still working' : 'Answer sent: the session continues');
+      await reload();
+    } finally {
+      send.disabled = false;
+    }
+  };
+  send.addEventListener('click', submit);
+  submitOnCmdEnter([input], submit);
+  draw();
+  const el = h('div', { class: 'activity' }, list, h('div', { class: 'activity-composer' }, target, h('div', { class: 'row' }, input, send)));
+  return {
+    el,
+    reload,
+    count: () => xs.length,
+    openCount: () => openQuestions().length,
+    isShown: () => !el.classList.contains('hidden'),
+    focus: () => { el.scrollIntoView({ block: 'end' }); input.focus(); },
   };
 }
 
@@ -2201,8 +2309,10 @@ function announce(n) {
 }
 
 // Opens what the notification is about in the task's dialog, scrolled to its session if it has one.
+// A question an agent asked on the task's thread opens the thread instead.
 function openNotification(n) {
-  if (n.task_id) openTaskDialog(n.task_id, n.session_id || 0);
+  if (n.task_id && n.message.startsWith('Question from ')) openTaskDialog(n.task_id, 'activity');
+  else if (n.task_id) openTaskDialog(n.task_id, n.session_id || 0);
   else if (n.session_id) location.hash = `#/session/${n.session_id}`;
 }
 

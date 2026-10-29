@@ -1747,10 +1747,12 @@ func TestSessionPrompt(t *testing.T) {
 	a.Wait()
 
 	reqs := r.requests()
+	// A session on a task is told to keep its activity thread.
+	activity := "\n\n" + fmt.Sprintf(ActivityNote, task.ID, sess.ID)
 	want := []string{
-		fmt.Sprintf("Project Fantastica (%d), task #%d Ship it, session #%d in /fantastica", p.ID, task.ID, sess.ID),
+		fmt.Sprintf("Project Fantastica (%d), task #%d Ship it, session #%d in /fantastica", p.ID, task.ID, sess.ID) + activity,
 		// Rendered each turn, so a rename shows on the next one.
-		fmt.Sprintf("Project Fantastica 2 (%d), task #%d Ship it, session #%d in /fantastica", p.ID, task.ID, sess.ID),
+		fmt.Sprintf("Project Fantastica 2 (%d), task #%d Ship it, session #%d in /fantastica", p.ID, task.ID, sess.ID) + activity,
 		// No project: the first one, where tasks go by default.
 		fmt.Sprintf("Project Assistant (1), session #%d in /x", standalone.ID),
 		"",

@@ -71,6 +71,8 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/tasks/{id}/schedules", s.listSchedules)
 	m.HandleFunc("POST /api/tasks/{id}/schedules", s.createSchedule)
 	m.HandleFunc("GET /api/tasks/{id}/artifacts", s.listArtifacts)
+	m.HandleFunc("GET /api/tasks/{id}/messages", s.listTaskMessages)
+	m.HandleFunc("POST /api/tasks/{id}/messages", s.postTaskMessage)
 
 	m.HandleFunc("GET /api/sessions", s.listSessions)
 	m.HandleFunc("POST /api/sessions", s.startStandaloneSession)
@@ -170,7 +172,7 @@ func writeErr(w http.ResponseWriter, err error) {
 		errors.Is(err, store.ErrMemoryChanged):
 		status = http.StatusConflict
 	case errors.As(err, new(badRequest)), errors.Is(err, app.ErrBadAction), errors.Is(err, app.ErrBadCron), errors.Is(err, store.ErrBadContext),
-		errors.Is(err, store.ErrBadMemory), errors.Is(err, store.ErrMemoryExists), errors.Is(err, app.ErrNoMemory):
+		errors.Is(err, store.ErrBadMemory), errors.Is(err, store.ErrMemoryExists), errors.Is(err, app.ErrNoMemory), errors.Is(err, app.ErrBadMessage):
 		status = http.StatusBadRequest
 	}
 	if status == http.StatusInternalServerError {

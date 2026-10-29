@@ -36,6 +36,7 @@ var syncTables = map[string][]string{
 	"trello_cards":         {"card_id"},
 	"trello_boards":        {"id"},
 	"project_hidden_lanes": {"project_id", "lane_id"},
+	"task_messages":        {"id"},
 }
 
 // localTables stay on their node. Every table is in exactly one of

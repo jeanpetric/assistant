@@ -16,6 +16,7 @@ var idTables = map[string]bool{
 	"lanes": true, "tasks": true, "sessions": true, "messages": true, "transition_rules": true,
 	"schedules": true, "notifications": true, "projects": true, "skills": true, "skill_automations": true,
 	"artifacts": true, "memories": true, "memory_revisions": true, "trello_boards": true, "queued_messages": true,
+	"task_messages": true,
 }
 
 // NodeID is the node this database is in sync: 1 unless it joined another.

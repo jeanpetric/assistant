@@ -533,6 +533,21 @@ CREATE TABLE project_hidden_lanes (
 );
 CREATE INDEX project_hidden_lanes_lane ON project_hidden_lanes(lane_id);
 `,
+	// A task's activity thread: short messages from its agent sessions
+	// (session_id) and the user (NULL), questions among them until answered.
+	`
+CREATE TABLE task_messages (
+	id INTEGER PRIMARY KEY,
+	task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+	session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
+	body TEXT NOT NULL,
+	question INTEGER NOT NULL DEFAULT 0,
+	answered_at INTEGER,
+	created_at INTEGER NOT NULL
+);
+CREATE INDEX task_messages_task ON task_messages(task_id, id);
+CREATE INDEX task_messages_session ON task_messages(session_id);
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

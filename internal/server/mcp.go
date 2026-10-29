@@ -174,8 +174,10 @@ func (s *Server) mcpTools() []mcpTool {
 			post:        boardSummary,
 		},
 		{
-			Name:        "get_task",
-			Description: "One task with its schedules and agent sessions (without transcripts; use get_session for those), the tasks it builds on (builds_on), the tasks that build on it (used_by), its memories and agent_status (null if none; " + agentStatusDoc + ").",
+			Name: "get_task",
+			Description: "One task with its schedules and agent sessions (without transcripts; use get_session for those), the tasks it builds on (builds_on), the tasks that build on it (used_by), its memories, " +
+				"its activity thread (activity: short messages from its sessions, session_id, and the user, session_id null, oldest first; a question is open while answered_at is null) " +
+				"and agent_status (null if none; " + agentStatusDoc + ").",
 			InputSchema: schema([]string{"task_id"}, map[string]any{"task_id": pTaskID}),
 			call:        byID("GET", "/api/tasks/%d", "task_id", false),
 			post:        taskWithoutTranscripts,
@@ -467,6 +469,24 @@ func (s *Server) mcpTools() []mcpTool {
 			call:        byID("POST", "/api/sessions/%d/messages", "session_id", true),
 		},
 		{
+			Name: "post_task_message",
+			Description: "Post a short message (1-3 sentences, like on Slack) on a task's activity thread, the user's overview of what its agent sessions do: " +
+				"what you did, decided or handed over to another session. The details stay in your session, which the message links to. " +
+				"Pass your own session_id (your system prompt names it). With question: true it asks the user for a decision: they get a notification, " +
+				"your session shows it needs them, and their answer arrives as your next message, so end your turn after asking.",
+			InputSchema: schema([]string{"task_id", "session_id", "body"}, map[string]any{
+				"task_id": pTaskID, "session_id": prop("integer", "Your session's id"),
+				"body":     prop("string", "The message, Markdown, 1-3 sentences"),
+				"question": prop("boolean", "Ask the user for a decision and wait for the answer"),
+			}),
+			call: func(a mcpArgs) (string, string, any, error) {
+				if _, err := a.id("session_id"); err != nil {
+					return "", "", nil, err
+				}
+				return byID("POST", "/api/tasks/%d/messages", "task_id", true)(a)
+			},
+		},
+		{
 			Name:        "delete_queued_message",
 			Description: "Drop a message queued for an agent session's next turn before it is sent (ids are in the session's queued list).",
 			InputSchema: schema([]string{"queued_message_id"}, map[string]any{"queued_message_id": prop("integer", "Queued message id")}),
@@ -638,6 +658,7 @@ func taskWithoutTranscripts(raw []byte) ([]byte, error) {
 		BuildsOn  json.RawMessage              `json:"builds_on"`
 		UsedBy    json.RawMessage              `json:"used_by"`
 		Artifacts json.RawMessage              `json:"artifacts"`
+		Activity  json.RawMessage              `json:"activity"`
 		Memories  json.RawMessage              `json:"memories"`
 		Status    json.RawMessage              `json:"agent_status"`
 	}

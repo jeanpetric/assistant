@@ -379,3 +379,20 @@ pre.diff { font-family: var(--mono); font-size: 12px; max-height: 60vh; overflow
 dialog.wide { width: min(900px, 94vw); max-height: 88vh; overflow-y: auto; }
 .desc-dialog { font-size: 15px; line-height: 1.55; }
 .badge.watched { color: var(--accent); border-color: var(--accent); }
+
+/* task dialog: Sessions / Activity tabs */
+.task-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+.task-tabs .tab { background: transparent; color: var(--muted); border: none; border-bottom: 2px solid transparent; border-radius: 0;
+  display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; }
+.task-tabs .tab.active { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+/* the activity thread */
+.activity-msg { padding: 8px 10px; margin-bottom: 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
+.activity-msg.mine { background: var(--user-bg); }
+.activity-msg.open { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 10%, var(--surface)); }
+.activity-head { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; }
+.activity-head button { margin-left: auto; }
+.activity-author { font-weight: 600; }
+.activity-composer { margin-top: 10px; }
+.activity-composer .row { align-items: flex-end; }
+.activity-composer textarea { flex: 1; }
+.activity-target { margin-bottom: 4px; }

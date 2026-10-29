@@ -676,6 +676,11 @@ func (s *Server) getTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	activity, err := s.app.Store.TaskMessages(ctx, id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
 	memories, err := s.memoryRefs(ctx, t.Memories)
 	if err != nil {
 		writeErr(w, err)
@@ -691,7 +696,7 @@ func (s *Server) getTask(w http.ResponseWriter, r *http.Request) {
 		agentStatus = &st
 	}
 	writeJSON(w, 200, map[string]any{"task": t, "sessions": out, "schedules": schedules, "builds_on": builds, "used_by": usedBy,
-		"artifacts": artifacts, "memories": memories, "agent_status": agentStatus})
+		"artifacts": artifacts, "activity": activity, "memories": memories, "agent_status": agentStatus})
 }
 
 // taskRef names a related task for the task page.
@@ -1587,6 +1592,53 @@ func (s *Server) deleteArtifact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(204)
+}
+
+// ---- activity ----
+
+func (s *Server) listTaskMessages(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if _, err := s.app.Store.Task(r.Context(), id); err != nil {
+		writeErr(w, err)
+		return
+	}
+	xs, err := s.app.Store.TaskMessages(r.Context(), id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, xs)
+}
+
+// postTaskMessage adds to the task's activity thread: an agent's message
+// (session_id set), or the user's, which answers answer_to or else the
+// latest open question (see app.PostTaskMessage).
+func (s *Server) postTaskMessage(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	var in struct {
+		Body      string `json:"body"`
+		SessionID *int64 `json:"session_id"`
+		Question  bool   `json:"question"`
+		AnswerTo  int64  `json:"answer_to"`
+	}
+	if err := decode(r, &in); err != nil {
+		writeErr(w, err)
+		return
+	}
+	x, err := s.app.PostTaskMessage(r.Context(), store.TaskMessage{TaskID: id, SessionID: in.SessionID, Body: in.Body, Question: in.Question}, in.AnswerTo)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 201, x)
 }
 
 // ---- schedules ----
