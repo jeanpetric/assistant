@@ -490,6 +490,18 @@ CREATE TABLE sync_rows (
 	PRIMARY KEY (tbl, pk_json)
 );
 `,
+	// The Ed25519 public keys (base64) allowed to sync with this node as a
+	// hub, each for the node it was given to; a revoked key stays, refused.
+	// Local: keys are the hub's business.
+	`
+CREATE TABLE sync_keys (
+	pubkey TEXT PRIMARY KEY,
+	name TEXT NOT NULL,
+	node_id INTEGER NOT NULL,
+	created_at INTEGER NOT NULL,
+	revoked_at INTEGER
+);
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

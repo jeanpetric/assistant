@@ -45,6 +45,7 @@ var localTables = map[string]bool{
 	"sync_state":  true,
 	"sync_outbox": true,
 	"sync_rows":   true,
+	"sync_keys":   true, // keys a hub accepts
 	// Messages wait for the agent process, which runs on the session's node.
 	"queued_messages": true,
 }
