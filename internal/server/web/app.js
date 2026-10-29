@@ -581,6 +581,7 @@ async function openTaskDialog(id, focusSession) {
   taskDialog.id = id;
   dlg.replaceChildren(
     h('div', { class: 'task-dialog-bar' },
+      h('span', { class: 'task-id', title: 'The task\'s id, as text refers to it' }, '#' + id),
       page.title,
       page.done,
       page.watch,

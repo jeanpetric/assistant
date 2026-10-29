@@ -312,6 +312,8 @@ dialog::backdrop { background: rgba(0, 0, 0, .35); }
 .task-dialog .task-side { position: static; max-height: none; }
 /* The title takes the bar's left, pushing its buttons to the right. */
 .task-dialog-bar .title-input { flex: 1; min-width: 0; margin: 0; }
+/* The task's id, left of the title, so a #id in text can be matched to it. */
+.task-id { color: var(--muted); font-size: 18px; font-weight: 600; white-space: nowrap; padding-left: 6px; user-select: all; }
 /* The watch eye: faint until the task is watched. */
 .watch-toggle { opacity: .45; }
 .watch-toggle.on { opacity: 1; border-color: var(--accent); }

@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// The title heads the task's top bar on the left; the buttons follow it on the right.
+// The task's id and then its title head the task's top bar on the left; the buttons follow it on the right.
 // The watch toggle is an eye in the task dialog's top bar, beside close, not a button among the side
 // panel's actions. There is no full page any more: no Full page button, no task page bar.
 func TestWatchToggleInTopBar(t *testing.T) {
@@ -14,7 +14,7 @@ func TestWatchToggleInTopBar(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"h('div', { class: 'task-dialog-bar' },\n      page.title,\n      page.done,\n      page.watch,\n      h('button', { class: 'ghost small', title: 'Close (Esc)'",
+		"h('div', { class: 'task-dialog-bar' },\n      h('span', { class: 'task-id', title: 'The task\\'s id, as text refers to it' }, '#' + id),\n      page.title,\n      page.done,\n      page.watch,\n      h('button', { class: 'ghost small', title: 'Close (Esc)'",
 		"class: 'ghost small watch-toggle'",
 	} {
 		if !bytes.Contains(js, []byte(want)) {
