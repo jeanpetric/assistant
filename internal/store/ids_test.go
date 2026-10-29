@@ -196,7 +196,7 @@ func TestDisjointBlocksNeverShareIDs(t *testing.T) {
 }
 
 // Every table with an integer key the app adds rows to takes its ids from
-// blocks; a new such table must join idTables.
+// blocks (sync_outbox numbers its own); a new such table must join idTables.
 func TestIDTablesCoverIntegerKeys(t *testing.T) {
 	s := open(t)
 	ctx := context.Background()
@@ -215,7 +215,7 @@ func TestIDTablesCoverIntegerKeys(t *testing.T) {
 		tables = append(tables, name)
 	}
 	rows.Close()
-	local := map[string]bool{"settings": true, "sync_node": true}
+	local := map[string]bool{"settings": true, "sync_node": true, "sync_state": true, "sync_outbox": true}
 	for _, name := range tables {
 		if !idTables[name] && !local[name] {
 			t.Errorf("table %s is not in idTables", name)

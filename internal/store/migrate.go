@@ -462,6 +462,34 @@ CREATE TABLE id_blocks (
 	CHECK (next_id <= end_id)
 );
 `,
+	// Sync change capture, all local: whether it is on (off until sync is set
+	// up) and whether remote changes are being applied, the changes waiting to
+	// be pushed, and each synced row's latest change (deleted: a tombstone).
+	// The triggers that fill them are made on open (installSyncTriggers).
+	`
+CREATE TABLE sync_state (
+	id INTEGER PRIMARY KEY CHECK (id = 1),
+	enabled INTEGER NOT NULL DEFAULT 0,
+	applying INTEGER NOT NULL DEFAULT 0
+);
+INSERT INTO sync_state (id) VALUES (1);
+CREATE TABLE sync_outbox (
+	seq INTEGER PRIMARY KEY AUTOINCREMENT,
+	tbl TEXT NOT NULL,
+	pk_json TEXT NOT NULL,
+	op TEXT NOT NULL CHECK (op IN ('insert', 'update', 'delete')),
+	changed_at_ms INTEGER NOT NULL,
+	node_id INTEGER NOT NULL
+);
+CREATE TABLE sync_rows (
+	tbl TEXT NOT NULL,
+	pk_json TEXT NOT NULL,
+	changed_at_ms INTEGER NOT NULL,
+	node_id INTEGER NOT NULL,
+	deleted INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY (tbl, pk_json)
+);
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {
@@ -479,6 +507,11 @@ func (s *Store) migrate(ctx context.Context) error {
 		return err
 	}
 	defer s.db.ExecContext(ctx, `PRAGMA foreign_keys = ON`)
+	// Migrations' own changes are made on every node: they are not recorded.
+	// installSyncTriggers puts the triggers back afterwards.
+	if err := s.tx(ctx, func(tx *sql.Tx) error { return dropSyncTriggers(ctx, tx) }); err != nil {
+		return err
+	}
 	for i := version; i < len(migrations); i++ {
 		err := s.tx(ctx, func(tx *sql.Tx) error {
 			if _, err := tx.ExecContext(ctx, migrations[i]); err != nil {
