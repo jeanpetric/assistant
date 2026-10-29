@@ -23,6 +23,7 @@ import (
 	"github.com/jeanpetric/assistant/internal/server"
 	"github.com/jeanpetric/assistant/internal/store"
 	"github.com/jeanpetric/assistant/internal/syncauth"
+	"github.com/jeanpetric/assistant/internal/syncclient"
 	"github.com/jeanpetric/assistant/internal/trello"
 )
 
@@ -42,6 +43,8 @@ func main() {
 	flag.StringVar(&f.TrelloKey, "trello-key", "", "Trello API key (config: trello_key)")
 	flag.StringVar(&f.TrelloToken, "trello-token", "", "Trello API token (config: trello_token)")
 	flag.StringVar(&f.SyncListen, "sync-listen", "", "address to serve /sync/* on as the sync hub, e.g. 127.0.0.1:6768; empty: not a hub (config: sync_listen)")
+	flag.StringVar(&f.SyncServer, "sync-server", "", "sync hub to keep this node in sync with, e.g. https://assistant.example.com; empty: no sync (config: sync_server)")
+	flag.StringVar(&f.SyncKey, "sync-key", "", "Ed25519 key signing sync requests, created if missing (config: sync_key)")
 	flag.Parse()
 
 	cfg, err := config.Load(*configPath, home)
@@ -75,6 +78,10 @@ func main() {
 			cfg.TrelloToken = f.TrelloToken
 		case "sync-listen":
 			cfg.SyncListen = f.SyncListen
+		case "sync-server":
+			cfg.SyncServer = f.SyncServer
+		case "sync-key":
+			cfg.SyncKey = f.SyncKey
 		}
 	})
 	// Always loopback: agents run with your permissions.
@@ -109,10 +116,26 @@ func main() {
 		go a.RunTrelloSync(ctx, time.Minute)
 	}
 
+	if cfg.SyncListen != "" && cfg.SyncServer != "" {
+		log.Fatal("sync_listen and sync_server both set: a node is the hub or syncs with one")
+	}
 	if cfg.SyncListen != "" {
 		if err := serveSync(ctx, st, cfg.SyncListen); err != nil {
 			log.Fatal(err)
 		}
+	}
+	syncDone := make(chan struct{})
+	if cfg.SyncServer != "" {
+		c, err := syncClient(ctx, st, cfg.SyncServer, cfg.SyncKey)
+		if err != nil {
+			log.Fatal(err)
+		}
+		go func() {
+			defer close(syncDone)
+			c.Run(ctx)
+		}()
+	} else {
+		close(syncDone)
 	}
 
 	srv := &http.Server{Addr: addr, Handler: server.New(a), ReadHeaderTimeout: 10 * time.Second}
@@ -127,6 +150,27 @@ func main() {
 		log.Fatal(err)
 	}
 	a.Shutdown()
+	<-syncDone
+}
+
+// syncClient keeps this node in sync with the hub at server: its changes are
+// logged to be pushed, and its new ids come only from blocks the hub leased
+// it, so they never clash with another node's.
+func syncClient(ctx context.Context, st *store.Store, server, keyPath string) (*syncclient.Client, error) {
+	key, err := syncauth.LoadOrCreateKey(keyPath)
+	if err != nil {
+		return nil, fmt.Errorf("sync_key: %w", err)
+	}
+	c, err := syncclient.New(st, server, key)
+	if err != nil {
+		return nil, err
+	}
+	if err := st.SetSyncEnabled(ctx, true); err != nil {
+		return nil, err
+	}
+	st.SetLeasedIDs(true)
+	log.Printf("syncing with %s as %s", server, syncauth.PublicKey(key))
+	return c, nil
 }
 
 // serveSync makes this node the sync hub on addr: its changes are logged for

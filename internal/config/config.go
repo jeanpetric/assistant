@@ -28,6 +28,10 @@ type Config struct {
 	// SyncListen, when set (e.g. 127.0.0.1:6768), makes this node the sync
 	// hub: /sync/* is served there, and only there, to signed requests.
 	SyncListen string `json:"sync_listen"`
+	// SyncServer, when set (e.g. https://assistant.example.com), keeps this
+	// node in sync with the hub there, signing with the key at SyncKey.
+	SyncServer string `json:"sync_server"`
+	SyncKey    string `json:"sync_key"`
 }
 
 func Defaults(home string) Config {
@@ -39,6 +43,7 @@ func Defaults(home string) Config {
 		Workdir: home,
 		Agent:   "claude",
 		Mode:    "bypassPermissions",
+		SyncKey: filepath.Join(home, ".assistant", "sync_ed25519"),
 	}
 }
 

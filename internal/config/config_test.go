@@ -43,3 +43,15 @@ func TestLoadErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadSyncServer(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	os.WriteFile(path, []byte(`{"sync_server": "https://assistant.example.com"}`), 0o600)
+	c, err := Load(path, "/home/me")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.SyncServer != "https://assistant.example.com" || c.SyncKey != "/home/me/.assistant/sync_ed25519" || c.SyncListen != "" {
+		t.Fatalf("got %+v", c)
+	}
+}

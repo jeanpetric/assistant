@@ -134,12 +134,14 @@ Settings live in `~/.assistant/config.json` (created with defaults on first run)
   "mode": "bypassPermissions",
   "trello_key": "",
   "trello_token": "",
-  "sync_listen": ""
+  "sync_listen": "",
+  "sync_server": "",
+  "sync_key": "~/.assistant/sync_ed25519"
 }
 ```
 
 Every key also has a flag that overrides the file for one run: `-port`, `-db`, `-claude`,
-`-claude-args`, `-gemini`, `-gemini-args`, `-workdir`, `-agent`, `-mode`, `-trello-key`, `-trello-token`, `-sync-listen`, plus `-config` to point at another file. Avoid ports
+`-claude-args`, `-gemini`, `-gemini-args`, `-workdir`, `-agent`, `-mode`, `-trello-key`, `-trello-token`, `-sync-listen`, `-sync-server`, `-sync-key`, plus `-config` to point at another file. Avoid ports
 6665–6669: browsers refuse them.
 
 Agents run with your user's permissions. The server only binds to 127.0.0.1 and rejects
@@ -148,6 +150,13 @@ non-JSON writes, foreign `Origin`s and foreign `Host` headers so that web pages 
 `sync_listen` (e.g. `127.0.0.1:6768`) makes this node the sync hub: a second listener serves
 only `/sync/*` (push, pull, lease, snapshot), and only to requests signed by a key in
 `sync_keys`. The UI, API and MCP stay on the loopback port above. Empty (the default): no hub.
+
+`sync_server` (e.g. `https://assistant.example.com`, no path) keeps this node in sync with the
+hub there, signing with the Ed25519 key at `sync_key` (created on first start; its public half
+is logged). Local changes are pushed about 2 s after the last one, the hub's are pulled as
+they come (long-poll), and id blocks are leased before they run out. Offline, the app works as
+usual and changes wait in the outbox; retries back off up to a minute. A node is either the
+hub or syncs with one, not both. Empty (the default): no sync.
 
 ## MCP server
 

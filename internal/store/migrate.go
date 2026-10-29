@@ -514,6 +514,12 @@ CREATE TABLE id_leases (
 	PRIMARY KEY (tbl, start_id)
 );
 `,
+	// A syncing node's place in the hub's log (the since of its next pull)
+	// and when it last synced with the hub (Unix ms, 0: never). Local.
+	`
+ALTER TABLE sync_state ADD COLUMN pulled_seq INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE sync_state ADD COLUMN synced_at INTEGER NOT NULL DEFAULT 0;
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

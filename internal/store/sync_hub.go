@@ -139,7 +139,8 @@ func (s *Store) LatestSeq(ctx context.Context) (int64, error) {
 // Snapshot writes a consistent copy of the database to path, a file that must
 // not exist yet, for a node to join from, and returns the log's last seq in
 // it: the since of the joined node's first pull. What is the hub's alone is
-// left out of the copy: its keys, leases, id blocks and log.
+// left out of the copy: its keys, leases, id blocks and log; the copy's
+// next pull starts at seq.
 func (s *Store) Snapshot(ctx context.Context, path string) (int64, error) {
 	if _, err := s.db.ExecContext(ctx, `VACUUM INTO ?`, path); err != nil {
 		return 0, err
@@ -155,6 +156,10 @@ func (s *Store) Snapshot(ctx context.Context, path string) (int64, error) {
 	}
 	_, err = db.ExecContext(ctx, `DELETE FROM sync_keys; DELETE FROM id_leases; DELETE FROM id_blocks; DELETE FROM sync_outbox`)
 	if err != nil {
+		return 0, err
+	}
+	// The joined node pulls on from seq.
+	if _, err := db.ExecContext(ctx, `UPDATE sync_state SET pulled_seq = ?, synced_at = 0 WHERE id = 1`, seq); err != nil {
 		return 0, err
 	}
 	return seq, nil
