@@ -147,6 +147,15 @@ func TestMCPTaskTools(t *testing.T) {
 	if text, _ = c.tool("get_session", map[string]any{"session_id": sess.ID}); !strings.Contains(text, "did: hello") {
 		t.Fatalf("get_session: %s", text)
 	}
+	sk, _ := c.app.Store.SaveSkill(t.Context(), store.Skill{Name: "Guard", Body: "Guard it."})
+	text, isErr = c.tool("start_session", map[string]any{"task_id": task.ID, "skill_id": sk.ID, "prompt": "more"})
+	if isErr || json.Unmarshal([]byte(text), &sess) != nil || sess.Title != "Guard" {
+		t.Fatalf("start_session with a skill: %s", text)
+	}
+	c.app.Wait()
+	if text, _ = c.tool("get_session", map[string]any{"session_id": sess.ID}); !strings.Contains(text, `Apply the skill \"Guard\" to this task.`) {
+		t.Fatalf("skill session: %s", text)
+	}
 	if text, _ = c.tool("list_sessions", map[string]any{"task_id": task.ID, "status": "idle"}); !strings.Contains(text, `"task_id":`) {
 		t.Fatalf("list_sessions: %s", text)
 	}

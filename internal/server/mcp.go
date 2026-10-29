@@ -315,11 +315,14 @@ func (s *Server) mcpTools() []mcpTool {
 			call:        byID("DELETE", "/api/trello/boards/%d", "trello_board_id", false),
 		},
 		{
-			Name:        "start_session",
-			Description: "Start an agent session (Claude Code or Gemini CLI) on a task, running prompt in the task's working directory.",
-			InputSchema: schema([]string{"task_id", "prompt"}, map[string]any{
-				"task_id": pTaskID, "prompt": prop("string", "What the agent should do"), "title": prop("string", "Session title"),
-				"include_context": prop("boolean", "Prepend the task's title, description and fields, its memories, and the results of the tasks it builds on, to the prompt"),
+			Name: "start_session",
+			Description: "Start an agent session (Claude Code or Gemini CLI) on a task, running prompt in the task's working directory. " +
+				"With skill_id the session's first turn applies that skill to the task instead (see list_skills), given the task's context; " +
+				"prompt, optional then, goes with it as more context. That turn ends like any other: the skill's artifact is kept and done_lane_id applies.",
+			InputSchema: schema([]string{"task_id"}, map[string]any{
+				"task_id": pTaskID, "prompt": prop("string", "What the agent should do; required unless skill_id is given"), "title": prop("string", "Session title (default: the prompt's first line, or the skill's name)"),
+				"skill_id":        prop("integer", "Start the session by applying this skill to the task"),
+				"include_context": prop("boolean", "Prepend the task's title, description and fields, its memories, and the results of the tasks it builds on, to the prompt (a skill gets them anyway)"),
 				"mode":            prop("string", "Permission mode, e.g. bypassPermissions or plan (default: the app's)"),
 				"agent":           prop("string", "CLI the session runs on: claude or gemini (default: the app's)"),
 				"model":           prop("string", "Model, e.g. opus for claude or flash for gemini (default: the CLI's)"),

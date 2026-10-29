@@ -28,7 +28,6 @@ var (
 	ErrBadAction = errors.New("action must be agent or remind")
 	ErrBadCron   = errors.New("invalid cron expression")
 	ErrStopping  = errors.New("the app is shutting down")
-	ErrNoSession = errors.New("the task has no agent session to run the skill in")
 )
 
 type App struct {
@@ -110,6 +109,9 @@ type StartOpts struct {
 	// prompt starts with their results and the memories the task inherits.
 	ContextFrom []int64
 	Watched     bool // StartSessionInNewTask's task starts out watched
+	// SkillID makes the first turn apply this skill to the task (see
+	// skillPrompt); Prompt, optional then, goes with it as more context.
+	SkillID *int64
 }
 
 // StartSession creates a session, for the task if one is given, and runs its
@@ -121,6 +123,23 @@ func (a *App) StartSession(ctx context.Context, o StartOpts) (store.Session, err
 		if task, err = a.Store.Task(ctx, o.TaskID); err != nil {
 			return store.Session{}, err
 		}
+	}
+	var skill *store.Skill
+	if o.SkillID != nil {
+		if o.TaskID == 0 {
+			return store.Session{}, errors.New("a skill runs on a task")
+		}
+		sk, err := a.Store.Skill(ctx, *o.SkillID)
+		if err != nil {
+			return store.Session{}, fmt.Errorf("skill: %w", err)
+		}
+		if o.Prompt, err = a.skillPrompt(ctx, task, sk, true, o.Prompt); err != nil {
+			return store.Session{}, err
+		}
+		if o.Title == "" {
+			o.Title = sk.Name
+		}
+		skill = &sk
 	}
 	if strings.TrimSpace(o.Prompt) == "" {
 		return store.Session{}, errors.New("prompt is required")
@@ -136,6 +155,10 @@ func (a *App) StartSession(ctx context.Context, o StartOpts) (store.Session, err
 	}
 	if !slices.Contains(agent.Agents, o.Agent) {
 		return store.Session{}, fmt.Errorf("unknown agent %q", o.Agent)
+	}
+	// Skills name claude's models.
+	if skill != nil && o.Model == "" && o.Agent == agent.Claude {
+		o.Model = skill.Model
 	}
 	if o.Workdir == "" {
 		o.Workdir = task.Workdir
@@ -169,7 +192,22 @@ func (a *App) StartSession(ctx context.Context, o StartOpts) (store.Session, err
 	if err != nil {
 		return sess, err
 	}
-	return sess, a.launch(sess, o.Prompt, "", nil)
+	if skill == nil {
+		return sess, a.launch(sess, o.Prompt, "", nil)
+	}
+	// The turn ends as any first turn does, after the skill's artifact is kept.
+	sk, startLane := *skill, task.LaneID
+	return sess, a.launch(sess, o.Prompt, "", func(ctx context.Context, status string) {
+		if status == store.StatusIdle {
+			a.keepArtifact(ctx, sess, sk)
+		}
+		if (status == store.StatusIdle || status == store.StatusError) && a.sendQueued(ctx, sess.ID) {
+			return
+		}
+		if status == store.StatusIdle {
+			a.afterTurn(ctx, sess.ID, startLane)
+		}
+	})
 }
 
 // StartSessionInNewTask creates a task for the prompt in o.ProjectID, in the
@@ -614,11 +652,15 @@ func (a *App) runSkills(ctx context.Context, sess store.Session, skills []store.
 	}
 }
 
-// SkillIntro opens the prompt that applies a skill; ArtifactNote follows it
-// for skills whose reply is kept.
+// SkillIntro opens the prompt that applies a skill to a session's work,
+// NewSkillIntro the one that starts a session with a skill; ArtifactNote
+// follows either for skills whose reply is kept. SkillContextIntro opens the
+// context given with a skill that starts a session.
 const (
-	SkillIntro   = "Apply the skill %q to the work done in this session so far. Its instructions follow."
-	ArtifactNote = "Your final reply is saved as an artifact on the task: reply with the artifact itself, nothing before or after it."
+	SkillIntro        = "Apply the skill %q to the work done in this session so far. Its instructions follow."
+	NewSkillIntro     = "Apply the skill %q to this task. The task comes first, then the skill's instructions."
+	ArtifactNote      = "Your final reply is saved as an artifact on the task: reply with the artifact itself, nothing before or after it."
+	SkillContextIntro = "More context for this run of the skill:"
 )
 
 // RunSkill applies a skill to an idle session by hand, as its next turn.
@@ -643,40 +685,71 @@ func (a *App) runSkill(ctx context.Context, sess store.Session, sk store.Skill, 
 		return ErrNoResume
 	}
 	var task store.Task
-	brief := ""
 	if sess.TaskID != 0 {
 		var err error
 		if task, err = a.Store.Task(ctx, sess.TaskID); err != nil {
 			return err
 		}
-		brief = a.TaskBrief(ctx, task)
 	}
-	body, err := renderPrompt(sk.Body, task, brief)
+	prompt, err := a.skillPrompt(ctx, task, sk, false, "")
 	if err != nil {
-		return fmt.Errorf("skill template: %w", err)
+		return err
 	}
-	parts := []string{fmt.Sprintf(SkillIntro, sk.Name)}
-	if sk.Artifact && sess.TaskID != 0 {
-		parts = append(parts, ArtifactNote)
-	}
-	prompt := strings.Join(append(parts, body), "\n\n")
 	// Skills name claude's models.
 	if sk.Model != "" && sess.Agent == agent.Claude {
 		sess.Model = sk.Model // this turn only: the session keeps its model
 	}
 	return a.launch(sess, prompt, sess.ClaudeSessionID, func(ctx context.Context, status string) {
-		if status == store.StatusIdle && sk.Artifact && sess.TaskID != 0 {
-			if reply, err := a.lastReply(ctx, sess.ID); err != nil {
-				a.notifySession(ctx, sess, fmt.Sprintf("Skill %q wrote no artifact in session %q", sk.Name, sess.Title))
-			} else if _, err := a.Store.AddArtifact(ctx, store.Artifact{TaskID: sess.TaskID, SessionID: &sess.ID, Skill: sk.Name,
-				Content: strings.TrimSpace(reply)}); err != nil {
-				log.Printf("session %d: artifact: %v", sess.ID, err)
-			}
+		if status == store.StatusIdle {
+			a.keepArtifact(ctx, sess, sk)
 		}
 		if done != nil {
 			done(ctx, status)
 		}
 	})
+}
+
+// skillPrompt is the prompt that applies sk on task (zero for none). A fresh
+// session has no work of its own to apply it to: its prompt brings the task's
+// brief, and extra after the skill's instructions.
+func (a *App) skillPrompt(ctx context.Context, task store.Task, sk store.Skill, fresh bool, extra string) (string, error) {
+	brief := ""
+	if task.ID != 0 {
+		brief = a.TaskBrief(ctx, task)
+	}
+	body, err := renderPrompt(sk.Body, task, brief)
+	if err != nil {
+		return "", fmt.Errorf("skill template: %w", err)
+	}
+	intro := SkillIntro
+	if fresh {
+		intro = NewSkillIntro
+	}
+	parts := []string{fmt.Sprintf(intro, sk.Name)}
+	if sk.Artifact && task.ID != 0 {
+		parts = append(parts, ArtifactNote)
+	}
+	if fresh && brief != "" {
+		parts = append(parts, brief, "---")
+	}
+	parts = append(parts, body)
+	if extra = strings.TrimSpace(extra); fresh && extra != "" {
+		parts = append(parts, "---", SkillContextIntro+"\n\n"+extra)
+	}
+	return strings.Join(parts, "\n\n"), nil
+}
+
+// keepArtifact keeps the session's last reply on its task if sk asks for it.
+func (a *App) keepArtifact(ctx context.Context, sess store.Session, sk store.Skill) {
+	if !sk.Artifact || sess.TaskID == 0 {
+		return
+	}
+	if reply, err := a.lastReply(ctx, sess.ID); err != nil {
+		a.notifySession(ctx, sess, fmt.Sprintf("Skill %q wrote no artifact in session %q", sk.Name, sess.Title))
+	} else if _, err := a.Store.AddArtifact(ctx, store.Artifact{TaskID: sess.TaskID, SessionID: &sess.ID, Skill: sk.Name,
+		Content: strings.TrimSpace(reply)}); err != nil {
+		log.Printf("session %d: artifact: %v", sess.ID, err)
+	}
 }
 
 // waitSigns collects what a turn shows of its agent waiting for the user.
@@ -837,11 +910,12 @@ func (a *App) MoveTask(ctx context.Context, taskID, laneID int64, index int) ([]
 			continue
 		}
 		if r.SkillID != nil {
-			if err := a.ruleSkill(ctx, r, latest); err != nil {
+			sess, err := a.ruleSkill(ctx, r, taskID, latest)
+			if err != nil {
 				a.Store.Notify(ctx, &taskID, fmt.Sprintf("Rule %q: %v", r.Name, err))
 				continue
 			}
-			started = append(started, *latest)
+			started = append(started, sess)
 			continue
 		}
 		prompt, err := renderPrompt(r.Prompt, task, a.TaskBrief(ctx, task))
@@ -877,18 +951,25 @@ func (a *App) latestSession(ctx context.Context, taskID int64) (*store.Session, 
 	return nil, nil
 }
 
-// ruleSkill runs the rule's skill in sess. Once it finishes successfully the
-// task moves to the rule's done lane, unless it left the rule's lane meanwhile.
-func (a *App) ruleSkill(ctx context.Context, r store.Rule, sess *store.Session) error {
+// ruleSkill runs the rule's skill in sess, the task's latest session, and
+// returns the session it runs in. With no such session, or while it works, the
+// skill starts a new session on the task with the rule's settings instead.
+// Once the skill finishes successfully the task moves to the rule's done lane,
+// unless it left the rule's lane meanwhile.
+func (a *App) ruleSkill(ctx context.Context, r store.Rule, taskID int64, sess *store.Session) (store.Session, error) {
+	fresh := func() (store.Session, error) {
+		return a.StartSession(ctx, StartOpts{TaskID: taskID, SkillID: r.SkillID, Title: r.Name, Mode: r.Mode, Workdir: r.Workdir,
+			Trigger: "rule:" + r.Name, DoneLaneID: r.DoneLaneID})
+	}
 	if sess == nil {
-		return ErrNoSession
+		return fresh()
 	}
 	sk, err := a.Store.Skill(ctx, *r.SkillID)
 	if err != nil {
-		return fmt.Errorf("skill: %w", err)
+		return store.Session{}, fmt.Errorf("skill: %w", err)
 	}
 	s := *sess
-	return a.runSkill(ctx, s, sk, func(ctx context.Context, status string) {
+	err = a.runSkill(ctx, s, sk, func(ctx context.Context, status string) {
 		if status != store.StatusIdle {
 			a.notifySession(ctx, s, fmt.Sprintf("Skill %q ended %s in session %q", sk.Name, status, s.Title))
 			return
@@ -897,6 +978,10 @@ func (a *App) ruleSkill(ctx context.Context, r store.Rule, sess *store.Session) 
 			a.moveDone(ctx, s, r.ToLaneID, *r.DoneLaneID)
 		}
 	})
+	if errors.Is(err, ErrBusy) {
+		return fresh()
+	}
+	return s, err
 }
 
 // SaveSchedule validates the cron expression and computes the next run.

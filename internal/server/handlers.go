@@ -974,6 +974,7 @@ type sessionInput struct {
 	Workdir        string  `json:"workdir"`
 	IncludeContext bool    `json:"include_context"`
 	DoneLaneID     *int64  `json:"done_lane_id"` // task sessions only
+	SkillID        *int64  `json:"skill_id"`     // task sessions only: the first turn applies it, prompt optional
 	ProjectID      int64   `json:"project_id"`   // standalone sessions only: runs in the project's directory
 	ContextFrom    []int64 `json:"context_from"` // standalone sessions only: the tasks its new task builds on
 	Watched        bool    `json:"watched"`      // standalone sessions only: watch its new task
@@ -983,7 +984,7 @@ func (in *sessionInput) validate() error {
 	if !validMode(in.Mode) {
 		return badRequest{"unknown mode"}
 	}
-	if strings.TrimSpace(in.Prompt) == "" {
+	if strings.TrimSpace(in.Prompt) == "" && in.SkillID == nil {
 		return badRequest{"prompt is required"}
 	}
 	if in.Agent != "" && !slices.Contains(agent.Agents, in.Agent) {
@@ -1050,6 +1051,10 @@ func (s *Server) startStandaloneSession(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, err)
 		return
 	}
+	if in.SkillID != nil {
+		writeErr(w, badRequest{"skill_id needs a task"})
+		return
+	}
 	if err := in.validate(); err != nil {
 		writeErr(w, err)
 		return
@@ -1084,8 +1089,18 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	if in.SkillID != nil {
+		if _, err := s.app.Store.Skill(r.Context(), *in.SkillID); errors.Is(err, store.ErrNotFound) {
+			writeErr(w, badRequest{"unknown skill_id"})
+			return
+		} else if err != nil {
+			writeErr(w, err)
+			return
+		}
+	}
 	prompt := in.Prompt
-	if in.IncludeContext {
+	// A skill's first turn brings the task's context itself.
+	if in.IncludeContext && in.SkillID == nil {
 		t, err := s.app.Store.Task(r.Context(), id)
 		if err != nil {
 			writeErr(w, err)
@@ -1099,7 +1114,7 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request) {
 	}
 	sess, err := s.app.StartSession(r.Context(), app.StartOpts{
 		TaskID: id, Prompt: prompt, Title: in.Title, Mode: in.Mode, Agent: in.Agent, Model: in.Model, Workdir: in.Workdir,
-		DoneLaneID: in.DoneLaneID,
+		DoneLaneID: in.DoneLaneID, SkillID: in.SkillID,
 	})
 	if err != nil {
 		writeErr(w, err)

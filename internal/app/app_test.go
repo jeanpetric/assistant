@@ -1606,26 +1606,122 @@ func TestRuleRunsSkillInLatestSession(t *testing.T) {
 	}
 }
 
-func TestRuleSkillWithoutSessionNotifies(t *testing.T) {
+// With no session on the task, a skill rule starts one with the rule's
+// settings; the skill is its first turn, and the rule's done lane follows it.
+func TestRuleSkillWithoutSessionStartsOne(t *testing.T) {
 	a, r := newApp(t)
 	ctx := context.Background()
 	lanes := lanesByName(t, a)
-	task, _ := a.Store.CreateTask(ctx, store.Task{Title: "Fresh", LaneID: lanes["Todo"]})
-	sk, _ := a.Store.SaveSkill(ctx, store.Skill{Name: "Self-review", Body: "b"})
-	a.Store.SaveRule(ctx, store.Rule{Name: "Review it", ToLaneID: lanes["Review"], SkillID: &sk.ID, Enabled: true})
+	todo, review, done := lanes["Todo"], lanes["Review"], lanes["Done"]
+	task, _ := a.Store.CreateTask(ctx, store.Task{Title: "Fresh", LaneID: todo})
+	sk, _ := a.Store.SaveSkill(ctx, store.Skill{Name: "Guard", Body: "Guard {{.Task.Title}}.", Artifact: true, Model: "opus"})
+	a.Store.SaveRule(ctx, store.Rule{Name: "Guard it", ToLaneID: review, SkillID: &sk.ID, DoneLaneID: &done, Mode: "plan",
+		Workdir: "/rule/dir", Enabled: true})
 
-	started, err := a.MoveTask(ctx, task.ID, lanes["Review"], 0)
-	if err != nil || len(started) != 0 {
+	started, err := a.MoveTask(ctx, task.ID, review, 0)
+	if err != nil || len(started) != 1 {
 		t.Fatalf("started = %+v, %v", started, err)
 	}
-	a.Wait()
-	if len(r.requests()) != 0 {
-		t.Fatal("ran without a session")
+	if s := started[0]; s.Title != "Guard it" || s.Trigger != "rule:Guard it" || s.Mode != "plan" || s.Workdir != "/rule/dir" || s.Model != "opus" {
+		t.Fatalf("session = %+v", s)
 	}
-	n, _ := a.Store.Notifications(ctx, true)
-	if len(n) != 1 || !strings.Contains(n[0].Message, ErrNoSession.Error()) {
+	a.Wait()
+	reqs := r.requests()
+	if len(reqs) != 1 || reqs[0].ResumeID != "" || !strings.HasPrefix(reqs[0].Prompt, fmt.Sprintf(NewSkillIntro, "Guard")) ||
+		!strings.Contains(reqs[0].Prompt, "Fresh") || !strings.HasSuffix(reqs[0].Prompt, "Guard Fresh.") {
+		t.Fatalf("requests = %+v", reqs)
+	}
+	if arts, _ := a.Store.Artifacts(ctx, task.ID); len(arts) != 1 || arts[0].Skill != "Guard" || *arts[0].SessionID != started[0].ID {
+		t.Fatalf("artifacts = %+v", arts)
+	}
+	if got, _ := a.Store.Task(ctx, task.ID); got.LaneID != done {
+		t.Fatalf("task in lane %d, want done %d", got.LaneID, done)
+	}
+}
+
+// While the task's latest session works, a skill rule runs its skill in a new
+// session rather than failing or waiting.
+func TestRuleSkillWhileLatestRunsStartsNewSession(t *testing.T) {
+	a, r := newApp(t)
+	ctx := context.Background()
+	lanes := lanesByName(t, a)
+	wip, review, done := lanes["In progress"], lanes["Review"], lanes["Done"]
+	task, _ := a.Store.CreateTask(ctx, store.Task{Title: "Busy", LaneID: wip})
+	sk, _ := a.Store.SaveSkill(ctx, store.Skill{Name: "Guard", Body: "Guard it."})
+	a.Store.SaveRule(ctx, store.Rule{Name: "Guard it", ToLaneID: review, SkillID: &sk.ID, DoneLaneID: &done, Enabled: true})
+	first, err := a.StartSession(ctx, StartOpts{TaskID: task.ID, Prompt: "code"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Wait()
+	r.block = make(chan struct{})
+	if _, err := a.SendMessage(ctx, first.ID, "more"); err != nil {
+		t.Fatal(err)
+	}
+
+	started, err := a.MoveTask(ctx, task.ID, review, 0)
+	if err != nil || len(started) != 1 || started[0].ID == first.ID {
+		t.Fatalf("started = %+v, %v", started, err)
+	}
+	close(r.block)
+	a.Wait()
+	var skillReq agent.Request
+	for _, q := range r.requests() {
+		if strings.HasPrefix(q.Prompt, fmt.Sprintf(NewSkillIntro, "Guard")) {
+			skillReq = q
+		}
+	}
+	if skillReq.ResumeID != "" || !strings.HasSuffix(skillReq.Prompt, "Guard it.") {
+		t.Fatalf("skill request = %+v", skillReq)
+	}
+	if got, _ := a.Store.Task(ctx, task.ID); got.LaneID != done {
+		t.Fatalf("task in lane %d, want done %d", got.LaneID, done)
+	}
+	if n, _ := a.Store.Notifications(ctx, true); slices.ContainsFunc(n, func(x store.Notification) bool { return strings.HasPrefix(x.Message, "Rule") }) {
 		t.Fatalf("notifications = %+v", n)
 	}
+}
+
+// A session can start with a skill: its first turn applies the skill to the
+// task, with the prompt as more context, and ends like any first turn.
+func TestStartSessionWithSkill(t *testing.T) {
+	a, r := newApp(t)
+	ctx := context.Background()
+	lanes := lanesByName(t, a)
+	task, _ := a.Store.CreateTask(ctx, store.Task{Title: "Spec", Description: "Write the spec", LaneID: lanes["Todo"]})
+	sk, _ := a.Store.SaveSkill(ctx, store.Skill{Name: "Refine", Body: "Refine the spec."})
+	done := lanes["Review"]
+
+	sess, err := a.StartSession(ctx, StartOpts{TaskID: task.ID, SkillID: &sk.ID, Prompt: "The guard found: no tests.", DoneLaneID: &done})
+	if err != nil || sess.Title != "Refine" {
+		t.Fatalf("session = %+v, %v", sess, err)
+	}
+	a.Wait()
+	reqs := r.requests()
+	if len(reqs) != 1 {
+		t.Fatalf("requests = %+v", reqs)
+	}
+	p := reqs[0].Prompt
+	brief, body, extra := strings.Index(p, "Write the spec"), strings.Index(p, "Refine the spec."), strings.Index(p, SkillContextIntro+"\n\nThe guard found: no tests.")
+	if !strings.HasPrefix(p, fmt.Sprintf(NewSkillIntro, "Refine")) || brief < 0 || body < brief || extra < body {
+		t.Fatalf("prompt = %q", p)
+	}
+	if got, _ := a.Store.Task(ctx, task.ID); got.LaneID != done {
+		t.Fatalf("task in lane %d, want done %d", got.LaneID, done)
+	}
+
+	// The prompt is optional with a skill; a skill needs a task and must exist.
+	if _, err := a.StartSession(ctx, StartOpts{TaskID: task.ID, SkillID: &sk.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.StartSession(ctx, StartOpts{SkillID: &sk.ID, Prompt: "x"}); err == nil {
+		t.Fatal("started a skill without a task")
+	}
+	missing := sk.ID + 100
+	if _, err := a.StartSession(ctx, StartOpts{TaskID: task.ID, SkillID: &missing}); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("missing skill: %v", err)
+	}
+	a.Wait()
 }
 
 // A gemini session runs every turn, its handoff included, on gemini; its

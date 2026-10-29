@@ -1806,7 +1806,7 @@ async function renderSettings() {
   const laneLabel = id => id == null ? 'Any lane' : (b.all_lanes.find(l => l.id === id) || {}).name || '?';
   const rulesPanel = h('div', { class: 'panel' },
     h('div', { class: 'row' }, h('h2', { class: 'grow' }, 'Transition rules'), h('button', { onclick: () => ruleDialog(null, b, skills, rerender) }, '+ Add rule')),
-    h('p', { class: 'muted small' }, 'When a task moves between lanes, start an agent session automatically, run a skill in the task\'s latest session, ' +
+    h('p', { class: 'muted small' }, 'When a task moves between lanes, start an agent session automatically, run a skill in the task\'s latest session (a new one if it has none or it is working), ' +
       'or move the task on once an agent turn on it finishes. ' +
       'A project\'s rule replaces any-project rules for the same transition. A rule for a kind fires only for tasks of that kind.'),
     rules.length ? h('table', {}, h('thead', {}, h('tr', {}, ['', 'Rule', 'Project', 'Kind', 'Transition', 'Action', 'Mode', 'When done', ''].map(x => h('th', {}, x)))),
@@ -2094,7 +2094,7 @@ function ruleDialog(rule, b, skills, done) {
   const from = select([['', 'Any lane'], ...lanes.map(l => [l.id, l.name])], rule.from_lane_id ?? '');
   const to = select(lanes.map(l => [l.id, l.name]), rule.to_lane_id);
   const action = select([['', 'Start a new agent session with a prompt'],
-    ...skills.map(sk => [sk.id, `Run skill "${sk.name}" in the task's latest session`]),
+    ...skills.map(sk => [sk.id, `Run skill "${sk.name}" in the task's latest session (or a new one)`]),
     ['move', 'Move the task once an agent turn on it finishes']], rule.id && isMoveRule(rule) ? 'move' : rule.skill_id ?? '');
   const moveTo = h('select', {});
   const fillMoveTo = () => {

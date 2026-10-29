@@ -171,6 +171,22 @@ func TestBoardFlow(t *testing.T) {
 		t.Fatalf("prompt = %q", sess.Messages[0].Content)
 	}
 
+	// A session started with a skill: the prompt is optional and goes with it as more context.
+	sk, _ := c.app.Store.SaveSkill(t.Context(), store.Skill{Name: "Guard", Body: "Guard the spec."})
+	var guard store.Session
+	c.do("POST", "/api/tasks/"+itoa(task.ID)+"/sessions", map[string]any{"skill_id": sk.ID, "prompt": "found: no tests", "include_context": true}, 201, &guard)
+	c.app.Wait()
+	c.do("GET", "/api/sessions/"+itoa(guard.ID), nil, 200, &sess)
+	if p := sess.Messages[0].Content; guard.Title != "Guard" || !strings.HasPrefix(p, `Apply the skill "Guard" to this task.`) ||
+		strings.Count(p, "Task #1: Write spec") != 1 || !strings.HasSuffix(p, "Guard the spec.\n\n---\n\n"+app.SkillContextIntro+"\n\nfound: no tests") {
+		t.Fatalf("skill session %+v, prompt = %q", guard, p)
+	}
+	c.do("POST", "/api/tasks/"+itoa(task.ID)+"/sessions", map[string]any{"skill_id": sk.ID}, 201, nil)
+	c.app.Wait()
+	c.do("POST", "/api/tasks/"+itoa(task.ID)+"/sessions", map[string]any{"prompt": " "}, 400, nil)
+	c.do("POST", "/api/tasks/"+itoa(task.ID)+"/sessions", map[string]any{"skill_id": 999}, 400, nil)
+	c.do("POST", "/api/sessions", map[string]any{"prompt": "x", "skill_id": sk.ID}, 400, nil)
+
 	c.do("DELETE", "/api/tasks/"+itoa(task.ID), nil, 204, nil)
 	c.do("GET", "/api/tasks/"+itoa(task.ID), nil, 404, nil)
 }
