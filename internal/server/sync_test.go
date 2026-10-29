@@ -398,3 +398,23 @@ func TestSyncRejectsUnauthorized(t *testing.T) {
 		t.Errorf("revoked key: %d", status)
 	}
 }
+
+func TestSyncHello(t *testing.T) {
+	hub := newSyncHub(t) // with a task: not blank
+	n := hub.join(t, 4)
+	status, body, _ := n.do("GET", "/sync/hello", nil)
+	if status != http.StatusOK || string(bytes.TrimSpace(body)) != `{"blank":false,"node_id":4}` {
+		t.Fatalf("hello: %d %s", status, body)
+	}
+	ctx := context.Background()
+	tasks, err := hub.st.SearchTasks(ctx, "before sync", 10)
+	if err != nil || len(tasks) != 1 {
+		t.Fatalf("tasks %v, %v", tasks, err)
+	}
+	if err := hub.st.DeleteTask(ctx, tasks[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if status, body, _ = n.do("GET", "/sync/hello", nil); string(bytes.TrimSpace(body)) != `{"blank":true,"node_id":4}` {
+		t.Fatalf("hello: %d %s", status, body)
+	}
+}

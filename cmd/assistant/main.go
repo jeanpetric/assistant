@@ -45,6 +45,10 @@ func main() {
 	flag.StringVar(&f.SyncListen, "sync-listen", "", "address to serve /sync/* on as the sync hub, e.g. 127.0.0.1:6768; empty: not a hub (config: sync_listen)")
 	flag.StringVar(&f.SyncServer, "sync-server", "", "sync hub to keep this node in sync with, e.g. https://assistant.example.com; empty: no sync (config: sync_server)")
 	flag.StringVar(&f.SyncKey, "sync-key", "", "Ed25519 key signing sync requests, created if missing (config: sync_key)")
+	flag.Usage = func() {
+		fmt.Fprintf(flag.CommandLine.Output(), "usage: assistant [flags]\n       assistant [flags] sync <command> (assistant sync for the commands)\n")
+		flag.PrintDefaults()
+	}
 	flag.Parse()
 
 	cfg, err := config.Load(*configPath, home)
@@ -84,6 +88,17 @@ func main() {
 			cfg.SyncKey = f.SyncKey
 		}
 	})
+	if flag.Arg(0) == "sync" {
+		if err := runSync(context.Background(), cfg, *configPath, flag.Args()[1:], os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "assistant sync:", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if flag.NArg() > 0 {
+		flag.Usage()
+		os.Exit(2)
+	}
 	// Always loopback: agents run with your permissions.
 	addr := fmt.Sprintf("127.0.0.1:%d", cfg.Port)
 
@@ -130,10 +145,14 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		go func() {
-			defer close(syncDone)
-			c.Run(ctx)
-		}()
+		if c == nil {
+			close(syncDone)
+		} else {
+			go func() {
+				defer close(syncDone)
+				c.Run(ctx)
+			}()
+		}
 	} else {
 		close(syncDone)
 	}
@@ -155,8 +174,15 @@ func main() {
 
 // syncClient keeps this node in sync with the hub at server: its changes are
 // logged to be pushed, and its new ids come only from blocks the hub leased
-// it, so they never clash with another node's.
+// it, so they never clash with another node's. A database not seeded or
+// joined yet is not synced (nil client): the hub has none of it.
 func syncClient(ctx context.Context, st *store.Store, server, keyPath string) (*syncclient.Client, error) {
+	if node, err := st.NodeID(ctx); err != nil {
+		return nil, err
+	} else if node == 1 {
+		log.Printf("sync_server is set, but this database is not in sync yet: run assistant sync seed (the first node) or assistant sync join (an empty database), then restart")
+		return nil, nil
+	}
 	key, err := syncauth.LoadOrCreateKey(keyPath)
 	if err != nil {
 		return nil, fmt.Errorf("sync_key: %w", err)

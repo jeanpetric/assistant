@@ -107,6 +107,16 @@ func PublicKey(key ed25519.PrivateKey) string {
 	return base64.StdEncoding.EncodeToString(key.Public().(ed25519.PublicKey))
 }
 
+// CheckPublicKey reports whether s is an Ed25519 public key as PublicKey
+// gives it.
+func CheckPublicKey(s string) error {
+	raw, err := base64.StdEncoding.DecodeString(s)
+	if err != nil || len(raw) != ed25519.PublicKeySize {
+		return fmt.Errorf("%q is not an Ed25519 public key (base64, %d bytes)", s, ed25519.PublicKeySize)
+	}
+	return nil
+}
+
 func message(method, uri, ts string, body []byte) []byte {
 	sum := sha256.Sum256(body)
 	return []byte(method + "\n" + uri + "\n" + ts + "\n" + hex.EncodeToString(sum[:]))

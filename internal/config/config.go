@@ -74,3 +74,28 @@ func write(path string, c Config) error {
 	raw, _ := json.MarshalIndent(c, "", "  ")
 	return os.WriteFile(path, append(raw, '\n'), 0o600)
 }
+
+// Set writes one setting into the file at path, keeping the others as they
+// are; value goes in as JSON.
+func Set(path, key string, value any) error {
+	m := map[string]json.RawMessage{}
+	raw, err := os.ReadFile(path)
+	switch {
+	case err == nil:
+		if err := json.Unmarshal(raw, &m); err != nil {
+			return fmt.Errorf("%s: %w", path, err)
+		}
+	case !errors.Is(err, fs.ErrNotExist):
+		return err
+	}
+	v, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	m[key] = v
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	out, _ := json.MarshalIndent(m, "", "  ")
+	return os.WriteFile(path, append(out, '\n'), 0o600)
+}

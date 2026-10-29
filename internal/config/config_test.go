@@ -55,3 +55,21 @@ func TestLoadSyncServer(t *testing.T) {
 		t.Fatalf("got %+v", c)
 	}
 }
+
+func TestSetKeepsTheOtherSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	os.WriteFile(path, []byte(`{"port": 7000, "trello_key": "k"}`), 0o600)
+	if err := Set(path, "sync_server", "https://hub.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path, "/home/me")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Port != 7000 || c.TrelloKey != "k" || c.SyncServer != "https://hub.example.com" || c.Mode != "bypassPermissions" {
+		t.Fatalf("got %+v", c)
+	}
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode %v, %v", info.Mode(), err)
+	}
+}

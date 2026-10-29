@@ -74,3 +74,44 @@ func (s *Store) SyncKeyNode(ctx context.Context, pubkey string) (int64, error) {
 	}
 	return node, nil
 }
+
+// AuthorizeSyncKey allows pubkey to sync as a new node, the one after every
+// node given so far (revoked ones included) and this hub's own. name tells
+// the node apart: no other key in use may have it.
+func (s *Store) AuthorizeSyncKey(ctx context.Context, pubkey, name string) (SyncKey, error) {
+	if name == "" {
+		return SyncKey{}, fmt.Errorf("sync key needs a name")
+	}
+	var k SyncKey
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		var known int
+		var revoked sql.NullInt64
+		err := tx.QueryRowContext(ctx, `SELECT node_id, revoked_at FROM sync_keys WHERE pubkey = ?`, pubkey).Scan(&known, &revoked)
+		switch {
+		case err == nil && revoked.Valid:
+			return fmt.Errorf("key revoked; the node needs a new one")
+		case err == nil:
+			return fmt.Errorf("key already authorized as node %d", known)
+		case !errors.Is(err, sql.ErrNoRows):
+			return err
+		}
+		var taken int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM sync_keys WHERE name = ? AND revoked_at IS NULL`, name).Scan(&taken); err != nil {
+			return err
+		}
+		if taken > 0 {
+			return fmt.Errorf("a key named %q is in use; revoke it first or pick another name", name)
+		}
+		var node int64
+		err = tx.QueryRowContext(ctx, `SELECT MAX((SELECT COALESCE(MAX(node_id), 0) FROM sync_keys), (SELECT node_id FROM sync_node WHERE id = 1)) + 1`).
+			Scan(&node)
+		if err != nil {
+			return err
+		}
+		k = SyncKey{PubKey: pubkey, Name: name, NodeID: node, CreatedAt: fromMillis(s.ts())}
+		_, err = tx.ExecContext(ctx, `INSERT INTO sync_keys (pubkey, name, node_id, created_at) VALUES (?, ?, ?, ?)`,
+			pubkey, name, node, k.CreatedAt.UnixMilli())
+		return err
+	})
+	return k, err
+}

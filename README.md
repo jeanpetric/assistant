@@ -148,7 +148,7 @@ Agents run with your user's permissions. The server only binds to 127.0.0.1 and 
 non-JSON writes, foreign `Origin`s and foreign `Host` headers so that web pages can't drive it.
 
 `sync_listen` (e.g. `127.0.0.1:6768`) makes this node the sync hub: a second listener serves
-only `/sync/*` (push, pull, lease, snapshot), and only to requests signed by a key in
+only `/sync/*` (push, pull, lease, snapshot, hello), and only to requests signed by a key in
 `sync_keys`. The UI, API and MCP stay on the loopback port above. Empty (the default): no hub.
 
 `sync_server` (e.g. `https://assistant.example.com`, no path) keeps this node in sync with the
@@ -157,6 +157,22 @@ is logged). Local changes are pushed about 2 s after the last one, the hub's are
 they come (long-poll), and id blocks are leased before they run out. Offline, the app works as
 usual and changes wait in the outbox; retries back off up to a minute. A node is either the
 hub or syncs with one, not both. Empty (the default): no sync.
+
+Setting sync up, with the app running or not (restart it afterwards, `make restart`):
+
+```sh
+# each node: make its key, set sync_server, print the public key
+assistant sync init --server https://assistant.example.com
+# the hub: accept that key as the next node (2, 3, ...); revoke NAME and keys too
+assistant sync authorize <pubkey> --name laptop
+# the first node, with your data: backs the database up (as make backup), sends all of it to the blank hub
+assistant sync seed
+# every other node, with an empty database: fills it from the hub's snapshot, refuses one with data
+assistant sync join
+```
+
+A seed cut short goes on where it stopped when run again. Until a node is seeded or joined, a
+set `sync_server` syncs nothing (the log says so).
 
 ## MCP server
 

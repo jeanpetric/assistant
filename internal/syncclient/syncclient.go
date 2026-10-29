@@ -145,9 +145,16 @@ func (c *Client) pushLoop(ctx context.Context) {
 	}
 }
 
-// pushAll leases the id blocks running low, then pushes the outbox page by
-// page, dropping each page the hub acked.
+// pushAll leases the id blocks running low, then pushes the outbox.
 func (c *Client) pushAll(ctx context.Context) error {
+	if err := c.lease(ctx); err != nil {
+		return err
+	}
+	return c.pushOutbox(ctx)
+}
+
+// lease leases a block for each table with less than a full one in hand.
+func (c *Client) lease(ctx context.Context) error {
 	low, err := c.st.LowOnIDs(ctx)
 	if err != nil {
 		return err
@@ -164,6 +171,12 @@ func (c *Client) pushAll(ctx context.Context) error {
 			return err
 		}
 	}
+	return nil
+}
+
+// pushOutbox pushes the outbox page by page, dropping each page the hub
+// acked.
+func (c *Client) pushOutbox(ctx context.Context) error {
 	for {
 		changes, err := c.st.ExportChanges(ctx, 0, c.Limit)
 		if err != nil || len(changes) == 0 {
@@ -190,7 +203,7 @@ func (c *Client) pushAll(ctx context.Context) error {
 func (c *Client) pullLoop(ctx context.Context) {
 	var backoff time.Duration
 	for {
-		err := c.pull(ctx)
+		_, err := c.pull(ctx, c.Wait)
 		if ctx.Err() != nil {
 			return
 		}
@@ -207,21 +220,23 @@ func (c *Client) pullLoop(ctx context.Context) {
 	}
 }
 
-func (c *Client) pull(ctx context.Context) error {
+// pull applies the next page of the hub's log, waiting up to wait for one,
+// and reports whether the log goes on after it.
+func (c *Client) pull(ctx context.Context, wait time.Duration) (bool, error) {
 	since, err := c.st.PulledSeq(ctx)
 	if err != nil {
-		return err
+		return false, err
 	}
 	var p store.Pull
-	path := fmt.Sprintf("/sync/pull?since=%d&wait=%d", since, int(c.Wait/time.Second))
+	path := fmt.Sprintf("/sync/pull?since=%d&wait=%d", since, int(wait/time.Second))
 	if err := c.call(ctx, http.MethodGet, path, nil, &p); err != nil {
-		return err
+		return false, err
 	}
 	if err := c.st.ApplyPulled(ctx, p.Changes, p.NextSeq); err != nil {
-		return c.fail(fmt.Errorf("pull: %w", err))
+		return false, c.fail(fmt.Errorf("pull: %w", err))
 	}
 	c.synced(ctx)
-	return nil
+	return p.More, nil
 }
 
 func (c *Client) nextBackoff(d time.Duration) time.Duration {
@@ -231,19 +246,33 @@ func (c *Client) nextBackoff(d time.Duration) time.Duration {
 // call sends a signed request with in as its JSON body (nil: none) and
 // decodes the answer into out. The hub's answer, or its lack, sets Online.
 func (c *Client) call(ctx context.Context, method, path string, in, out any) error {
+	// A pull waits at the hub; anything longer than that is a dead line.
+	ctx, cancel := context.WithTimeout(ctx, c.Wait+30*time.Second)
+	defer cancel()
+	resp, err := c.do(ctx, method, path, in)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return c.fail(fmt.Errorf("%s %s: %w", method, path, err))
+	}
+	return nil
+}
+
+// do sends a signed request with in as its JSON body (nil: none) and
+// returns the hub's answer if it is 200 OK.
+func (c *Client) do(ctx context.Context, method, path string, in any) (*http.Response, error) {
 	var body []byte
 	if in != nil {
 		var err error
 		if body, err = json.Marshal(in); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	// A pull waits at the hub; anything longer than that is a dead line.
-	ctx, cancel := context.WithTimeout(ctx, c.Wait+30*time.Second)
-	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, method, c.server+path, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -251,17 +280,14 @@ func (c *Client) call(ctx context.Context, method, path string, in, out any) err
 	c.signer.Sign(req, body)
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return c.fail(err)
+		return nil, c.fail(err)
 	}
-	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		defer resp.Body.Close()
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return c.fail(fmt.Errorf("%s %s: %s %s", method, strings.SplitN(path, "?", 2)[0], resp.Status, strings.TrimSpace(string(msg))))
+		return nil, c.fail(fmt.Errorf("%s %s: %s %s", method, strings.SplitN(path, "?", 2)[0], resp.Status, strings.TrimSpace(string(msg))))
 	}
-	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-		return c.fail(fmt.Errorf("%s %s: %w", method, path, err))
-	}
-	return nil
+	return resp, nil
 }
 
 // fail records err as why syncing stopped, unless it is the client being

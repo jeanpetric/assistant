@@ -42,6 +42,7 @@ func (h *SyncHub) Handler(v *syncauth.Verifier) http.Handler {
 	m.HandleFunc("GET /sync/pull", h.pull)
 	m.HandleFunc("POST /sync/lease", h.lease)
 	m.HandleFunc("GET /sync/snapshot", h.snapshot)
+	m.HandleFunc("GET /sync/hello", h.hello)
 	return v.Middleware(m)
 }
 
@@ -133,6 +134,17 @@ func (h *SyncHub) pull(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+// hello tells a node setting up which node it is and whether the hub is
+// blank, so the first node may seed it with its data.
+func (h *SyncHub) hello(w http.ResponseWriter, r *http.Request) {
+	blank, err := h.st.Blank(r.Context())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"node_id": sender(r), "blank": blank})
 }
 
 // lease gives the node a new block of ids for a table.
