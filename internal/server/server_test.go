@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1266,5 +1267,93 @@ func TestWatchedTasksAgentStatus(t *testing.T) {
 	want := map[int64]string{a.ID: store.AgentRunning, b.ID: store.AgentNeedsYou}
 	if len(got) != 3 || len(status) != 2 || status[a.ID] != want[a.ID] || status[b.ID] != want[b.ID] {
 		t.Fatalf("watched = %+v", got)
+	}
+}
+
+// A project's board leaves out the lanes it hides, except one its tasks are
+// in; other projects still show them, and all_lanes has every lane.
+func TestProjectHiddenLanes(t *testing.T) {
+	c := newClient(t)
+	var b struct {
+		board
+		AllLanes []store.Lane `json:"all_lanes"`
+	}
+	c.do("GET", "/api/board", nil, 200, &b)
+	a := b.ProjectID
+	var spec store.Lane
+	c.do("POST", "/api/lanes", map[string]any{"name": "Spec review"}, 201, &spec)
+	var other store.Project
+	c.do("POST", "/api/projects", map[string]any{"name": "B"}, 201, &other)
+	c.do("PATCH", "/api/projects/"+itoa(a), map[string]any{"name": "A", "hidden_lanes": []int64{spec.ID}}, 204, nil)
+	// Left out, the hidden lanes stay.
+	c.do("PATCH", "/api/projects/"+itoa(a), map[string]any{"name": "A"}, 204, nil)
+
+	has := func(lanes []store.Lane, id int64) bool {
+		return slices.ContainsFunc(lanes, func(l store.Lane) bool { return l.ID == id })
+	}
+	c.do("GET", "/api/board?project_id="+itoa(a), nil, 200, &b)
+	if has(b.Lanes, spec.ID) || len(b.Lanes) != 5 || !has(b.AllLanes, spec.ID) || len(b.AllLanes) != 6 {
+		t.Fatalf("board A lanes %+v, all %+v", b.Lanes, b.AllLanes)
+	}
+	if !slices.Equal(b.Projects[0].HiddenLanes, []int64{spec.ID}) || len(b.Projects[1].HiddenLanes) != 0 {
+		t.Fatalf("projects = %+v", b.Projects)
+	}
+	c.do("GET", "/api/board?project_id="+itoa(other.ID), nil, 200, &b)
+	if !has(b.Lanes, spec.ID) {
+		t.Fatalf("board B lanes %+v", b.Lanes)
+	}
+
+	// A task moved into the hidden lane brings it back while it is there.
+	var task store.Task
+	c.do("POST", "/api/tasks", map[string]any{"title": "t", "project_id": a}, 201, &task)
+	c.do("POST", "/api/tasks/"+itoa(task.ID)+"/move", map[string]any{"lane_id": spec.ID, "index": 0}, 200, nil)
+	c.do("GET", "/api/board?project_id="+itoa(a), nil, 200, &b)
+	if !has(b.Lanes, spec.ID) {
+		t.Fatalf("hidden lane with a task missing: %+v", b.Lanes)
+	}
+	c.do("POST", "/api/tasks/"+itoa(task.ID)+"/archive", nil, 200, nil)
+	c.do("GET", "/api/board?project_id="+itoa(a), nil, 200, &b)
+	if has(b.Lanes, spec.ID) {
+		t.Fatalf("hidden lane shown without tasks: %+v", b.Lanes)
+	}
+
+	c.do("PATCH", "/api/projects/"+itoa(a), map[string]any{"name": "A", "hidden_lanes": []int64{999}}, 400, nil)
+	all := []int64{}
+	for _, l := range b.AllLanes {
+		all = append(all, l.ID)
+	}
+	c.do("PATCH", "/api/projects/"+itoa(a), map[string]any{"name": "A", "hidden_lanes": all}, 400, nil)
+	c.do("PATCH", "/api/projects/"+itoa(a), map[string]any{"name": "A", "hidden_lanes": []int64{}}, 204, nil)
+	c.do("GET", "/api/board?project_id="+itoa(a), nil, 200, &b)
+	if !has(b.Lanes, spec.ID) {
+		t.Fatalf("shown again: %+v", b.Lanes)
+	}
+}
+
+func TestShownLanes(t *testing.T) {
+	lanes := []store.Lane{{ID: 1}, {ID: 2}, {ID: 3}}
+	ids := func(ls []store.Lane) []int64 {
+		out := []int64{}
+		for _, l := range ls {
+			out = append(out, l.ID)
+		}
+		return out
+	}
+	for _, tc := range []struct {
+		hidden, taskLanes, want []int64
+	}{
+		{nil, nil, []int64{1, 2, 3}},
+		{[]int64{2}, nil, []int64{1, 3}},
+		{[]int64{2}, []int64{2}, []int64{1, 2, 3}},
+		{[]int64{1, 2, 3}, nil, []int64{1, 2, 3}}, // nothing left: every lane
+		{[]int64{1, 2, 3}, []int64{3}, []int64{3}},
+	} {
+		var tasks []store.Task
+		for _, l := range tc.taskLanes {
+			tasks = append(tasks, store.Task{LaneID: l})
+		}
+		if got := ids(shownLanes(lanes, tc.hidden, tasks)); !slices.Equal(got, tc.want) {
+			t.Errorf("hidden %v, tasks in %v: %v, want %v", tc.hidden, tc.taskLanes, got, tc.want)
+		}
 	}
 }

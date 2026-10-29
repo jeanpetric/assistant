@@ -132,7 +132,7 @@ func TestSearchNote(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(js, []byte("run: searchDialog")) || !bytes.Contains(js, []byte("searchNote(t, state.board.projects, state.board.lanes)")) {
+	if !bytes.Contains(js, []byte("run: searchDialog")) || !bytes.Contains(js, []byte("searchNote(t, state.board.projects, state.board.all_lanes)")) {
 		t.Fatal("⌥S does not open the task search")
 	}
 	start := bytes.Index(js, []byte("function searchNote("))

@@ -168,7 +168,7 @@ func (s *Server) mcpTools() []mcpTool {
 	return []mcpTool{
 		{
 			Name:        "get_board",
-			Description: "The kanban board of one project (the first if project_id is left out): every project, the lanes (in order), the project's tasks on the board, custom field definitions, how many agent sessions run per task and, per task id, agent_status: what its agents are up to (" + agentStatusDoc + "). Start here to find project, lane and task ids.",
+			Description: "The kanban board of one project (the first if project_id is left out): every project, the lanes the project shows (in order; all_lanes has every lane, hidden ones included), the project's tasks on the board, custom field definitions, how many agent sessions run per task and, per task id, agent_status: what its agents are up to (" + agentStatusDoc + "). Start here to find project, lane and task ids.",
 			InputSchema: schema(nil, map[string]any{"project_id": pProjectID}),
 			call:        list("/api/board", "project_id"),
 			post:        boardSummary,
@@ -255,9 +255,10 @@ func (s *Server) mcpTools() []mcpTool {
 		},
 		{
 			Name:        "update_project",
-			Description: "Rename or recolour a project, or change its default workdir (left out keeps it).",
+			Description: "Rename or recolour a project, or change its default workdir or hidden lanes (left out keeps them).",
 			InputSchema: schema([]string{"project_id", "name"}, map[string]any{"project_id": pProjectID, "name": prop("string", "Project name"), "color": prop("string", "CSS colour"),
-				"workdir": pProjectWorkdir}),
+				"workdir": pProjectWorkdir, "hidden_lanes": map[string]any{"type": "array", "items": map[string]any{"type": "integer"},
+					"description": "Ids of the lanes the project's board leaves out (replaces the list; empty shows every lane). A hidden lane still shows while tasks of the project are in it, and rules can still move tasks into it. At least one lane must stay shown."}}),
 			call: byID("PATCH", "/api/projects/%d", "project_id", true),
 		},
 		{

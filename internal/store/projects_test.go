@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -222,5 +224,151 @@ func TestProjectWorkdirMigrationKeepsProjects(t *testing.T) {
 	}
 	if tasks, _ := s.Tasks(ctx, 2); len(tasks) != 1 || tasks[0].Workdir != "/x" {
 		t.Fatalf("tasks = %+v", tasks)
+	}
+}
+
+// A project hides lanes of its own; the list is replaced on update, every
+// lane must exist and one must stay shown, and deleting a lane or the
+// project drops its rows.
+func TestProjectHiddenLanes(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	lanes, _ := s.Lanes(ctx)
+	a, _ := s.CreateProject(ctx, Project{Name: "A"})
+	b, _ := s.CreateProject(ctx, Project{Name: "B"})
+	if a.HiddenLanes == nil || len(a.HiddenLanes) != 0 {
+		t.Fatalf("new project hides %v", a.HiddenLanes)
+	}
+	spec, _ := s.CreateLane(ctx, "Spec review", "")
+	a.HiddenLanes = []int64{spec.ID, lanes[0].ID, spec.ID}
+	if err := s.UpdateProject(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Project(ctx, a.ID); !slices.Equal(got.HiddenLanes, []int64{lanes[0].ID, spec.ID}) {
+		t.Fatalf("A hides %v", got.HiddenLanes)
+	}
+	if got, _ := s.Project(ctx, b.ID); len(got.HiddenLanes) != 0 {
+		t.Fatalf("B hides %v", got.HiddenLanes)
+	}
+	a.HiddenLanes = []int64{spec.ID}
+	if err := s.UpdateProject(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	ps, _ := s.Projects(ctx)
+	for _, p := range ps {
+		want := []int64{}
+		if p.ID == a.ID {
+			want = []int64{spec.ID}
+		}
+		if !slices.Equal(p.HiddenLanes, want) {
+			t.Fatalf("%s hides %v", p.Name, p.HiddenLanes)
+		}
+	}
+
+	a.HiddenLanes = []int64{999}
+	if err := s.UpdateProject(ctx, a); !errors.Is(err, ErrUnknownLane) {
+		t.Fatalf("unknown lane: %v", err)
+	}
+	all := []int64{spec.ID}
+	for _, l := range lanes {
+		all = append(all, l.ID)
+	}
+	a.HiddenLanes = all
+	if err := s.UpdateProject(ctx, a); !errors.Is(err, ErrNoLaneShown) {
+		t.Fatalf("every lane hidden: %v", err)
+	}
+	if got, _ := s.Project(ctx, a.ID); got.Name != "A" || !slices.Equal(got.HiddenLanes, []int64{spec.ID}) {
+		t.Fatalf("a refused update changed %+v", got)
+	}
+
+	b.HiddenLanes = []int64{spec.ID}
+	s.UpdateProject(ctx, b)
+	if err := s.DeleteProject(ctx, b.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteLane(ctx, spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	s.db.QueryRow(`SELECT COUNT(*) FROM project_hidden_lanes`).Scan(&n)
+	if n != 0 {
+		t.Fatalf("%d hidden lane rows left", n)
+	}
+}
+
+// Upgrading leaves every project showing every lane, its data kept.
+func TestHiddenLanesMigrationKeepsProjects(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := migrationWith(t, "CREATE TABLE project_hidden_lanes")
+	for _, m := range migrations[:n] {
+		if _, err := db.Exec(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, q := range []string{
+		fmt.Sprintf(`PRAGMA user_version = %d`, n),
+		`INSERT INTO projects (id, name, color, position, workdir) VALUES (2, 'Work', '#f00', 1, '/w')`,
+		`INSERT INTO lanes (id, name, color, position) VALUES (9, 'Spec review', '', 9)`,
+		`INSERT INTO tasks (id, title, lane_id, position, project_id, created_at, updated_at) VALUES (5, 't', 9, 0, 2, 0, 0)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(q, err)
+		}
+	}
+	db.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	ps, err := s.Projects(ctx)
+	if err != nil || len(ps) != 2 {
+		t.Fatalf("projects = %+v, %v", ps, err)
+	}
+	for _, p := range ps {
+		if len(p.HiddenLanes) != 0 {
+			t.Fatalf("%s hides %v", p.Name, p.HiddenLanes)
+		}
+	}
+	if p := ps[1]; p.ID != 2 || p.Name != "Work" || p.Color != "#f00" || p.Workdir != "/w" {
+		t.Fatalf("project = %+v", p)
+	}
+	if task, err := s.Task(ctx, 5); err != nil || task.LaneID != 9 || task.ProjectID != 2 {
+		t.Fatalf("task = %+v, %v", task, err)
+	}
+	p := ps[1]
+	p.HiddenLanes = []int64{9}
+	if err := s.UpdateProject(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Hiding and showing a lane are synced changes; unchanged rows stay untouched.
+func TestHiddenLanesSync(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	s.SetSyncEnabled(ctx, true)
+	p, _ := s.Project(ctx, 1)
+	p.HiddenLanes = []int64{2}
+	s.UpdateProject(ctx, p)
+	p.HiddenLanes = []int64{2, 3}
+	s.UpdateProject(ctx, p)
+	p.HiddenLanes = []int64{3}
+	s.UpdateProject(ctx, p)
+	var got []string
+	for _, x := range outbox(t, s) {
+		if strings.Contains(x, "project_hidden_lanes") {
+			got = append(got, x)
+		}
+	}
+	want := []string{"insert project_hidden_lanes [1,2]", "insert project_hidden_lanes [1,3]", "delete project_hidden_lanes [1,2]"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("outbox = %v", got)
 	}
 }

@@ -222,7 +222,7 @@ function taskWorkdir(t) {
 }
 
 function laneName(id) {
-  const l = state.board && state.board.lanes.find(l => l.id === id);
+  const l = state.board && state.board.all_lanes.find(l => l.id === id);
   return l ? l.name : '?';
 }
 
@@ -664,8 +664,8 @@ async function taskView(id, { every, leave, reload }) {
     if (res.started.length) toast(`Started ${res.started.map(s => s.title).join(', ')}`);
     await reloadStatus();
   };
-  const lane = select(state.board.lanes.map(l => [l.id, l.name]), t.lane_id, { onchange: e => moveTo(Number(e.target.value)) });
-  const doneLane = state.board.lanes.find(l => l.name.toLowerCase() === 'done');
+  const lane = select(state.board.all_lanes.map(l => [l.id, l.name]), t.lane_id, { onchange: e => moveTo(Number(e.target.value)) });
+  const doneLane = state.board.all_lanes.find(l => l.name.toLowerCase() === 'done');
   const done = h('button', {
     class: 'ghost small done-toggle', title: 'Move the task to Done (⌥D)',
     onclick: async () => { await moveTo(doneLane.id); toast('Moved to ' + doneLane.name); },
@@ -910,7 +910,7 @@ function newSessionPanel(task, onStarted) {
   };
   drawContextLabel();
   const workdir = workdirSelect('', `Default (${taskWorkdir(task)})`);
-  const doneLane = doneLaneSelect(state.board.lanes, '');
+  const doneLane = doneLaneSelect(state.board.all_lanes, '');
   const start = async () => {
     if (!prompt.value.trim()) return;
     const s = await api('POST', `/api/tasks/${task.id}/sessions`, {
@@ -1056,7 +1056,7 @@ function sessionComponent(session, messages, task) {
   const input = h('textarea', { rows: 2, placeholder: 'Reply to continue this session… (⌘↵ to send)' });
   const send = h('button', {}, 'Send', hint('⌘↵'));
   // Task sessions can change where the task goes when the agent finishes, even mid-run.
-  const doneLane = session.task_id && state.board ? doneLaneSelect(state.board.lanes, session.done_lane_id, {
+  const doneLane = session.task_id && state.board ? doneLaneSelect(state.board.all_lanes, session.done_lane_id, {
     class: 'small', style: 'width:auto',
     onchange: async e => { c.session = await api('PATCH', `/api/sessions/${c.session.id}`, { done_lane_id: doneLaneValue(e.target) }); },
   }) : null;
@@ -1288,7 +1288,7 @@ function schedulesPanel(taskId, schedules) {
   const action = select([['agent', 'Run agent'], ['remind', 'Remind me']], 'agent');
   const prompt = h('textarea', { rows: 2, placeholder: 'Prompt (agent) or reminder text. Template vars: {{.Context}}, {{.Task.Title}}, {{.Fields.pull_request}}' });
   const mode = select(modeOptions(true), '');
-  const doneLane = doneLaneSelect(state.board.lanes, '');
+  const doneLane = doneLaneSelect(state.board.all_lanes, '');
   return h('div', { class: 'panel' },
     h('h3', {}, 'Recurring'),
     list,
@@ -1611,21 +1611,21 @@ async function renderSettings() {
 
   const lanes = h('div', { class: 'panel' }, h('h2', {}, 'Lanes'),
     h('p', { class: 'muted small' }, 'Board columns, left to right.'),
-    b.lanes.map((l, i) => {
+    b.all_lanes.map((l, i) => {
       const name = h('input', { value: l.name });
       const color = h('input', { type: 'color', value: l.color || '#888888', style: 'width:42px;padding:2px' });
       const saveLane = () => api('PATCH', `/api/lanes/${l.id}`, { name: name.value, color: color.value });
       name.addEventListener('change', saveLane);
       color.addEventListener('change', saveLane);
       const move = async d => {
-        const ids = b.lanes.map(x => x.id);
+        const ids = b.all_lanes.map(x => x.id);
         [ids[i], ids[i + d]] = [ids[i + d], ids[i]];
         await api('POST', '/api/lanes/reorder', { ids });
         rerender();
       };
       return h('div', { class: 'row', style: 'margin-bottom:6px' }, color, h('div', { class: 'grow' }, name),
         h('button', { class: 'ghost', disabled: i === 0, onclick: () => move(-1) }, '↑'),
-        h('button', { class: 'ghost', disabled: i === b.lanes.length - 1, onclick: () => move(1) }, '↓'),
+        h('button', { class: 'ghost', disabled: i === b.all_lanes.length - 1, onclick: () => move(1) }, '↓'),
         h('button', { class: 'danger', onclick: async () => { await api('DELETE', `/api/lanes/${l.id}`); rerender(); } }, 'Delete'));
     }),
     h('input', {
@@ -1635,32 +1635,43 @@ async function renderSettings() {
     }));
 
   const projects = h('div', { class: 'panel' }, h('h2', {}, 'Projects'),
-    h('p', { class: 'muted small' }, 'Each project is a board of its own on the same lanes; pick one at the top. Rules and auto-archive apply to all of them. ' +
+    h('p', { class: 'muted small' }, 'Each project is a board of its own on the same lanes; pick one at the top, and untick the lanes it does not use (a hidden lane still shows while the project has tasks in it). Rules and auto-archive apply to all of them. ' +
       "Agents on a project's tasks run in its directory unless the task or session picks another."),
     b.projects.map((p, i) => {
       const name = h('input', { value: p.name });
       const color = h('input', { type: 'color', value: p.color || '#888888', style: 'width:42px;padding:2px' });
       const workdir = workdirSelect(p.workdir, `App default (${state.meta.workdir})`, { title: 'Default working directory for agents' });
+      const shows = b.all_lanes.map(l => h('input', { type: 'checkbox', checked: !p.hidden_lanes.includes(l.id) }));
       const saveProject = async () => {
-        await api('PATCH', `/api/projects/${p.id}`, { name: name.value, color: color.value, workdir: workdir.value });
+        const hidden = b.all_lanes.filter((l, j) => !shows[j].checked).map(l => l.id);
+        try {
+          await api('PATCH', `/api/projects/${p.id}`, { name: name.value, color: color.value, workdir: workdir.value, hidden_lanes: hidden });
+        } catch {
+          rerender(); // e.g. the last shown lane: back to what is saved
+          return;
+        }
         loadBoard();
       };
       name.addEventListener('change', saveProject);
       color.addEventListener('change', saveProject);
       workdir.addEventListener('change', saveProject);
+      shows.forEach(c => c.addEventListener('change', saveProject));
       const move = async d => {
         const ids = b.projects.map(x => x.id);
         [ids[i], ids[i + d]] = [ids[i + d], ids[i]];
         await api('POST', '/api/projects/reorder', { ids });
         rerender();
       };
-      return h('div', { class: 'row', style: 'margin-bottom:6px' }, color, h('div', { class: 'grow' }, name), h('div', { class: 'grow' }, workdir),
-        h('button', { class: 'ghost', disabled: i === 0, onclick: () => move(-1) }, '↑'),
-        h('button', { class: 'ghost', disabled: i === b.projects.length - 1, onclick: () => move(1) }, '↓'),
-        h('button', {
-          class: 'danger', title: 'Only a project without tasks (archived ones included) can be deleted',
-          onclick: async () => { await api('DELETE', `/api/projects/${p.id}`); rerender(); },
-        }, 'Delete'));
+      return h('div', { style: 'margin-bottom:10px' },
+        h('div', { class: 'row' }, color, h('div', { class: 'grow' }, name), h('div', { class: 'grow' }, workdir),
+          h('button', { class: 'ghost', disabled: i === 0, onclick: () => move(-1) }, '↑'),
+          h('button', { class: 'ghost', disabled: i === b.projects.length - 1, onclick: () => move(1) }, '↓'),
+          h('button', {
+            class: 'danger', title: 'Only a project without tasks (archived ones included) can be deleted',
+            onclick: async () => { await api('DELETE', `/api/projects/${p.id}`); rerender(); },
+          }, 'Delete')),
+        h('div', { class: 'row small muted', style: 'flex-wrap:wrap;gap:4px 12px;margin-top:4px' }, 'Lanes shown:',
+          b.all_lanes.map((l, j) => h('label', { class: 'row', style: 'margin:0;gap:4px', title: 'Shown on this project\'s board' }, shows[j], l.name))));
     }),
     h('input', {
       placeholder: '+ New project (Enter)', onkeydown: async e => {
@@ -1683,7 +1694,7 @@ async function renderSettings() {
     h('div', { class: 'row', style: 'margin-top:10px' }, h('div', { class: 'grow' }, fKey), h('div', { class: 'grow' }, fLabel), fType,
       h('button', { onclick: async () => { await api('POST', '/api/fields', { key: fKey.value, label: fLabel.value, type: fType.value }); rerender(); } }, 'Add')));
 
-  const laneLabel = id => id == null ? 'Any lane' : (b.lanes.find(l => l.id === id) || {}).name || '?';
+  const laneLabel = id => id == null ? 'Any lane' : (b.all_lanes.find(l => l.id === id) || {}).name || '?';
   const rulesPanel = h('div', { class: 'panel' },
     h('div', { class: 'row' }, h('h2', { class: 'grow' }, 'Transition rules'), h('button', { onclick: () => ruleDialog(null, b, skills, rerender) }, '+ Add rule')),
     h('p', { class: 'muted small' }, 'When a task moves between lanes, start an agent session automatically, run a skill in the task\'s latest session, ' +
@@ -1704,7 +1715,7 @@ async function renderSettings() {
       : h('p', { class: 'muted' }, 'No rules yet.'));
 
   view.replaceChildren(h('div', { style: 'max-width:900px' }, projects, lanes, workdirsPanel(settings.workdirs, rerender), rulesPanel,
-    skillsPanel(skills, b, rerender), sessionPromptPanel(settings), sessionLanePanel(b.lanes, settings), archivePanel(b.lanes, settings), trelloPanel(b, trello, rerender), fields));
+    skillsPanel(skills, b, rerender), sessionPromptPanel(settings), sessionLanePanel(b.all_lanes, settings), archivePanel(b.all_lanes, settings), trelloPanel(b, trello, rerender), fields));
 }
 
 // ---------- skills ----------
@@ -1754,7 +1765,7 @@ function skillDialog(skill, b, done) {
     const enabled = h('input', { type: 'checkbox', checked: a.enabled, title: 'Enabled' });
     const kind = select([['', 'Any kind'], ...state.meta.kinds.map(k => [k, k])], a.kind);
     const project = select([['', 'Any project'], ...b.projects.map(p => [p.id, p.name])], a.project_id ?? '');
-    const lane = select([['', 'In any lane'], ...b.lanes.map(l => [l.id, 'In ' + l.name])], a.lane_id ?? '');
+    const lane = select([['', 'In any lane'], ...b.all_lanes.map(l => [l.id, 'In ' + l.name])], a.lane_id ?? '');
     const row = h('div', { class: 'row automation', style: 'margin-bottom:6px' }, enabled,
       h('div', { class: 'grow' }, kind), h('div', { class: 'grow' }, project), h('div', { class: 'grow' }, lane),
       h('button', { class: 'ghost small', title: 'Remove', onclick: () => row.remove() }, '✕'));
@@ -1890,8 +1901,8 @@ function trelloPanel(b, trello, rerender) {
   const id = el => (el.value ? Number(el.value) : null);
   const selects = x => [
     select([['', `First project (${b.projects[0]?.name ?? ''})`], ...b.projects.map(p => [p.id, p.name])], x.project_id ?? ''),
-    select([['', `First lane (${b.lanes[0]?.name ?? ''})`], ...b.lanes.map(l => [l.id, l.name])], x.lane_id ?? ''),
-    select([['', 'Done lane: none'], ...b.lanes.map(l => [l.id, 'Done lane: ' + l.name])], x.done_lane_id ?? ''),
+    select([['', `First lane (${b.all_lanes[0]?.name ?? ''})`], ...b.all_lanes.map(l => [l.id, l.name])], x.lane_id ?? ''),
+    select([['', 'Done lane: none'], ...b.all_lanes.map(l => [l.id, 'Done lane: ' + l.name])], x.done_lane_id ?? ''),
   ];
   const body = (board, [project, lane, done]) => ({ board: board.value, project_id: id(project), lane_id: id(lane), done_lane_id: id(done) });
   const status = x => !trello.configured ? null
@@ -1962,7 +1973,7 @@ function moveToLanes(lanes, to, keep) {
 }
 
 function ruleDialog(rule, b, skills, done) {
-  const lanes = b.lanes;
+  const lanes = b.all_lanes;
   // Automated sessions usually end in review, so new rules default to a Review lane if there is one.
   const review = lanes.find(l => /review/i.test(l.name));
   rule = rule || { name: '', project_id: null, kind: '', from_lane_id: null, to_lane_id: lanes[0].id, prompt: '{{.Context}}\n\n', skill_id: null,
@@ -2416,7 +2427,7 @@ async function watchedPicker() {
   pickerDialog({
     title: 'Watched tasks', items: tasks, start: tasks.findIndex(t => t.id === taskDialog.id),
     label: t => {
-      const [name, where] = watchedLabel(t, state.board.projects, state.board.lanes);
+      const [name, where] = watchedLabel(t, state.board.projects, state.board.all_lanes);
       return [agentDot(t.agent_status), name, where ? h('span', { class: 'small task-search-note' }, where) : null];
     },
     help: '↑/↓ to choose, Enter opens the task, Esc closes.',
@@ -2437,7 +2448,7 @@ async function searchDialog() {
   const dlg = document.getElementById('dialog');
   const search = taskSearch({
     placeholder: 'Search tasks by words or #id…', exclude: () => false,
-    note: t => searchNote(t, state.board.projects, state.board.lanes),
+    note: t => searchNote(t, state.board.projects, state.board.all_lanes),
     onPick: t => { dlg.close(); openTaskDialog(t.id); },
   });
   dlg.replaceChildren(h('h2', {}, 'Search tasks'), h('div', { class: 'search-dialog' }, search.el),

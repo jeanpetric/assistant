@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 )
 
 // Project is a board of its own: it shows only its tasks, on the shared lanes.
@@ -14,6 +15,8 @@ type Project struct {
 	Position int    `json:"position"`
 	Workdir  string `json:"workdir"` // agents on its tasks run here unless the task or session says otherwise
 	Watched  int    `json:"watched"` // its watched tasks on the board
+	// Lanes its board leaves out (in lane order), unless tasks of the project are in them.
+	HiddenLanes []int64 `json:"hidden_lanes"`
 }
 
 const projectCols = `id, name, color, position, workdir,
@@ -22,6 +25,8 @@ const projectCols = `id, name, color, position, workdir,
 var (
 	ErrProjectNotEmpty = errors.New("project still has tasks")
 	ErrLastProject     = errors.New("the last project can't be deleted")
+	ErrUnknownLane     = errors.New("unknown lane")
+	ErrNoLaneShown     = errors.New("a project must show at least one lane")
 )
 
 func (s *Store) Projects(ctx context.Context) ([]Project, error) {
@@ -29,16 +34,27 @@ func (s *Store) Projects(ctx context.Context) ([]Project, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	out := []Project{}
 	for rows.Next() {
 		var p Project
 		if err := rows.Scan(&p.ID, &p.Name, &p.Color, &p.Position, &p.Workdir, &p.Watched); err != nil {
+			rows.Close()
 			return nil, err
 		}
 		out = append(out, p)
 	}
-	return out, rows.Err()
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	hidden, err := s.hiddenLanes(ctx, 0)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].HiddenLanes = append([]int64{}, hidden[out[i].ID]...)
+	}
+	return out, nil
 }
 
 func (s *Store) Project(ctx context.Context, id int64) (Project, error) {
@@ -48,7 +64,32 @@ func (s *Store) Project(ctx context.Context, id int64) (Project, error) {
 	if errors.Is(err, sql.ErrNoRows) {
 		return p, ErrNotFound
 	}
+	if err != nil {
+		return p, err
+	}
+	hidden, err := s.hiddenLanes(ctx, id)
+	p.HiddenLanes = append([]int64{}, hidden[id]...)
 	return p, err
+}
+
+// hiddenLanes returns the hidden lanes of a project (0: of every project) by
+// project, each in lane order.
+func (s *Store) hiddenLanes(ctx context.Context, projectID int64) (map[int64][]int64, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT h.project_id, h.lane_id FROM project_hidden_lanes h JOIN lanes l ON l.id = h.lane_id
+		WHERE ? IN (0, h.project_id) ORDER BY h.project_id, l.position, l.id`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64][]int64{}
+	for rows.Next() {
+		var p, l int64
+		if err := rows.Scan(&p, &l); err != nil {
+			return nil, err
+		}
+		out[p] = append(out[p], l)
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) CreateProject(ctx context.Context, p Project) (Project, error) {
@@ -61,9 +102,70 @@ func (s *Store) CreateProject(ctx context.Context, p Project) (Project, error) {
 	return s.Project(ctx, id)
 }
 
-// UpdateProject saves name, colour and workdir; the position stays.
+// UpdateProject saves name, colour, workdir and hidden lanes; the position
+// stays. Every hidden lane must exist and at least one lane stay shown.
 func (s *Store) UpdateProject(ctx context.Context, p Project) error {
-	return affected(s.db.ExecContext(ctx, `UPDATE projects SET name = ?, color = ?, workdir = ? WHERE id = ?`, p.Name, p.Color, p.Workdir, p.ID))
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		if err := affected(tx.ExecContext(ctx, `UPDATE projects SET name = ?, color = ?, workdir = ? WHERE id = ?`, p.Name, p.Color, p.Workdir, p.ID)); err != nil {
+			return err
+		}
+		return setHiddenLanes(ctx, tx, p.ID, p.HiddenLanes)
+	})
+}
+
+// setHiddenLanes makes lanes the project's hidden lanes, touching only the
+// rows that change.
+func setHiddenLanes(ctx context.Context, tx *sql.Tx, projectID int64, lanes []int64) error {
+	hide := map[int64]bool{}
+	for _, id := range lanes {
+		var n int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM lanes WHERE id = ?`, id).Scan(&n); err != nil {
+			return err
+		}
+		if n == 0 {
+			return fmt.Errorf("%w %d", ErrUnknownLane, id)
+		}
+		hide[id] = true
+	}
+	var total int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM lanes`).Scan(&total); err != nil {
+		return err
+	}
+	if len(hide) >= total {
+		return ErrNoLaneShown
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT lane_id FROM project_hidden_lanes WHERE project_id = ?`, projectID)
+	if err != nil {
+		return err
+	}
+	var drop []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		if hide[id] {
+			delete(hide, id) // already hidden
+		} else {
+			drop = append(drop, id)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, id := range drop {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM project_hidden_lanes WHERE project_id = ? AND lane_id = ?`, projectID, id); err != nil {
+			return err
+		}
+	}
+	for id := range hide {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO project_hidden_lanes (project_id, lane_id) VALUES (?, ?)`, projectID, id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // DeleteProject deletes a project without tasks, archived ones included,

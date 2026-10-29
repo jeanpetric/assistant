@@ -79,7 +79,7 @@ func TestDoneButtonInTopBar(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"const doneLane = state.board.lanes.find(l => l.name.toLowerCase() === 'done');",
+		"const doneLane = state.board.all_lanes.find(l => l.name.toLowerCase() === 'done');",
 		"onclick: async () => { await moveTo(doneLane.id); toast('Moved to ' + doneLane.name); },\n  }, '✓ Done', hint('⌥D'));",
 		"done.classList.toggle('hidden', !doneLane || t.lane_id === doneLane.id || !!t.archived_at);",
 		"h('label', {}, 'Lane'),\n    lane,",

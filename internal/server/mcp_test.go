@@ -187,6 +187,24 @@ func TestMCPProjects(t *testing.T) {
 	if text, isErr = c.tool("create_task", map[string]any{"title": "x", "project_id": 999}); !isErr || !strings.Contains(text, "unknown project_id") {
 		t.Fatalf("unknown project: %s", text)
 	}
+	text, _ = c.tool("get_board", map[string]any{"project_id": p.ID})
+	var b struct {
+		Lanes    []store.Lane `json:"lanes"`
+		AllLanes []store.Lane `json:"all_lanes"`
+	}
+	json.Unmarshal([]byte(text), &b)
+	hide := b.Lanes[len(b.Lanes)-1].ID
+	if text, isErr = c.tool("update_project", map[string]any{"project_id": p.ID, "name": "Side", "hidden_lanes": []int64{hide}}); isErr {
+		t.Fatalf("update_project: %s", text)
+	}
+	text, _ = c.tool("get_board", map[string]any{"project_id": p.ID})
+	json.Unmarshal([]byte(text), &b)
+	if len(b.Lanes) != len(b.AllLanes)-1 || b.Lanes[len(b.Lanes)-1].ID == hide {
+		t.Fatalf("hidden lane on the board: %s", text)
+	}
+	if text, isErr = c.tool("update_project", map[string]any{"project_id": p.ID, "name": "Side", "hidden_lanes": []int64{999}}); !isErr {
+		t.Fatalf("hiding an unknown lane should fail: %s", text)
+	}
 	if text, isErr = c.tool("delete_project", map[string]any{"project_id": p.ID}); !isErr {
 		t.Fatalf("deleting a project with tasks should fail: %s", text)
 	}

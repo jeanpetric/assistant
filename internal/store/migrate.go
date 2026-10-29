@@ -524,6 +524,15 @@ ALTER TABLE sync_state ADD COLUMN synced_at INTEGER NOT NULL DEFAULT 0;
 	`
 ALTER TABLE transition_rules ADD COLUMN kind TEXT NOT NULL DEFAULT '';
 `,
+	// Lanes a project's board leaves out; none so far, every lane is shown.
+	`
+CREATE TABLE project_hidden_lanes (
+	project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+	lane_id INTEGER NOT NULL REFERENCES lanes(id) ON DELETE CASCADE,
+	PRIMARY KEY (project_id, lane_id)
+);
+CREATE INDEX project_hidden_lanes_lane ON project_hidden_lanes(lane_id);
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

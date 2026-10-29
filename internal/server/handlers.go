@@ -24,7 +24,8 @@ import (
 var taskKinds = []string{"task", "coding", "research", "discussion", "reminder"}
 
 // board returns the lanes and the tasks of one project (?project_id=, else the
-// first project), plus every project to switch to.
+// first project), plus every project to switch to. lanes are those the
+// project shows (see shownLanes), all_lanes every lane.
 func (s *Server) board(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	lanes, err := s.app.Store.Lanes(ctx)
@@ -54,6 +55,12 @@ func (s *Server) board(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeErr(w, err)
 		return
+	}
+	shown := lanes
+	for _, p := range projects {
+		if p.ID == projectID {
+			shown = shownLanes(lanes, p.HiddenLanes, tasks)
+		}
 	}
 	fields, err := s.app.Store.FieldDefs(ctx)
 	if err != nil {
@@ -105,9 +112,29 @@ func (s *Server) board(w http.ResponseWriter, r *http.Request) {
 			limitsByTask[x.TaskID] = l
 		}
 	}
-	writeJSON(w, 200, map[string]any{"projects": projects, "project_id": projectID, "lanes": lanes, "tasks": tasks, "fields": fields,
+	writeJSON(w, 200, map[string]any{"projects": projects, "project_id": projectID, "lanes": shown, "all_lanes": lanes, "tasks": tasks, "fields": fields,
 		"running": runningByTask, "running_limits": limitsByTask, "running_context": contextByTask, "needs_input": needsInput,
 		"agent_status": agentStatus})
+}
+
+// shownLanes leaves out the hidden lanes, except those the project's tasks
+// are in: a task moved into one (by a rule, say) must not vanish. Should
+// nothing be left, every lane shows.
+func shownLanes(lanes []store.Lane, hidden []int64, tasks []store.Task) []store.Lane {
+	used := map[int64]bool{}
+	for _, t := range tasks {
+		used[t.LaneID] = true
+	}
+	out := []store.Lane{}
+	for _, l := range lanes {
+		if used[l.ID] || !slices.Contains(hidden, l.ID) {
+			out = append(out, l)
+		}
+	}
+	if len(out) == 0 {
+		return lanes
+	}
+	return out
 }
 
 // agentMeta lists the agents a session can run on with their model suggestions.
@@ -412,9 +439,10 @@ func (s *Server) reorderLanes(w http.ResponseWriter, r *http.Request) {
 // ---- projects ----
 
 type projectInput struct {
-	Name    string  `json:"name"`
-	Color   string  `json:"color"`
-	Workdir *string `json:"workdir"` // nil keeps the saved one
+	Name        string   `json:"name"`
+	Color       string   `json:"color"`
+	Workdir     *string  `json:"workdir"`      // nil keeps the saved one
+	HiddenLanes *[]int64 `json:"hidden_lanes"` // nil keeps the saved ones
 }
 
 func (in *projectInput) validate() error {
@@ -476,7 +504,14 @@ func (s *Server) updateProject(w http.ResponseWriter, r *http.Request) {
 	if in.Workdir != nil {
 		p.Workdir = *in.Workdir
 	}
-	if err := s.app.Store.UpdateProject(r.Context(), p); err != nil {
+	if in.HiddenLanes != nil {
+		p.HiddenLanes = *in.HiddenLanes
+	}
+	err = s.app.Store.UpdateProject(r.Context(), p)
+	if errors.Is(err, store.ErrUnknownLane) || errors.Is(err, store.ErrNoLaneShown) {
+		err = badRequest{err.Error()}
+	}
+	if err != nil {
 		writeErr(w, err)
 		return
 	}

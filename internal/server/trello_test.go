@@ -143,7 +143,7 @@ const fmtTime = () => 'now';
 globalThis.confirm = () => true;
 let rerendered = 0;
 const panel = eval(require('fs').readFileSync(process.argv.at(-1), 'utf8') + '; trelloPanel');
-const b = { projects: [{ id: 1, name: 'Assistant' }, { id: 2, name: 'Private' }], lanes: [{ id: 2, name: 'Todo' }, { id: 5, name: 'Done' }] };
+const b = { projects: [{ id: 1, name: 'Assistant' }, { id: 2, name: 'Private' }], all_lanes: [{ id: 2, name: 'Todo' }, { id: 5, name: 'Done' }] };
 const trello = { configured: true, boards: [
   { id: 1, board: 'https://trello.com/b/StAn/stanista', project_id: 2, lane_id: 2, done_lane_id: 5, last_sync_at: 'x', error: '' },
   { id: 2, board: 'https://trello.com/b/Home/home', project_id: 2, lane_id: null, done_lane_id: null, last_sync_at: null, error: 'boom' },
