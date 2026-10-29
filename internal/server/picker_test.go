@@ -121,3 +121,43 @@ for (const [st, want] of [
 		t.Fatalf("agentDot: %v\n%s", err, strings.TrimSpace(string(out)))
 	}
 }
+
+// The ⌥S search notes each found task's project, then its lane or that it is archived.
+func TestSearchNote(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed")
+	}
+	js, err := webFS.ReadFile("web/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(js, []byte("run: searchDialog")) || !bytes.Contains(js, []byte("searchNote(t, state.board.projects, state.board.lanes)")) {
+		t.Fatal("⌥S does not open the task search")
+	}
+	start := bytes.Index(js, []byte("function searchNote("))
+	end := bytes.Index(js, []byte("// ⌥S: a search over every task"))
+	if start < 0 || end < start {
+		t.Fatal("app.js lacks searchNote")
+	}
+	src := filepath.Join(t.TempDir(), "search.js")
+	if err := os.WriteFile(src, js[start:end], 0o600); err != nil {
+		t.Fatal(err)
+	}
+	script := `
+const f = eval(require('fs').readFileSync(process.argv.at(-1), 'utf8') + '; searchNote');
+const ps = [{ id: 1, name: 'Work' }], ls = [{ id: 3, name: 'Doing' }];
+for (const [t, want] of [
+  [{ id: 7, project_id: 1, lane_id: 3 }, ['Work', 'Doing']],
+  [{ id: 8, project_id: 1, lane_id: 3, archived_at: '2026-01-01T00:00:00Z' }, ['Work', 'archived']],
+  [{ id: 9, project_id: 9, lane_id: 9 }, [undefined, undefined]],
+]) {
+  const got = f(t, ps, ls);
+  if (JSON.stringify(got) !== JSON.stringify(want)) { console.log(JSON.stringify(got), 'want', JSON.stringify(want)); process.exitCode = 1; }
+}
+`
+	out, err := exec.Command(node, "-e", script, "--", src).CombinedOutput()
+	if err != nil || len(out) > 0 {
+		t.Fatalf("searchNote: %v\n%s", err, strings.TrimSpace(string(out)))
+	}
+}

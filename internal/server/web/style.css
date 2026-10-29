@@ -303,6 +303,7 @@ dialog::backdrop { background: rgba(0, 0, 0, .35); }
 .task-search[hidden] { display: none; }
 .task-search li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 6px 8px; }
 .task-search-note { opacity: .7; }
+.search-dialog .task-search { position: static; max-height: 60vh; box-shadow: none; }
 .agent-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 8px; vertical-align: 1px; background: var(--muted); box-shadow: 0 0 0 1.5px var(--surface); }
 .agent-dot.running { background: var(--ok); }
 .agent-dot.needs-you { background: var(--warn); }

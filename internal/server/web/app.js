@@ -2264,11 +2264,12 @@ const shortcuts = [
   { keys: '⌥M', code: 'KeyM', label: 'Notifications', run: toggleNotifications },
   { keys: '⌥K', code: 'KeyK', label: 'Pick a project', run: projectPicker },
   { keys: '⌥J', code: 'KeyJ', label: 'Watched tasks', run: watchedPicker },
+  { keys: '⌥S', code: 'KeyS', label: 'Search every task, archived ones too', run: searchDialog },
   { keys: '⌥[', code: 'BracketLeft', label: 'Previous project', run: () => stepProject(-1) },
   { keys: '⌥]', code: 'BracketRight', label: 'Next project', run: () => stepProject(1) },
   { keys: '⌥B', code: 'KeyB', label: 'Go to Board', run: () => go('#/board') },
   { keys: '⌥L', code: 'KeyL', label: 'Go to List', run: () => go('#/list') },
-  { keys: '⌥S', code: 'KeyS', label: 'Go to Sessions', run: () => go('#/sessions') },
+  { keys: '⌥G', code: 'KeyG', label: 'Go to Sessions', run: () => go('#/sessions') },
   { keys: '⌥O', code: 'KeyO', label: 'Go to Memory', run: () => go('#/memory') },
   { keys: '⌥A', code: 'KeyA', label: 'Go to Archive', run: () => go('#/archive') },
   { keys: '⌥,', code: 'Comma', label: 'Go to Settings', run: () => go('#/settings') },
@@ -2418,6 +2419,28 @@ async function watchedPicker() {
     help: '↑/↓ to choose, Enter opens the task, Esc closes.',
     onPick: t => openTaskDialog(t.id),
   });
+}
+
+// How the ⌥S search notes a found task: its project, then its lane, or "archived".
+function searchNote(t, projects, lanes) {
+  return [projects.find(p => p.id === t.project_id)?.name,
+    t.archived_at ? 'archived' : lanes.find(l => l.id === t.lane_id)?.name];
+}
+
+// ⌥S: a search over every task of every project, archived ones included, by words or #id; the
+// empty box lists the latest. Enter (or a click) opens the chosen one's dialog.
+async function searchDialog() {
+  if (!state.board) await loadBoard();
+  const dlg = document.getElementById('dialog');
+  const search = taskSearch({
+    placeholder: 'Search tasks by words or #id…', exclude: () => false,
+    note: t => searchNote(t, state.board.projects, state.board.lanes),
+    onPick: t => { dlg.close(); openTaskDialog(t.id); },
+  });
+  dlg.replaceChildren(h('h2', {}, 'Search tasks'), h('div', { class: 'search-dialog' }, search.el),
+    h('p', { class: 'muted small' }, 'Every project, archived tasks too. ↑/↓ to choose, Enter opens the task, Esc closes.'));
+  dlg.showModal();
+  search.input.focus();
 }
 
 // A dialog listing items (label(x) draws one) with the one at start chosen; ↑/↓ move, Enter (or a
