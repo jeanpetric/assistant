@@ -834,7 +834,7 @@ func (s *Server) deleteTask(w http.ResponseWriter, r *http.Request) {
 	}
 	running, _ := s.app.Store.Sessions(r.Context(), id, store.StatusRunning)
 	for _, x := range running {
-		s.app.Cancel(x.ID)
+		s.app.Cancel(r.Context(), x.ID) // another node's session is left to it
 	}
 	if err := s.app.Store.DeleteTask(r.Context(), id); err != nil {
 		writeErr(w, err)
@@ -1202,7 +1202,7 @@ func (s *Server) deleteQueuedMessage(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	if err := s.app.Store.DeleteQueuedMessage(r.Context(), id); err != nil {
+	if err := s.app.DeleteQueuedMessage(r.Context(), id); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -1266,7 +1266,10 @@ func (s *Server) cancelSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	s.app.Cancel(id)
+	if err := s.app.Cancel(r.Context(), id); err != nil {
+		writeErr(w, err)
+		return
+	}
 	w.WriteHeader(202)
 }
 

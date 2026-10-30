@@ -162,7 +162,7 @@ func TestUpdateMemoriesByHand(t *testing.T) {
 	if err := a.UpdateMemories(ctx, sess.ID); !errors.Is(err, ErrBusy) {
 		t.Fatalf("running: %v", err)
 	}
-	a.Cancel(sess.ID)
+	a.Cancel(ctx, sess.ID)
 	a.Wait()
 	r.block = nil
 	r.result = func(req agent.Request) string { return "- learned" }

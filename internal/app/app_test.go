@@ -179,7 +179,7 @@ func TestSessionErrorAndCancel(t *testing.T) {
 	if queued, err := a.SendMessage(ctx, sess.ID, "again"); err != nil || !queued {
 		t.Fatalf("a message to a running session should be queued: %v %v", queued, err)
 	}
-	a.Cancel(sess.ID)
+	a.Cancel(ctx, sess.ID)
 	a.Wait()
 	got, _ = a.Store.Session(ctx, sess.ID)
 	if got.Status != store.StatusCancelled {

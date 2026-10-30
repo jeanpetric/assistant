@@ -169,7 +169,7 @@ func writeErr(w http.ResponseWriter, err error) {
 		status = http.StatusNotFound
 	case errors.Is(err, store.ErrLaneNotEmpty), errors.Is(err, store.ErrProjectNotEmpty), errors.Is(err, store.ErrLastProject),
 		errors.Is(err, app.ErrBusy), errors.Is(err, app.ErrNoResume), errors.Is(err, app.ErrStopping),
-		errors.Is(err, store.ErrMemoryChanged):
+		errors.Is(err, store.ErrMemoryChanged), errors.Is(err, app.ErrForeignSession):
 		status = http.StatusConflict
 	case errors.As(err, new(badRequest)), errors.Is(err, app.ErrBadAction), errors.Is(err, app.ErrBadCron), errors.Is(err, store.ErrBadContext),
 		errors.Is(err, store.ErrBadMemory), errors.Is(err, store.ErrMemoryExists), errors.Is(err, app.ErrNoMemory), errors.Is(err, app.ErrBadMessage):

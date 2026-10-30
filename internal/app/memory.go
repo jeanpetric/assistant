@@ -296,13 +296,14 @@ func (a *App) memoryLock(id int64) *sync.Mutex {
 }
 
 // askMemory asks a fork of the session's agent conversation for the memory's
-// new version, or, failing that, the stored transcript. It returns the new
+// new version, or, failing that or for another node's session, the stored
+// transcript. It returns the new
 // body or NoChanges.
 func (a *App) askMemory(ctx context.Context, sess store.Session, m store.Memory) (string, float64, error) {
 	var reply string
 	var cost float64
 	var err error
-	if sess.ClaudeSessionID != "" && agent.CanFork(sess.Agent) {
+	if sess.ClaudeSessionID != "" && agent.CanFork(sess.Agent) && sess.Owned {
 		reply, cost, err = a.ask(ctx, agent.Request{Prompt: MemoryPrompt(m), Workdir: sess.Workdir, Mode: "plan",
 			Model: sess.Model, ResumeID: sess.ClaudeSessionID, Fork: true})
 		if ctx.Err() != nil {

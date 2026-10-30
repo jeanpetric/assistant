@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
 	"strings"
 	"time"
 )
@@ -54,9 +56,14 @@ type Session struct {
 	SummaryStale bool       `json:"summary_stale"`
 	// Queued: messages sent while the agent worked, oldest first; each starts
 	// the next turn once the one before ends.
-	Queued    []QueuedMessage `json:"queued"`
-	CreatedAt time.Time       `json:"created_at"`
-	UpdatedAt time.Time       `json:"updated_at"`
+	Queued []QueuedMessage `json:"queued"`
+	// NodeID is the node the session runs on, NodeName that computer's name
+	// (empty: not known). Only there can it go on: Owned says this is it.
+	NodeID    int64     `json:"node_id"`
+	NodeName  string    `json:"node_name"`
+	Owned     bool      `json:"owned"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type QueuedMessage struct {
@@ -79,7 +86,8 @@ const sessionCols = `s.id, COALESCE(s.task_id, 0), COALESCE(t.title, ''), COALES
 	s.summary, s.summary_upto, s.summary_at, COALESCE((SELECT MAX(m.id) FROM messages m WHERE m.session_id = s.id), 0), s.needs_input, s.seen,
 	s.context_tokens, s.context_window,
 	(SELECT json_group_array(json_object('id', q.id, 'content', q.content)) FROM
-		(SELECT id, content FROM queued_messages WHERE session_id = s.id ORDER BY id) q)`
+		(SELECT id, content FROM queued_messages WHERE session_id = s.id ORDER BY id) q),
+	s.node_id, s.node_name, s.node_id = (SELECT node_id FROM sync_node WHERE id = 1)`
 
 func scanSession(sc interface{ Scan(...any) error }) (Session, error) {
 	var x Session
@@ -90,7 +98,7 @@ func scanSession(sc interface{ Scan(...any) error }) (Session, error) {
 	err := sc.Scan(&x.ID, &x.TaskID, &x.TaskTitle, &x.ProjectID, &x.Title, &x.Status, &x.Mode, &x.Agent, &x.Model, &x.Workdir, &x.Trigger,
 		&doneLane, &parent, &child, &x.ClaudeSessionID, &x.CostUSD, &x.Error, &created, &updated, &x.LastMessage,
 		&x.Summary, &x.SummaryUpto, &summaryAt, &lastID, &x.NeedsInput, &x.Seen,
-		&x.ContextTokens, &x.ContextWindow, &queued)
+		&x.ContextTokens, &x.ContextWindow, &queued, &x.NodeID, &x.NodeName, &x.Owned)
 	if err == nil {
 		err = json.Unmarshal([]byte(queued), &x.Queued)
 	}
@@ -101,13 +109,29 @@ func scanSession(sc interface{ Scan(...any) error }) (Session, error) {
 	return x, err
 }
 
+// Node names the computer the session runs on.
+func (x Session) Node() string {
+	if x.NodeName != "" {
+		return x.NodeName
+	}
+	return fmt.Sprintf("node %d", x.NodeID)
+}
+
+// hostname names this computer on the sessions it starts.
+var hostname = func() string {
+	h, _ := os.Hostname()
+	return h
+}
+
+// CreateSession adds a session that runs on this node.
 func (s *Store) CreateSession(ctx context.Context, x Session) (Session, error) {
 	now := s.ts()
 	id, err := s.insert(ctx, "sessions", `
-		INSERT INTO sessions (id, task_id, project_id, title, status, mode, agent, model, workdir, trigger, done_lane_id, parent_id, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		INSERT INTO sessions (id, task_id, project_id, title, status, mode, agent, model, workdir, trigger, done_lane_id, parent_id, created_at, updated_at,
+			node_id, node_name)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT node_id FROM sync_node WHERE id = 1), ?)`,
 		sql.NullInt64{Int64: x.TaskID, Valid: x.TaskID != 0}, sql.NullInt64{Int64: x.ProjectID, Valid: x.TaskID == 0 && x.ProjectID != 0}, x.Title, StatusRunning, x.Mode, agentOrClaude(x.Agent), x.Model, x.Workdir, x.Trigger,
-		x.DoneLaneID, x.ParentID, now, now)
+		x.DoneLaneID, x.ParentID, now, now, hostname())
 	if err != nil {
 		return Session{}, err
 	}
@@ -349,9 +373,11 @@ func (s *Store) LastMessageID(ctx context.Context, sessionID int64) (int64, erro
 	return id, err
 }
 
-// MarkInterrupted flags sessions left running by a previous process.
+// MarkInterrupted flags this node's sessions left running by a previous
+// process. Other nodes' running sessions run there: they are left alone.
 func (s *Store) MarkInterrupted(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE sessions SET status = ?, seen = 0, updated_at = ? WHERE status = ?`,
+	_, err := s.db.ExecContext(ctx, `UPDATE sessions SET status = ?, seen = 0, updated_at = ?
+		WHERE status = ? AND node_id = (SELECT node_id FROM sync_node WHERE id = 1)`,
 		StatusInterrupted, s.ts(), StatusRunning)
 	return err
 }
@@ -400,6 +426,16 @@ func (s *Store) QueueMessage(ctx context.Context, sessionID int64, content strin
 		return QueuedMessage{}, err
 	}
 	return QueuedMessage{ID: id, Content: content}, nil
+}
+
+// QueuedMessageSession is the session the queued message waits for.
+func (s *Store) QueuedMessageSession(ctx context.Context, id int64) (int64, error) {
+	var sess int64
+	err := s.db.QueryRowContext(ctx, `SELECT session_id FROM queued_messages WHERE id = ?`, id).Scan(&sess)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	return sess, err
 }
 
 // DeleteQueuedMessage drops a queued message before it is sent.

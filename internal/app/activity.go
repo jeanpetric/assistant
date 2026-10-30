@@ -87,6 +87,17 @@ func (a *App) PostTaskMessage(ctx context.Context, m store.TaskMessage, answerTo
 	if err != nil {
 		return PostedMessage{}, err
 	}
+	var asker *store.Session
+	if q.SessionID != nil {
+		sess, err := a.Store.Session(ctx, *q.SessionID)
+		if err == nil {
+			err = own(sess)
+		}
+		if err != nil {
+			return PostedMessage{}, err
+		}
+		asker = &sess
+	}
 	// Answered before the session gets it, so its turn ends with nothing open;
 	// a session that cannot take the answer leaves the question open again
 	// and the thread as it was.
@@ -94,11 +105,9 @@ func (a *App) PostTaskMessage(ctx context.Context, m store.TaskMessage, answerTo
 		return PostedMessage{}, err
 	}
 	out := PostedMessage{AnsweredID: &q.ID}
-	if q.SessionID != nil {
-		sess, err := a.Store.Session(ctx, *q.SessionID)
-		if err == nil {
-			err = a.Store.SetSessionNeedsInput(ctx, sess.ID, "")
-		}
+	if asker != nil {
+		sess := *asker
+		err := a.Store.SetSessionNeedsInput(ctx, sess.ID, "")
 		if err == nil {
 			if out.Queued, err = a.SendMessage(ctx, sess.ID, fmt.Sprintf(AnswerPrompt, q.Body, m.Body)); err != nil {
 				a.Store.SetSessionNeedsInput(ctx, sess.ID, sess.NeedsInput)

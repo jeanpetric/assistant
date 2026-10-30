@@ -15,21 +15,26 @@ type TaskMessage struct {
 	SessionID *int64 `json:"session_id"`
 	// SessionTitle names the author session; empty for the user, or once the
 	// session is deleted.
-	SessionTitle string     `json:"session_title"`
-	Body         string     `json:"body"`
-	Question     bool       `json:"question"`
-	AnsweredAt   *time.Time `json:"answered_at"`
-	CreatedAt    time.Time  `json:"created_at"`
+	SessionTitle string `json:"session_title"`
+	// SessionNode names the computer the author session runs on when that is
+	// another node, which alone can pass it an answer; empty otherwise.
+	SessionNode string     `json:"session_node,omitempty"`
+	Body        string     `json:"body"`
+	Question    bool       `json:"question"`
+	AnsweredAt  *time.Time `json:"answered_at"`
+	CreatedAt   time.Time  `json:"created_at"`
 }
 
-const taskMessageCols = `m.id, m.task_id, m.session_id, COALESCE(s.title, ''), m.body, m.question, m.answered_at, m.created_at
+const taskMessageCols = `m.id, m.task_id, m.session_id, COALESCE(s.title, ''),
+	CASE WHEN s.node_id != (SELECT node_id FROM sync_node WHERE id = 1)
+		THEN CASE WHEN s.node_name != '' THEN s.node_name ELSE 'node ' || s.node_id END ELSE '' END, m.body, m.question, m.answered_at, m.created_at
 	FROM task_messages m LEFT JOIN sessions s ON s.id = m.session_id`
 
 func scanTaskMessage(row interface{ Scan(...any) error }) (TaskMessage, error) {
 	var x TaskMessage
 	var sess, answered sql.NullInt64
 	var created int64
-	if err := row.Scan(&x.ID, &x.TaskID, &sess, &x.SessionTitle, &x.Body, &x.Question, &answered, &created); err != nil {
+	if err := row.Scan(&x.ID, &x.TaskID, &sess, &x.SessionTitle, &x.SessionNode, &x.Body, &x.Question, &answered, &created); err != nil {
 		if err == sql.ErrNoRows {
 			err = ErrNotFound
 		}

@@ -851,7 +851,11 @@ function activityPanel(taskId, messages, { openSession, onChange }) {
         h('div', { class: 'activity-head' }, author(m),
           h('span', { class: 'muted small', title: fmtTime(m.created_at) }, ago(m.created_at)),
           m.question ? h('span', { class: 'badge' + (open ? ' needs-input' : '') }, open ? '✋ question' : 'answered') : null,
-          open ? h('button', { class: 'ghost small', onclick: () => { answerTo = m.id; drawTarget(); input.focus(); } }, 'Answer') : null),
+          // Only the computer a session runs on can pass it the answer.
+          open ? h('button', {
+            class: 'ghost small', disabled: !!m.session_node, title: m.session_node ? `Started on ${m.session_node} — read-only here` : null,
+            onclick: () => { answerTo = m.id; drawTarget(); input.focus(); },
+          }, 'Answer') : null),
         h('div', { class: 'md' }, markdown(m.body)));
     }) : [h('p', { class: 'muted' }, 'No activity yet: the agents working on this task post short notes and questions here.')]));
     drawTarget();
@@ -1158,6 +1162,9 @@ function appendMessage(body, m) {
   drawTurnLine(turn);
 }
 
+// sessionNode names the computer a session runs on.
+const sessionNode = s => s.node_name || `node ${s.node_id}`;
+
 // task: the session's task, if it is shown on the task's page.
 function sessionComponent(session, messages, task) {
   let last = 0;
@@ -1188,7 +1195,9 @@ function sessionComponent(session, messages, task) {
       await refresh();
     },
   }) : null;
-  const foot = h('div', { class: 'session-foot' }, input,
+  // A session another node runs goes on only there: here it is read-only.
+  const readOnly = h('div', { class: 'read-only-bar muted' });
+  const foot = h('div', { class: 'session-foot' }, readOnly, input,
     h('div', { class: 'row', style: 'margin-top:6px; justify-content:flex-end' }, runSkill, doneLane, send));
   // What tasks building on this one get instead of the transcript; collapsed
   // until opened, and the open state survives redraws.
@@ -1225,9 +1234,10 @@ function sessionComponent(session, messages, task) {
 
   function drawHead() {
     const s = c.session;
+    const owned = s.owned !== false;
     const running = s.status === 'running';
-    const resumable = ['interrupted', 'cancelled', 'error'].includes(s.status);
-    const resumeCmd = s.claude_session_id ? `cd ${JSON.stringify(s.workdir)} && ${s.agent || 'claude'} --resume ${s.claude_session_id}` : '';
+    const resumable = owned && ['interrupted', 'cancelled', 'error'].includes(s.status);
+    const resumeCmd = owned && s.claude_session_id ? `cd ${JSON.stringify(s.workdir)} && ${s.agent || 'claude'} --resume ${s.claude_session_id}` : '';
     head.replaceChildren(...[
       h('span', { class: 'title', onclick: () => c.setCollapsed(!el.classList.contains('collapsed')) }, s.title || `Session ${s.id}`),
       h('span', { class: 'badge status-' + s.status }, running ? h('span', { class: 'pulse' }) : null, s.status),
@@ -1252,7 +1262,7 @@ function sessionComponent(session, messages, task) {
         class: 'ghost small', title: resumeCmd,
         onclick: () => navigator.clipboard.writeText(resumeCmd).then(() => toast('Resume command copied')),
       }, 'Copy resume cmd') : null,
-      running ? h('button', { class: 'danger small', onclick: () => api('POST', `/api/sessions/${s.id}/cancel`) }, 'Stop') : null,
+      running && owned ? h('button', { class: 'danger small', onclick: () => api('POST', `/api/sessions/${s.id}/cancel`) }, 'Stop') : null,
       resumable ? h('button', { class: 'small', title: 'Continue this session where it stopped', onclick: doResume }, 'Resume') : null,
       s.memorizing ? h('span', { class: 'badge' }, h('span', { class: 'pulse' }), 'updating memory') : null,
       !running && !s.memorizing && task?.memories.length && s.claude_session_id ? h('button', {
@@ -1264,7 +1274,7 @@ function sessionComponent(session, messages, task) {
           toast('Updating the memories…');
         },
       }, 'Update memory') : null,
-      !running && s.claude_session_id ? h('button', {
+      owned && !running && s.claude_session_id ? h('button', {
         class: 'ghost small', title: 'Have the agent write a brief and continue in a new session with a fresh context',
         onclick: () => handoffDialog(s, refresh),
       }, 'Hand off') : null,
@@ -1281,6 +1291,9 @@ function sessionComponent(session, messages, task) {
     input.placeholder = running ? 'The agent is working: a reply waits in the queue until it finishes… (⌘↵ to queue)'
       : 'Reply to continue this session… (⌘↵ to send)';
     if (runSkill) runSkill.disabled = running || !s.claude_session_id;
+    readOnly.textContent = owned ? '' : `Started on ${sessionNode(s)} — read-only here`;
+    readOnly.hidden = owned;
+    for (const x of [input, send, runSkill]) if (x) x.hidden = !owned;
     drawLimits();
     drawSummary();
   }
@@ -1329,7 +1342,7 @@ function sessionComponent(session, messages, task) {
       h('span', { class: 'label' }, 'Queued'),
       h('span', { class: 'text' }, q.content),
       h('button', {
-        class: 'ghost small', title: 'Don\'t send this message',
+        class: 'ghost small', title: 'Don\'t send this message', hidden: c.session.owned === false,
         onclick: async () => {
           await api('DELETE', `/api/queued-messages/${q.id}`);
           c.session.queued = c.session.queued.filter(x => x.id !== q.id);

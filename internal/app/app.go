@@ -28,7 +28,25 @@ var (
 	ErrBadAction = errors.New("action must be agent or remind")
 	ErrBadCron   = errors.New("invalid cron expression")
 	ErrStopping  = errors.New("the app is shutting down")
+	// ErrForeignSession: the session runs on another node, the only one that
+	// can go on with it (see ForeignSessionError).
+	ErrForeignSession = errors.New("session runs on another node")
 )
+
+// ForeignSessionError is ErrForeignSession naming the session's node.
+type ForeignSessionError struct{ Node string }
+
+func (e ForeignSessionError) Error() string { return "session runs on " + e.Node + "; open it there" }
+
+func (e ForeignSessionError) Is(target error) bool { return target == ErrForeignSession }
+
+// own refuses a session another node runs: its agent and conversation live there.
+func own(sess store.Session) error {
+	if !sess.Owned {
+		return ForeignSessionError{Node: sess.Node()}
+	}
+	return nil
+}
 
 type App struct {
 	Store          *store.Store
@@ -262,6 +280,9 @@ func (a *App) SendMessage(ctx context.Context, sessionID int64, text string) (qu
 	if err != nil {
 		return false, err
 	}
+	if err := own(sess); err != nil {
+		return false, err
+	}
 	// Queue under the lock: a turn frees the session under it before it
 	// looks at the queue, so the message is either seen there or sent now.
 	a.mu.Lock()
@@ -319,6 +340,9 @@ func (a *App) Resume(ctx context.Context, sessionID int64) error {
 	if err != nil {
 		return err
 	}
+	if err := own(sess); err != nil {
+		return err
+	}
 	a.answered(ctx, sess)
 	if sess.ClaudeSessionID != "" {
 		return a.launch(sess, ResumePrompt, sess.ClaudeSessionID, nil)
@@ -356,6 +380,9 @@ const HandoffIntro = "You are taking over from a previous agent session whose co
 func (a *App) Handoff(ctx context.Context, sessionID int64, note string) error {
 	sess, err := a.Store.Session(ctx, sessionID)
 	if err != nil {
+		return err
+	}
+	if err := own(sess); err != nil {
 		return err
 	}
 	if sess.ClaudeSessionID == "" {
@@ -428,13 +455,38 @@ func (a *App) lastReply(ctx context.Context, sessionID int64) (string, error) {
 	return text, nil
 }
 
-// Cancel stops a running turn. It is a no-op for sessions that are not running.
-func (a *App) Cancel(sessionID int64) {
+// Cancel stops a running turn. It is a no-op for sessions that are not
+// running here; another node's session is refused.
+func (a *App) Cancel(ctx context.Context, sessionID int64) error {
+	sess, err := a.Store.Session(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if err := own(sess); err != nil {
+		return err
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if cancel, ok := a.running[sessionID]; ok {
 		cancel()
 	}
+	return nil
+}
+
+// DeleteQueuedMessage drops a message queued for a session's next turn.
+func (a *App) DeleteQueuedMessage(ctx context.Context, id int64) error {
+	sessionID, err := a.Store.QueuedMessageSession(ctx, id)
+	if err != nil {
+		return err
+	}
+	sess, err := a.Store.Session(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if err := own(sess); err != nil {
+		return err
+	}
+	return a.Store.DeleteQueuedMessage(ctx, id)
 }
 
 // launch runs one turn in the background. done, if set, runs after the turn
@@ -667,6 +719,9 @@ const (
 func (a *App) RunSkill(ctx context.Context, sessionID, skillID int64) error {
 	sess, err := a.Store.Session(ctx, sessionID)
 	if err != nil {
+		return err
+	}
+	if err := own(sess); err != nil {
 		return err
 	}
 	sk, err := a.Store.Skill(ctx, skillID)
@@ -952,8 +1007,9 @@ func (a *App) latestSession(ctx context.Context, taskID int64) (*store.Session, 
 }
 
 // ruleSkill runs the rule's skill in sess, the task's latest session, and
-// returns the session it runs in. With no such session, or while it works, the
-// skill starts a new session on the task with the rule's settings instead.
+// returns the session it runs in. With no such session, while it works, or
+// when it runs on another node, the skill starts a new session on the task
+// with the rule's settings instead.
 // Once the skill finishes successfully the task moves to the rule's done lane,
 // unless it left the rule's lane meanwhile.
 func (a *App) ruleSkill(ctx context.Context, r store.Rule, taskID int64, sess *store.Session) (store.Session, error) {
@@ -961,7 +1017,7 @@ func (a *App) ruleSkill(ctx context.Context, r store.Rule, taskID int64, sess *s
 		return a.StartSession(ctx, StartOpts{TaskID: taskID, SkillID: r.SkillID, Title: r.Name, Mode: r.Mode, Workdir: r.Workdir,
 			Trigger: "rule:" + r.Name, DoneLaneID: r.DoneLaneID})
 	}
-	if sess == nil {
+	if sess == nil || !sess.Owned {
 		return fresh()
 	}
 	sk, err := a.Store.Skill(ctx, *r.SkillID)

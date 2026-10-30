@@ -195,6 +195,8 @@ tr.clickable:hover td { background: var(--surface-2); }
 .session-limits { display: flex; flex-wrap: wrap; gap: 4px 16px; padding: 4px 14px; border-top: 1px solid var(--border); }
 .session-limits:empty { display: none; }
 .session-foot { padding: 10px 14px; border-top: 1px solid var(--border); }
+.read-only-bar { font-size: 13px; }
+.session-foot [hidden] { display: none; }
 .msg { margin: 8px 0; white-space: pre-wrap; word-break: break-word; }
 .msg.user { background: var(--user-bg); padding: 8px 10px; border-radius: 6px; }
 .msg.assistant { padding: 2px 0; }

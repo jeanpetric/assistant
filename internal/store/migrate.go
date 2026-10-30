@@ -578,6 +578,16 @@ CREATE TABLE local_settings (
 );
 INSERT INTO local_settings (id, workdirs) SELECT 1, COALESCE((SELECT workdirs FROM settings WHERE id = 1), '[]');
 `,
+	// The node a session runs on, and that computer's name ('': not known).
+	// A session keeps the node of its latest change (its owner writes those),
+	// or else is this database's own.
+	`
+ALTER TABLE sessions ADD COLUMN node_id INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE sessions ADD COLUMN node_name TEXT NOT NULL DEFAULT '';
+UPDATE sessions SET node_id = COALESCE(
+	(SELECT r.node_id FROM sync_rows r WHERE r.tbl = 'sessions' AND r.pk_json = json_array(sessions.id)),
+	(SELECT node_id FROM sync_node WHERE id = 1), 1);
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

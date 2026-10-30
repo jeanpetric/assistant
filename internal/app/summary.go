@@ -131,7 +131,8 @@ func (a *App) startSummary(sessionID int64, notify bool) {
 // summarize asks a fork of the session's agent conversation for the summary,
 // so the conversation itself is not extended and nothing goes into the
 // session's transcript. Without a conversation to fork, or if that fails, the
-// summary is written from the stored transcript instead.
+// summary is written from the stored transcript instead, as it is for a
+// session another node runs: its conversation lives there.
 func (a *App) summarize(ctx context.Context, sess store.Session) error {
 	upto, err := a.Store.LastMessageID(ctx, sess.ID)
 	if err != nil {
@@ -143,7 +144,7 @@ func (a *App) summarize(ctx context.Context, sess store.Session) error {
 	var summary string
 	var cost float64
 	// An agent that cannot fork would carry the question in the session itself.
-	if sess.ClaudeSessionID != "" && agent.CanFork(sess.Agent) {
+	if sess.ClaudeSessionID != "" && agent.CanFork(sess.Agent) && sess.Owned {
 		summary, cost, err = a.ask(ctx, agent.Request{Prompt: SummaryPrompt, Workdir: sess.Workdir, Mode: "plan",
 			Model: sess.Model, ResumeID: sess.ClaudeSessionID, Fork: true})
 		if ctx.Err() != nil {
