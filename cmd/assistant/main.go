@@ -45,6 +45,7 @@ func main() {
 	flag.StringVar(&f.SyncListen, "sync-listen", "", "address to serve /sync/* on as the sync hub, e.g. 127.0.0.1:6768; empty: not a hub (config: sync_listen)")
 	flag.StringVar(&f.SyncServer, "sync-server", "", "sync hub to keep this node in sync with, e.g. https://assistant.example.com; empty: no sync (config: sync_server)")
 	flag.StringVar(&f.SyncKey, "sync-key", "", "Ed25519 key signing sync requests, created if missing (config: sync_key)")
+	flag.StringVar(&f.SlackTokenFile, "slack-token-file", "", "file holding the Slack bot token; missing or empty: Slack off (config: slack_token_file)")
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), "usage: assistant [flags]\n       assistant [flags] sync <command> (assistant sync for the commands)\n")
 		flag.PrintDefaults()
@@ -86,6 +87,8 @@ func main() {
 			cfg.SyncServer = f.SyncServer
 		case "sync-key":
 			cfg.SyncKey = f.SyncKey
+		case "slack-token-file":
+			cfg.SlackTokenFile = f.SlackTokenFile
 		}
 	})
 	if flag.Arg(0) == "sync" {
@@ -138,6 +141,11 @@ func main() {
 	if cfg.TrelloKey != "" && cfg.TrelloToken != "" {
 		a.Trello = &trello.Client{Key: cfg.TrelloKey, Token: cfg.TrelloToken}
 		go a.RunTrelloSync(ctx, time.Minute)
+	}
+	if sc, err := slackClient(cfg.SlackTokenFile); err != nil {
+		log.Fatal(err)
+	} else if sc != nil {
+		a.Slack = sc
 	}
 
 	if cfg.SyncListen != "" {

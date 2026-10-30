@@ -32,18 +32,22 @@ type Config struct {
 	// node in sync with the hub there, signing with the key at SyncKey.
 	SyncServer string `json:"sync_server"`
 	SyncKey    string `json:"sync_key"`
+	// SlackTokenFile holds the Slack bot token (xoxb-…); a missing or empty
+	// file leaves Slack off.
+	SlackTokenFile string `json:"slack_token_file"`
 }
 
 func Defaults(home string) Config {
 	return Config{
-		Port:    6767,
-		DB:      filepath.Join(home, ".assistant", "assistant.db"),
-		Claude:  "claude",
-		Gemini:  "gemini",
-		Workdir: home,
-		Agent:   "claude",
-		Mode:    "bypassPermissions",
-		SyncKey: filepath.Join(home, ".assistant", "sync_ed25519"),
+		Port:           6767,
+		DB:             filepath.Join(home, ".assistant", "assistant.db"),
+		Claude:         "claude",
+		Gemini:         "gemini",
+		Workdir:        home,
+		Agent:          "claude",
+		Mode:           "bypassPermissions",
+		SyncKey:        filepath.Join(home, ".assistant", "sync_ed25519"),
+		SlackTokenFile: filepath.Join(home, ".assistant", "slack_token"),
 	}
 }
 

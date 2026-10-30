@@ -75,6 +75,8 @@ type App struct {
 	trelloKick   chan struct{}
 	trelloStatus map[int64]TrelloStatus // by board id
 
+	Slack SlackClient // nil: Slack off
+
 	// SyncRole is this node's part in sync: RoleOff, RoleHub or RoleClient.
 	// A hub is only the shared database: it runs no schedules, reminders
 	// or auto-archive.

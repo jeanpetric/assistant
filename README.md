@@ -136,12 +136,13 @@ Settings live in `~/.assistant/config.json` (created with defaults on first run)
   "trello_token": "",
   "sync_listen": "",
   "sync_server": "",
-  "sync_key": "~/.assistant/sync_ed25519"
+  "sync_key": "~/.assistant/sync_ed25519",
+  "slack_token_file": "~/.assistant/slack_token"
 }
 ```
 
 Every key also has a flag that overrides the file for one run: `-port`, `-db`, `-claude`,
-`-claude-args`, `-gemini`, `-gemini-args`, `-workdir`, `-agent`, `-mode`, `-trello-key`, `-trello-token`, `-sync-listen`, `-sync-server`, `-sync-key`, plus `-config` to point at another file. Avoid ports
+`-claude-args`, `-gemini`, `-gemini-args`, `-workdir`, `-agent`, `-mode`, `-trello-key`, `-trello-token`, `-sync-listen`, `-sync-server`, `-sync-key`, `-slack-token-file`, plus `-config` to point at another file. Avoid ports
 6665–6669: browsers refuse them.
 
 Agents run with your user's permissions. The server only binds to 127.0.0.1 and rejects

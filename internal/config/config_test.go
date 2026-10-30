@@ -73,3 +73,15 @@ func TestSetKeepsTheOtherSettings(t *testing.T) {
 		t.Fatalf("mode %v, %v", info.Mode(), err)
 	}
 }
+
+func TestLoadSlackTokenFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	c, err := Load(path, "/home/me")
+	if err != nil || c.SlackTokenFile != "/home/me/.assistant/slack_token" {
+		t.Fatalf("default: %+v %v", c, err)
+	}
+	os.WriteFile(path, []byte(`{"slack_token_file": "/etc/slack"}`), 0o600)
+	if c, err := Load(path, "/home/me"); err != nil || c.SlackTokenFile != "/etc/slack" {
+		t.Fatalf("got %+v %v", c, err)
+	}
+}
