@@ -146,6 +146,9 @@ func main() {
 		log.Fatal(err)
 	} else if sc != nil {
 		a.Slack = sc
+		if a.SyncRole != app.RoleHub { // a hub is only the shared database
+			go a.RunSlackSync(ctx, 5*time.Second)
+		}
 	}
 
 	if cfg.SyncListen != "" {

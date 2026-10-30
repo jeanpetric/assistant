@@ -19,6 +19,7 @@ import (
 
 	"github.com/jeanpetric/assistant/internal/agent"
 	"github.com/jeanpetric/assistant/internal/cron"
+	"github.com/jeanpetric/assistant/internal/slack"
 	"github.com/jeanpetric/assistant/internal/store"
 )
 
@@ -78,7 +79,11 @@ type App struct {
 	trelloKick   chan struct{}
 	trelloStatus map[int64]TrelloStatus // by board id
 
-	Slack SlackClient // nil: Slack off
+	Slack       SlackClient // nil: Slack off
+	slackMu     sync.Mutex  // one poll at a time
+	slackKick   chan struct{}
+	slackStatus map[int64]SlackStatus // by task id
+	slackMe     *slack.Identity       // the bot, once known
 
 	// SyncRole is this node's part in sync: RoleOff, RoleHub or RoleClient.
 	// A hub is only the shared database: it runs no schedules, reminders
@@ -136,7 +141,8 @@ func New(s *store.Store, r agent.Runner, workdir, mode string) *App {
 	return &App{Store: s, Runner: r, DefaultWorkdir: workdir, DefaultMode: mode, Now: time.Now,
 		running: map[int64]context.CancelFunc{}, turns: map[int64]int64{}, limits: map[int64]agent.RateLimits{}, summarizing: map[int64]context.CancelFunc{},
 		memorizing: map[int64]context.CancelFunc{}, memorizeAgain: map[int64]bool{}, memoryLocks: map[int64]*sync.Mutex{},
-		filling: map[int64]context.CancelFunc{}, trelloKick: make(chan struct{}, 1)}
+		filling: map[int64]context.CancelFunc{}, trelloKick: make(chan struct{}, 1),
+		slackKick: make(chan struct{}, 1), slackStatus: map[int64]SlackStatus{}}
 }
 
 // Wait blocks until all agent turns started so far have finished.

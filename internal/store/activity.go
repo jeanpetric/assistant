@@ -8,11 +8,13 @@ import (
 
 // TaskMessage is a short message on a task's activity thread: from one of its
 // agent sessions (SessionID), or from the user (SessionID nil). A question
-// waits for the user's answer until AnsweredAt.
+// waits for the user's answer until AnsweredAt. A message from someone in a
+// Slack channel connected to the task names them as Author.
 type TaskMessage struct {
 	ID        int64  `json:"id"`
 	TaskID    int64  `json:"task_id"`
 	SessionID *int64 `json:"session_id"`
+	Author    string `json:"author"`
 	// SessionTitle names the author session; empty for the user, or once the
 	// session is deleted.
 	SessionTitle string `json:"session_title"`
@@ -25,7 +27,7 @@ type TaskMessage struct {
 	CreatedAt   time.Time  `json:"created_at"`
 }
 
-const taskMessageCols = `m.id, m.task_id, m.session_id, COALESCE(s.title, ''),
+const taskMessageCols = `m.id, m.task_id, m.session_id, m.author, COALESCE(s.title, ''),
 	CASE WHEN s.node_id != (SELECT node_id FROM sync_node WHERE id = 1)
 		THEN CASE WHEN s.node_name != '' THEN s.node_name ELSE 'node ' || s.node_id END ELSE '' END, m.body, m.question, m.answered_at, m.created_at
 	FROM task_messages m LEFT JOIN sessions s ON s.id = m.session_id`
@@ -34,7 +36,7 @@ func scanTaskMessage(row interface{ Scan(...any) error }) (TaskMessage, error) {
 	var x TaskMessage
 	var sess, answered sql.NullInt64
 	var created int64
-	if err := row.Scan(&x.ID, &x.TaskID, &sess, &x.SessionTitle, &x.SessionNode, &x.Body, &x.Question, &answered, &created); err != nil {
+	if err := row.Scan(&x.ID, &x.TaskID, &sess, &x.Author, &x.SessionTitle, &x.SessionNode, &x.Body, &x.Question, &answered, &created); err != nil {
 		if err == sql.ErrNoRows {
 			err = ErrNotFound
 		}
@@ -46,8 +48,8 @@ func scanTaskMessage(row interface{ Scan(...any) error }) (TaskMessage, error) {
 
 // AddTaskMessage adds a message to the end of its task's thread.
 func (s *Store) AddTaskMessage(ctx context.Context, x TaskMessage) (TaskMessage, error) {
-	id, err := s.insert(ctx, "task_messages", `INSERT INTO task_messages (id, task_id, session_id, body, question, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		x.TaskID, x.SessionID, x.Body, boolInt(x.Question), s.ts())
+	id, err := s.insert(ctx, "task_messages", `INSERT INTO task_messages (id, task_id, session_id, author, body, question, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		x.TaskID, x.SessionID, x.Author, x.Body, boolInt(x.Question), s.ts())
 	if err != nil {
 		return x, err
 	}

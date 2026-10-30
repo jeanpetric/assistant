@@ -602,6 +602,47 @@ UPDATE tasks SET node_id = COALESCE((SELECT node_id FROM sync_node WHERE id = 1)
 	`
 ALTER TABLE sessions ADD COLUMN report_to INTEGER;
 `,
+	// A task connected to a Slack channel takes in the channel's messages on
+	// its thread, where author names their Slack author ('': not from Slack).
+	// The connection and the messages seen are this computer's, which reads
+	// the channel (never synced). cursor is the ts of the latest top-level
+	// message seen; a seen message's last_reply_ts that of its thread's latest
+	// reply seen, thread_ts its thread's root ('' for a top-level message).
+	// Rows go with their task; a deleted thread message leaves its Slack
+	// message's thread followed.
+	`
+ALTER TABLE task_messages ADD COLUMN author TEXT NOT NULL DEFAULT '';
+CREATE TABLE slack_channels (
+	task_id INTEGER PRIMARY KEY,
+	channel_id TEXT NOT NULL UNIQUE,
+	channel_name TEXT NOT NULL DEFAULT '',
+	session_id INTEGER,
+	cursor TEXT NOT NULL,
+	connected_at INTEGER NOT NULL
+);
+CREATE TABLE slack_messages (
+	channel_id TEXT NOT NULL,
+	ts TEXT NOT NULL,
+	thread_ts TEXT NOT NULL DEFAULT '',
+	task_message_id INTEGER,
+	last_reply_ts TEXT NOT NULL DEFAULT '',
+	PRIMARY KEY (channel_id, ts)
+);
+CREATE INDEX slack_messages_task_message ON slack_messages(task_message_id);
+CREATE TRIGGER slack_channels_task AFTER DELETE ON tasks BEGIN
+	DELETE FROM slack_channels WHERE task_id = OLD.id;
+END;
+CREATE TRIGGER slack_channels_session AFTER DELETE ON sessions BEGIN
+	UPDATE slack_channels SET session_id = NULL WHERE session_id = OLD.id;
+END;
+CREATE TRIGGER slack_messages_channel AFTER DELETE ON slack_channels BEGIN
+	DELETE FROM slack_messages WHERE channel_id = OLD.channel_id;
+END;
+CREATE TRIGGER slack_messages_task_message AFTER DELETE ON task_messages BEGIN
+	DELETE FROM slack_messages WHERE task_message_id = OLD.id AND thread_ts != '';
+	UPDATE slack_messages SET task_message_id = NULL WHERE task_message_id = OLD.id;
+END;
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

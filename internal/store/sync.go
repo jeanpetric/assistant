@@ -54,6 +54,10 @@ var localTables = map[string]bool{
 	// Paths are this computer's (see the migration making them).
 	"local_paths":    true,
 	"local_settings": true,
+	// The computer connected to a Slack channel reads it (see the migration
+	// making them).
+	"slack_channels": true,
+	"slack_messages": true,
 }
 
 // SetSyncEnabled turns change capture on or off. Off (the default), changes

@@ -834,7 +834,7 @@ function activityPanel(taskId, messages, { openSession, onChange }) {
       href: '#', class: 'activity-author', title: 'Open the session',
       onclick: e => { e.preventDefault(); openSession(m.session_id); },
     }, `${m.session_title || 'Session'} · #${m.session_id}`)
-    : h('strong', { class: 'activity-author' }, 'You');
+    : h('strong', { class: 'activity-author' }, m.author ? `${m.author} (Slack)` : 'You');
   const drawTarget = () => {
     const open = openQuestions();
     if (!open.some(m => m.id === answerTo)) answerTo = 0;
