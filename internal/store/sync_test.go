@@ -341,7 +341,7 @@ func TestSyncTriggersOnReopen(t *testing.T) {
 	// From change capture (migration 34) on, the later ones included.
 	exec(t, s, `PRAGMA user_version = 33`, `ALTER TABLE transition_rules DROP COLUMN kind`,
 		`ALTER TABLE sessions DROP COLUMN node_id`, `ALTER TABLE sessions DROP COLUMN node_name`, `ALTER TABLE schedules DROP COLUMN node_id`,
-		`ALTER TABLE tasks DROP COLUMN node_id`, `DROP TABLE sync_state`,
+		`ALTER TABLE tasks DROP COLUMN node_id`, `ALTER TABLE sessions DROP COLUMN report_to`, `DROP TABLE sync_state`,
 		`DROP TABLE sync_outbox`, `DROP TABLE sync_rows`, `DROP TABLE sync_keys`, `DROP TABLE id_leases`, `DROP TABLE project_hidden_lanes`,
 		`DROP TABLE task_messages`, `DROP TABLE local_paths`, `DROP TABLE local_settings`, `DROP TRIGGER local_paths_project`,
 		`DROP TRIGGER local_paths_task`, `DROP TRIGGER local_paths_rule`)

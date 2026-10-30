@@ -104,13 +104,15 @@ func schema(required []string, props map[string]any) map[string]any {
 func prop(typ, desc string) map[string]any { return map[string]any{"type": typ, "description": desc} }
 
 var (
-	pTaskID           = prop("integer", "Task id")
-	pLaneID           = prop("integer", "Lane id (see get_board)")
-	pProjectID        = prop("integer", "Project id (see get_board); every project has its own board on the shared lanes")
-	pFields           = map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}, "description": "Custom fields by key, e.g. {\"pull_request\": \"https://…\"}; see get_board for the keys. An empty value removes a field. Empty productive, pull_request, slack and trello fields fill themselves from such a link in the description, and pull_request from a PR an agent opens (gh pr create)."}
-	pDueAt            = prop("string", "Due time, RFC 3339 (e.g. 2026-10-21T09:00:00+02:00); a notification fires when it's reached")
-	pKind             = map[string]any{"type": "string", "enum": taskKinds}
-	pWorkdir          = prop("string", "Absolute working directory for agent sessions on this computer")
+	pTaskID    = prop("integer", "Task id")
+	pLaneID    = prop("integer", "Lane id (see get_board)")
+	pProjectID = prop("integer", "Project id (see get_board); every project has its own board on the shared lanes")
+	pFields    = map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}, "description": "Custom fields by key, e.g. {\"pull_request\": \"https://…\"}; see get_board for the keys. An empty value removes a field. Empty productive, pull_request, slack and trello fields fill themselves from such a link in the description, and pull_request from a PR an agent opens (gh pr create)."}
+	pDueAt     = prop("string", "Due time, RFC 3339 (e.g. 2026-10-21T09:00:00+02:00); a notification fires when it's reached")
+	pKind      = map[string]any{"type": "string", "enum": taskKinds}
+	pWorkdir   = prop("string", "Absolute working directory for agent sessions on this computer")
+	pReportTo  = prop("integer", "Session id told how each of this session's turns ends: its final reply, its error, the question it asked on its task's thread, "+
+		"or that it was cancelled, as that session's next message (queued while it works). Use it to hear back from sessions you start")
 	pProjectWorkdir   = prop("string", "Default working directory on this computer for agent sessions on the project's tasks; empty means the app default")
 	pSkillAutomations = map[string]any{"type": "array", "description": "When the skill runs by itself: after an agent turn on a task finishes successfully, in that session, " +
 		"if the task matches one of these. Left out keeps the saved list; [] means only by hand (run_skill).",
@@ -335,6 +337,7 @@ func (s *Server) mcpTools() []mcpTool {
 				"model":           prop("string", "Model, e.g. opus for claude or flash for gemini (default: the CLI's)"),
 				"workdir":         pWorkdir,
 				"done_lane_id":    prop("integer", "Move the task to this lane once the agent finishes successfully"),
+				"report_to":       pReportTo,
 			}),
 			call: byID("POST", "/api/tasks/%d/sessions", "task_id", true),
 		},

@@ -92,6 +92,13 @@ func (s *Store) HasOpenQuestion(ctx context.Context, sessionID int64) (bool, err
 	return n > 0, err
 }
 
+// SessionOpenQuestion is the latest question the session asked on a task's
+// thread that waits for an answer; ErrNotFound if none does.
+func (s *Store) SessionOpenQuestion(ctx context.Context, sessionID int64) (TaskMessage, error) {
+	return scanTaskMessage(s.db.QueryRowContext(ctx, `SELECT `+taskMessageCols+`
+		WHERE m.session_id = ? AND m.question AND m.answered_at IS NULL ORDER BY m.id DESC LIMIT 1`, sessionID))
+}
+
 // SetQuestionAnswered marks the question answered now, or open again.
 func (s *Store) SetQuestionAnswered(ctx context.Context, id int64, answered bool) error {
 	var at sql.NullInt64

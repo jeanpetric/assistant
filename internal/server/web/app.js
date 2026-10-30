@@ -1256,6 +1256,7 @@ function sessionComponent(session, messages, task) {
       s.trigger !== 'manual' ? h('span', { class: 'badge' }, s.trigger) : null,
       s.parent_id ? h('a', { class: 'small', href: sessionHref({ task_id: s.task_id, id: s.parent_id }) }, `← from #${s.parent_id}`) : null,
       s.child_id ? h('a', { class: 'small', href: sessionHref({ task_id: s.task_id, id: s.child_id }) }, `continued in #${s.child_id} →`) : null,
+      s.report_to ? h('a', { class: 'small', href: `#/session/${s.report_to}`, title: 'This session reports how each turn ends to that one' }, `reports to #${s.report_to}`) : null,
       s.cost_usd ? h('span', { class: 'muted small' }, '$' + s.cost_usd.toFixed(2)) : null,
       h('span', { class: 'muted small' }, fmtTime(s.created_at)),
       resumeCmd ? h('button', {

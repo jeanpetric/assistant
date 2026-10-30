@@ -34,6 +34,7 @@ type Session struct {
 	DoneLaneID      *int64  `json:"done_lane_id"` // move the task here when a turn finishes successfully
 	ParentID        *int64  `json:"parent_id"`    // the session this one was handed off from
 	ChildID         *int64  `json:"child_id"`     // the latest session this one was handed off to
+	ReportTo        *int64  `json:"report_to"`    // the session told how each of this one's turns ends
 	ClaudeSessionID string  `json:"claude_session_id"`
 	CostUSD         float64 `json:"cost_usd"`
 	Error           string  `json:"error"`
@@ -87,22 +88,23 @@ const sessionCols = `s.id, COALESCE(s.task_id, 0), COALESCE(t.title, ''), COALES
 	s.context_tokens, s.context_window,
 	(SELECT json_group_array(json_object('id', q.id, 'content', q.content)) FROM
 		(SELECT id, content FROM queued_messages WHERE session_id = s.id ORDER BY id) q),
-	s.node_id, s.node_name, s.node_id = (SELECT node_id FROM sync_node WHERE id = 1)`
+	s.node_id, s.node_name, s.node_id = (SELECT node_id FROM sync_node WHERE id = 1), s.report_to`
 
 func scanSession(sc interface{ Scan(...any) error }) (Session, error) {
 	var x Session
 	var created, updated int64
-	var doneLane, parent, child, summaryAt sql.NullInt64
+	var doneLane, parent, child, summaryAt, reportTo sql.NullInt64
 	var lastID int64
 	var queued string
 	err := sc.Scan(&x.ID, &x.TaskID, &x.TaskTitle, &x.ProjectID, &x.Title, &x.Status, &x.Mode, &x.Agent, &x.Model, &x.Workdir, &x.Trigger,
 		&doneLane, &parent, &child, &x.ClaudeSessionID, &x.CostUSD, &x.Error, &created, &updated, &x.LastMessage,
 		&x.Summary, &x.SummaryUpto, &summaryAt, &lastID, &x.NeedsInput, &x.Seen,
-		&x.ContextTokens, &x.ContextWindow, &queued, &x.NodeID, &x.NodeName, &x.Owned)
+		&x.ContextTokens, &x.ContextWindow, &queued, &x.NodeID, &x.NodeName, &x.Owned, &reportTo)
 	if err == nil {
 		err = json.Unmarshal([]byte(queued), &x.Queued)
 	}
 	x.DoneLaneID, x.ParentID, x.ChildID = fromNullID(doneLane), fromNullID(parent), fromNullID(child)
+	x.ReportTo = fromNullID(reportTo)
 	x.SummaryAt = fromNullMillis(summaryAt)
 	x.SummaryStale = x.Summary != "" && lastID > x.SummaryUpto
 	x.CreatedAt, x.UpdatedAt = fromMillis(created), fromMillis(updated)
@@ -128,10 +130,10 @@ func (s *Store) CreateSession(ctx context.Context, x Session) (Session, error) {
 	now := s.ts()
 	id, err := s.insert(ctx, "sessions", `
 		INSERT INTO sessions (id, task_id, project_id, title, status, mode, agent, model, workdir, trigger, done_lane_id, parent_id, created_at, updated_at,
-			node_id, node_name)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT node_id FROM sync_node WHERE id = 1), ?)`,
+			node_id, node_name, report_to)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT node_id FROM sync_node WHERE id = 1), ?, ?)`,
 		sql.NullInt64{Int64: x.TaskID, Valid: x.TaskID != 0}, sql.NullInt64{Int64: x.ProjectID, Valid: x.TaskID == 0 && x.ProjectID != 0}, x.Title, StatusRunning, x.Mode, agentOrClaude(x.Agent), x.Model, x.Workdir, x.Trigger,
-		x.DoneLaneID, x.ParentID, now, now, hostname())
+		x.DoneLaneID, x.ParentID, now, now, hostname(), x.ReportTo)
 	if err != nil {
 		return Session{}, err
 	}

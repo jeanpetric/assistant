@@ -28,6 +28,8 @@ var (
 	ErrBadAction = errors.New("action must be agent or remind")
 	ErrBadCron   = errors.New("invalid cron expression")
 	ErrStopping  = errors.New("the app is shutting down")
+	// ErrBadReportTo: a new session's report_to names no session.
+	ErrBadReportTo = errors.New("report_to is not a session")
 	// ErrForeignSession: the session runs on another node, the only one that
 	// can go on with it (see ForeignSessionError).
 	ErrForeignSession = errors.New("session runs on another node")
@@ -58,7 +60,8 @@ type App struct {
 
 	mu       sync.Mutex
 	running  map[int64]context.CancelFunc
-	stopping bool // set by Shutdown: cancelled turns end as interrupted, not cancelled
+	turns    map[int64]int64 // per session, how many turns this process started (see report)
+	stopping bool            // set by Shutdown: cancelled turns end as interrupted, not cancelled
 	wg       sync.WaitGroup
 	limits   map[int64]agent.RateLimits // per session, last reported; in memory only
 	// summarizing holds the sessions whose summary is being written (see Summarize).
@@ -131,7 +134,7 @@ func (a *App) SyncStatus(ctx context.Context) (SyncStatus, error) {
 
 func New(s *store.Store, r agent.Runner, workdir, mode string) *App {
 	return &App{Store: s, Runner: r, DefaultWorkdir: workdir, DefaultMode: mode, Now: time.Now,
-		running: map[int64]context.CancelFunc{}, limits: map[int64]agent.RateLimits{}, summarizing: map[int64]context.CancelFunc{},
+		running: map[int64]context.CancelFunc{}, turns: map[int64]int64{}, limits: map[int64]agent.RateLimits{}, summarizing: map[int64]context.CancelFunc{},
 		memorizing: map[int64]context.CancelFunc{}, memorizeAgain: map[int64]bool{}, memoryLocks: map[int64]*sync.Mutex{},
 		filling: map[int64]context.CancelFunc{}, trelloKick: make(chan struct{}, 1)}
 }
@@ -176,6 +179,8 @@ type StartOpts struct {
 	// (see moveWhenDone). Nil leaves the task where it is.
 	DoneLaneID *int64
 	ParentID   *int64 // the session this one continues (see Handoff)
+	// ReportTo is told how each of this session's turns ends (see report).
+	ReportTo *int64
 	// ContextFrom: the tasks StartSessionInNewTask's task builds on; the first
 	// prompt starts with their results and the memories the task inherits.
 	ContextFrom []int64
@@ -214,6 +219,13 @@ func (a *App) StartSession(ctx context.Context, o StartOpts) (store.Session, err
 	}
 	if strings.TrimSpace(o.Prompt) == "" {
 		return store.Session{}, errors.New("prompt is required")
+	}
+	if o.ReportTo != nil {
+		if _, err := a.Store.Session(ctx, *o.ReportTo); errors.Is(err, store.ErrNotFound) {
+			return store.Session{}, ErrBadReportTo
+		} else if err != nil {
+			return store.Session{}, err
+		}
 	}
 	if o.Mode == "" {
 		o.Mode = a.DefaultMode
@@ -258,7 +270,7 @@ func (a *App) StartSession(ctx context.Context, o StartOpts) (store.Session, err
 	}
 	sess, err := a.Store.CreateSession(ctx, store.Session{
 		TaskID: o.TaskID, ProjectID: o.ProjectID, Title: o.Title, Mode: o.Mode, Agent: o.Agent, Model: o.Model, Workdir: o.Workdir, Trigger: o.Trigger,
-		DoneLaneID: o.DoneLaneID, ParentID: o.ParentID,
+		DoneLaneID: o.DoneLaneID, ParentID: o.ParentID, ReportTo: o.ReportTo,
 	})
 	if err != nil {
 		return sess, err
@@ -329,6 +341,13 @@ func (a *App) StartSessionInNewTask(ctx context.Context, o StartOpts) (store.Ses
 // starts the next turn once this one ends (see sendQueued). Either way it
 // answers the questions the session asked on its task's thread.
 func (a *App) SendMessage(ctx context.Context, sessionID int64, text string) (queued bool, err error) {
+	return a.sendMessage(ctx, sessionID, text, true)
+}
+
+// sendMessage is SendMessage; answers says whether the message answers the
+// session's questions on the task's thread. A report does not: it comes
+// from another session, not the user.
+func (a *App) sendMessage(ctx context.Context, sessionID int64, text string, answers bool) (queued bool, err error) {
 	sess, err := a.Store.Session(ctx, sessionID)
 	if err != nil {
 		return false, err
@@ -342,7 +361,7 @@ func (a *App) SendMessage(ctx context.Context, sessionID int64, text string) (qu
 	if _, busy := a.running[sessionID]; busy {
 		_, err := a.Store.QueueMessage(ctx, sessionID, text)
 		a.mu.Unlock()
-		if err == nil {
+		if err == nil && answers {
 			err = a.Store.AnswerSessionQuestions(ctx, sessionID)
 		}
 		return err == nil, err
@@ -351,10 +370,12 @@ func (a *App) SendMessage(ctx context.Context, sessionID int64, text string) (qu
 	if sess.ClaudeSessionID == "" {
 		return false, ErrNoResume
 	}
-	if err := a.Store.AnswerSessionQuestions(ctx, sessionID); err != nil {
-		return false, err
+	if answers {
+		if err := a.Store.AnswerSessionQuestions(ctx, sessionID); err != nil {
+			return false, err
+		}
+		a.answered(ctx, sess)
 	}
-	a.answered(ctx, sess)
 	return false, a.launch(sess, text, sess.ClaudeSessionID, nil)
 }
 
@@ -456,7 +477,7 @@ func (a *App) Handoff(ctx context.Context, sessionID int64, note string) error {
 			_, err = a.StartSession(bg, StartOpts{
 				TaskID: sess.TaskID, ProjectID: sess.ProjectID, Prompt: a.handoffPrompt(bg, sess, brief, note), Title: sess.Title,
 				Mode: sess.Mode, Agent: sess.Agent, Model: sess.Model, Workdir: sess.Workdir, Trigger: "handoff",
-				DoneLaneID: sess.DoneLaneID, ParentID: &sess.ID,
+				DoneLaneID: sess.DoneLaneID, ParentID: &sess.ID, ReportTo: sess.ReportTo,
 			})
 		}
 		if err != nil {
@@ -558,6 +579,8 @@ func (a *App) launch(sess store.Session, prompt, resumeID string, done func(ctx 
 		return ErrStopping
 	}
 	a.running[sess.ID] = cancel
+	a.turns[sess.ID]++
+	turn := a.turns[sess.ID]
 	a.wg.Add(1)
 	a.mu.Unlock()
 
@@ -665,6 +688,7 @@ func (a *App) launch(sess store.Session, prompt, resumeID string, done func(ctx 
 		if ended {
 			a.sendQueued(bg, sess.ID)
 		}
+		a.report(bg, sess.ID, turn)
 	}()
 	return nil
 }

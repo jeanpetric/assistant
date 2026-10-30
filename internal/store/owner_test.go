@@ -156,3 +156,70 @@ func TestTaskMessageSessionNode(t *testing.T) {
 		t.Fatalf("nodes %q %q %q", a.SessionNode, b.SessionNode, u.SessionNode)
 	}
 }
+
+// Upgrading keeps every session and its messages; none reports to another.
+// report_to is set when the session is made, synced with the rest of its row,
+// and outlives the session it names.
+func TestSessionReportToMigration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := migrationWith(t, "ALTER TABLE sessions ADD COLUMN report_to")
+	for _, m := range migrations[:n] {
+		if _, err := db.Exec(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, q := range []string{
+		fmt.Sprintf(`PRAGMA user_version = %d`, n),
+		`INSERT INTO tasks (id, title, lane_id, position, project_id, created_at, updated_at) VALUES (5, 'Ship it', 1, 0, 1, 0, 0)`,
+		`INSERT INTO sessions (id, task_id, title, status, mode, claude_session_id, node_name, created_at, updated_at) VALUES (7, 5, 'Mine', 'idle', 'plan', 'c-7', 'mac', 0, 0)`,
+		`INSERT INTO messages (id, session_id, role, kind, content, created_at) VALUES (3, 7, 'user', 'text', 'go', 0)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(q, err)
+		}
+	}
+	db.Close()
+
+	s := openAt(t, path)
+	ctx := context.Background()
+	old, err := s.Session(ctx, 7)
+	if err != nil || old.ReportTo != nil || old.Title != "Mine" || old.ClaudeSessionID != "c-7" || old.NodeName != "mac" || old.TaskID != 5 {
+		t.Fatalf("old = %+v, %v", old, err)
+	}
+	if msgs, err := s.Messages(ctx, 7, 0); err != nil || len(msgs) != 1 || msgs[0].Content != "go" {
+		t.Fatalf("messages = %+v, %v", msgs, err)
+	}
+
+	if err := s.SetSyncEnabled(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	sub, err := s.CreateSession(ctx, Session{TaskID: 5, Title: "sub", ReportTo: &old.ID})
+	if err != nil || sub.ReportTo == nil || *sub.ReportTo != 7 {
+		t.Fatalf("sub = %+v, %v", sub, err)
+	}
+	changes, err := s.ExportChanges(ctx, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var row map[string]any
+	for _, c := range changes {
+		if c.Table == "sessions" && string(c.Key) == fmt.Sprintf("[%d]", sub.ID) {
+			json.Unmarshal(c.Row, &row)
+		}
+	}
+	if row["report_to"] != float64(7) {
+		t.Fatalf("synced row = %v", row)
+	}
+	if err := s.DeleteTask(ctx, 5); err != nil {
+		t.Fatal(err)
+	}
+	other, _ := s.CreateTask(ctx, Task{Title: "t", LaneID: 2})
+	kept, err := s.CreateSession(ctx, Session{TaskID: other.ID, ReportTo: &sub.ID})
+	if err != nil || kept.ReportTo == nil || *kept.ReportTo != sub.ID {
+		t.Fatalf("kept = %+v, %v", kept, err)
+	}
+}

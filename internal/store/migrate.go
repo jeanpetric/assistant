@@ -597,6 +597,11 @@ ALTER TABLE tasks ADD COLUMN node_id INTEGER NOT NULL DEFAULT 1;
 UPDATE schedules SET node_id = COALESCE((SELECT node_id FROM sync_node WHERE id = 1), 1);
 UPDATE tasks SET node_id = COALESCE((SELECT node_id FROM sync_node WHERE id = 1), 1);
 `,
+	// The session a session reports its outcome to. No foreign key: a deleted
+	// one is still known as gone, which the report notes instead.
+	`
+ALTER TABLE sessions ADD COLUMN report_to INTEGER;
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

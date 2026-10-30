@@ -987,6 +987,7 @@ type sessionInput struct {
 	ProjectID      int64   `json:"project_id"`   // standalone sessions only: runs in the project's directory
 	ContextFrom    []int64 `json:"context_from"` // standalone sessions only: the tasks its new task builds on
 	Watched        bool    `json:"watched"`      // standalone sessions only: watch its new task
+	ReportTo       *int64  `json:"report_to"`    // the session told how each of this one's turns ends
 }
 
 func (in *sessionInput) validate() error {
@@ -1072,9 +1073,13 @@ func (s *Server) startStandaloneSession(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, err)
 		return
 	}
+	if err := s.checkSession(r.Context(), in.ReportTo, "report_to"); err != nil {
+		writeErr(w, err)
+		return
+	}
 	sess, err := s.app.StartSessionInNewTask(r.Context(), app.StartOpts{
 		Prompt: in.Prompt, Title: in.Title, Mode: in.Mode, Agent: in.Agent, Model: in.Model, Workdir: in.Workdir, ProjectID: in.ProjectID,
-		ContextFrom: in.ContextFrom, Watched: in.Watched,
+		ContextFrom: in.ContextFrom, Watched: in.Watched, ReportTo: in.ReportTo,
 	})
 	if err != nil {
 		writeErr(w, err)
@@ -1121,9 +1126,13 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	if err := s.checkSession(r.Context(), in.ReportTo, "report_to"); err != nil {
+		writeErr(w, err)
+		return
+	}
 	sess, err := s.app.StartSession(r.Context(), app.StartOpts{
 		TaskID: id, Prompt: prompt, Title: in.Title, Mode: in.Mode, Agent: in.Agent, Model: in.Model, Workdir: in.Workdir,
-		DoneLaneID: in.DoneLaneID, SkillID: in.SkillID,
+		DoneLaneID: in.DoneLaneID, SkillID: in.SkillID, ReportTo: in.ReportTo,
 	})
 	if err != nil {
 		writeErr(w, err)
@@ -1263,6 +1272,17 @@ func (s *Server) checkLane(ctx context.Context, id *int64, field string) error {
 		return nil
 	}
 	_, err := s.app.Store.Lane(ctx, *id)
+	if errors.Is(err, store.ErrNotFound) {
+		return badRequest{"unknown " + field}
+	}
+	return err
+}
+
+func (s *Server) checkSession(ctx context.Context, id *int64, field string) error {
+	if id == nil {
+		return nil
+	}
+	_, err := s.app.Store.Session(ctx, *id)
 	if errors.Is(err, store.ErrNotFound) {
 		return badRequest{"unknown " + field}
 	}
