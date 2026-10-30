@@ -714,7 +714,8 @@ func (s *Server) getTask(w http.ResponseWriter, r *http.Request) {
 
 // connectSlack connects the task to a Slack channel (its id or archive URL):
 // the channel's messages come to the task's thread and go to the
-// orchestrator, session_id or else this computer's latest session of the task.
+// orchestrator, session_id or else this computer's latest session of the task;
+// a task without one gets a new orchestrator session.
 func (s *Server) connectSlack(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	id, err := pathID(r)
@@ -755,7 +756,11 @@ func (s *Server) connectSlack(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if in.SessionID == nil {
-			writeErr(w, errNoOrchestrator)
+			if _, _, err := s.app.ConnectSlackStarting(ctx, id, in.Channel); err != nil {
+				writeErr(w, err)
+				return
+			}
+			s.slackTask(w, r, id)
 			return
 		}
 	} else {
@@ -778,10 +783,6 @@ func (s *Server) connectSlack(w http.ResponseWriter, r *http.Request) {
 	}
 	s.slackTask(w, r, id)
 }
-
-// errNoOrchestrator: a task is connected to Slack only with one of its
-// sessions on this computer to take the channel's messages.
-var errNoOrchestrator = errors.New("the task has no session on this computer to take the channel's messages: start one first")
 
 // disconnectSlack ends the task's connection to its channel; the session and
 // the thread stay.

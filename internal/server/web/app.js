@@ -948,6 +948,7 @@ function slackEditor(task, sessions) {
       ] : [
         h('div', { class: 'field-row' }, channel, h('button', { class: 'small', onclick: connect }, 'Connect')),
         owned.length > 1 ? h('div', { class: 'field-row' }, orchestrator) : null,
+        owned.length ? null : h('div', { class: 'small muted' }, 'The task has no session here: connecting starts its orchestrator.'),
       ])].filter(Boolean));
   };
   channel.addEventListener('keydown', e => { if (e.key === 'Enter') connect(); });

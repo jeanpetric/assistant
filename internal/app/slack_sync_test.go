@@ -592,3 +592,72 @@ func TestSlackTimestampsAndText(t *testing.T) {
 		t.Errorf("slackText = %q, want %q", got, want)
 	}
 }
+
+// Only the orchestrator of a connected task's channel is told how to
+// orchestrate, after the ActivityNote: not another session of the task, nor
+// it once the task is disconnected.
+func TestOrchestratorNote(t *testing.T) {
+	s := newSlackApp(t)
+	ctx := context.Background()
+	other, err := s.a.StartSession(ctx, StartOpts{TaskID: s.task.ID, Prompt: "something else"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.a.Wait()
+	s.f.post("C1", "UANA", "export fails", "")
+	s.sync(t)
+	s.a.DisconnectSlack(ctx, s.task.ID)
+	s.a.SendMessage(ctx, s.sess.ID, "and now?")
+	s.a.Wait()
+
+	activity := func(id int64) string { return fmt.Sprintf(ActivityNote, s.task.ID, id) }
+	note := fmt.Sprintf(OrchestratorNote, "help", s.task.ProjectID, s.task.ID, s.sess.ID)
+	reqs := s.r.requests()
+	want := []string{activity(s.sess.ID), activity(other.ID), activity(s.sess.ID) + "\n\n" + note, activity(s.sess.ID)}
+	if len(reqs) != len(want) {
+		t.Fatalf("requests = %+v", reqs)
+	}
+	for i, w := range want {
+		if !strings.HasSuffix(reqs[i].SystemPrompt, w) || strings.Count(reqs[i].SystemPrompt, "orchestrator of this task's Slack channel") != strings.Count(w, "orchestrator of this task's Slack channel") {
+			t.Errorf("turn %d system prompt = %q, want it to end in %q", i, reqs[i].SystemPrompt, w)
+		}
+	}
+	if !strings.Contains(note, "#help") || !strings.Contains(note, fmt.Sprintf("report_to %d", s.sess.ID)) || !strings.Contains(note, fmt.Sprintf("context_from [%d]", s.task.ID)) {
+		t.Errorf("note = %q", note)
+	}
+}
+
+// A task connected without a session gets an orchestrator, started with the
+// OrchestratorStart prompt, which takes the channel's messages; a channel it
+// can't have starts none.
+func TestConnectSlackStarting(t *testing.T) {
+	a, r := newApp(t)
+	f, c := newFakeSlack(t)
+	a.Slack = c
+	a.Now = func() time.Time { return time.Unix(1793351400, 0) }
+	ctx := context.Background()
+	task, _ := a.Store.CreateTask(ctx, store.Task{Title: "Support"})
+
+	if _, _, err := a.ConnectSlackStarting(ctx, task.ID, "C9"); !errors.Is(err, slack.ErrNotInChannel) {
+		t.Fatalf("not in channel: %v", err)
+	}
+	if ss, _ := a.Store.Sessions(ctx, task.ID, ""); len(ss) != 0 {
+		t.Fatalf("sessions = %+v", ss)
+	}
+
+	ch, sess, err := a.ConnectSlackStarting(ctx, task.ID, "C1")
+	if err != nil || ch.SessionID == nil || *ch.SessionID != sess.ID || sess.TaskID != task.ID || sess.Title != "Slack #help" {
+		t.Fatalf("connected = %+v, %+v, %v", ch, sess, err)
+	}
+	a.Wait()
+	f.post("C1", "UANA", "export fails", "")
+	if err := a.SyncSlack(ctx); err != nil {
+		t.Fatal(err)
+	}
+	a.Wait()
+	reqs := r.requests()
+	if len(reqs) != 2 || reqs[0].Prompt != fmt.Sprintf(OrchestratorStart, "help") || !strings.Contains(reqs[1].Prompt, "export fails") ||
+		!strings.HasSuffix(reqs[1].SystemPrompt, fmt.Sprintf(OrchestratorNote, "help", task.ProjectID, task.ID, sess.ID)) {
+		t.Fatalf("requests = %+v", reqs)
+	}
+}

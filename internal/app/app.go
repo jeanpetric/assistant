@@ -1286,7 +1286,8 @@ func RenderSessionPrompt(tmpl string, d SessionPromptData) (string, error) {
 }
 
 // sessionPrompt is the settings' session prompt for sess, rendered afresh each
-// turn so it follows renames, then for a session on a task the ActivityNote.
+// turn so it follows renames, then for a session on a task the ActivityNote,
+// and for the orchestrator of the task's Slack channel the OrchestratorNote.
 // A session without a project gets the first one, where tasks go when no
 // project is named.
 func (a *App) sessionPrompt(ctx context.Context, sess store.Session) (string, error) {
@@ -1294,7 +1295,12 @@ func (a *App) sessionPrompt(ctx context.Context, sess store.Session) (string, er
 	if err != nil || sess.TaskID == 0 {
 		return prompt, err
 	}
-	return strings.TrimSpace(prompt + "\n\n" + fmt.Sprintf(ActivityNote, sess.TaskID, sess.ID)), nil
+	prompt = strings.TrimSpace(prompt + "\n\n" + fmt.Sprintf(ActivityNote, sess.TaskID, sess.ID))
+	note, err := a.orchestratorNote(ctx, sess)
+	if note != "" {
+		prompt += "\n\n" + note
+	}
+	return prompt, err
 }
 
 func (a *App) settingsPrompt(ctx context.Context, sess store.Session) (string, error) {

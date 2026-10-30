@@ -94,6 +94,10 @@ const ui = eval(require('fs').readFileSync(process.argv.at(-1), 'utf8') + '; ({ 
   const sel = find(ed.el, e => e.tag === 'select');
   if (!input || !sel) fail('no channel field or orchestrator select');
   if (sel.children.map(o => o.text).join() !== 'Latest session,Orchestrator,Older') fail('orchestrators ' + sel.children.map(o => o.text));
+  if (ed.el.text.includes('connecting starts')) fail('a new orchestrator promised with sessions');
+  // A task without a session here connects too: the app starts its orchestrator.
+  const bare = ui.editor({ id: 8, slack: null }, [{ id: 43, title: 'Elsewhere', owned: false }]);
+  if (!bare.el.text.includes('connecting starts its orchestrator') || !find(bare.el, e => e.tag === 'button' && e.text === 'Connect')) fail('empty task ' + bare.el.text);
   await ed.reload();
   if (calls.length) fail('polled while not connected');
 

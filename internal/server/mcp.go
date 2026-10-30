@@ -508,12 +508,12 @@ func (s *Server) mcpTools() []mcpTool {
 			Name: "connect_slack_channel",
 			Description: "Connect a task to a Slack channel on this computer: from now on the channel's messages, top-level and in threads, come to the task's activity thread " +
 				"and go to its orchestrator session, and what is posted on the thread goes to the channel (see post_task_message). Earlier messages are not taken in. " +
-				"The bot must be in the channel. The orchestrator is session_id, else the task's latest session on this computer; a task without one can't be connected yet. " +
+				"The bot must be in the channel. The orchestrator is session_id, else the task's latest session on this computer; a task without one gets a new orchestrator session. " +
 				"Connecting a task already connected replaces its channel. The result is the task, its slack the connection.",
 			InputSchema: schema([]string{"task_id", "channel"}, map[string]any{
 				"task_id":    pTaskID,
 				"channel":    prop("string", "The channel's id (C…) or link (https://….slack.com/archives/C…)"),
-				"session_id": prop("integer", "The orchestrator session, one of the task's on this computer (default: its latest)"),
+				"session_id": prop("integer", "The orchestrator session, one of the task's on this computer (default: its latest; none: a new one is started)"),
 			}),
 			call: byID("POST", "/api/tasks/%d/slack", "task_id", true),
 		},

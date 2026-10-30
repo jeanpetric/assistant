@@ -91,6 +91,63 @@ func (a *App) ConnectSlack(ctx context.Context, taskID int64, channel string, se
 	return c, nil
 }
 
+// OrchestratorStart is the first prompt of the orchestrator session started
+// for a task connected to the channel (%s) without one.
+const OrchestratorStart = "You are connected to the Slack channel #%s and are its orchestrator: its messages come to you as your next messages. " +
+	"Nothing to do yet: don't post on the task's thread (it goes to the channel), reply in a word and end your turn."
+
+// OrchestratorNote follows the ActivityNote in the system prompt of the
+// orchestrator of the task's Slack channel: it hands each request to a
+// sub-agent and posts what comes back in the request's thread. Its verbs are
+// the MCP tools'.
+const OrchestratorNote = `You are the orchestrator of this task's Slack channel #%[1]s: what people post in the channel and its threads comes to you, and what you post on the task's thread with post_task_message goes to the channel. ` +
+	`Messages starting with "[Slack #%[1]s]" come from people in the channel, a line each with the author, its task_message id, ts and thread, and the text. ` +
+	`For each new request create a sub-task (create_task in project %[2]d, with context_from [%[3]d] if it needs this task's context) and start a session on it (start_session with report_to %[4]d, your session id); ` +
+	`then post in the request's thread that the work has started (post_task_message with reply_to its task_message id) and end your turn. ` +
+	`Short questions and clarifications you answer yourself, without a sub-agent. ` +
+	`When "Session #N … finished:", "failed:" or "asks:" comes, post the resolution with post_task_message and reply_to the original request; ` +
+	`a sub-agent's question goes to that same thread, and the answer back to the sub-agent with send_message. ` +
+	`Reply in the thread of the message you answer; post at the top of the channel (top_level) only when someone explicitly asks for it. ` +
+	`Everything you post reaches the channel, so these replies are your messages on the task's thread: post no other summaries.`
+
+// orchestratorNote is the OrchestratorNote for sess if it is the
+// orchestrator of its task's channel, else "".
+func (a *App) orchestratorNote(ctx context.Context, sess store.Session) (string, error) {
+	c, err := a.Store.SlackChannel(ctx, sess.TaskID)
+	if errors.Is(err, store.ErrNotFound) || err == nil && (c.SessionID == nil || *c.SessionID != sess.ID) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	task, err := a.Store.Task(ctx, sess.TaskID)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(OrchestratorNote, c.ChannelName, task.ProjectID, task.ID, sess.ID), nil
+}
+
+// ConnectSlackStarting connects the task to the channel, as ConnectSlack,
+// with a new orchestrator session it starts on the task with the
+// OrchestratorStart prompt: for a task without a session on this computer.
+func (a *App) ConnectSlackStarting(ctx context.Context, taskID int64, channel string) (store.SlackChannel, store.Session, error) {
+	c, err := a.ConnectSlack(ctx, taskID, channel, nil)
+	if err != nil {
+		return c, store.Session{}, err
+	}
+	sess, err := a.StartSession(ctx, StartOpts{TaskID: taskID, Title: "Slack #" + c.ChannelName,
+		Prompt: fmt.Sprintf(OrchestratorStart, c.ChannelName)})
+	if err == nil {
+		c, err = a.ConnectSlack(ctx, taskID, c.ChannelID, &sess.ID)
+	}
+	if err != nil {
+		if e := a.DisconnectSlack(context.WithoutCancel(ctx), taskID); e != nil {
+			log.Printf("slack: task %d: %v", taskID, e)
+		}
+	}
+	return c, sess, err
+}
+
 // DisconnectSlack ends the task's connection to its channel: the channel is
 // no longer polled. The orchestrator session and the task's thread stay.
 func (a *App) DisconnectSlack(ctx context.Context, taskID int64) error {

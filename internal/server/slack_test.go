@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jeanpetric/assistant/internal/app"
 	"github.com/jeanpetric/assistant/internal/slack"
 	"github.com/jeanpetric/assistant/internal/store"
 )
@@ -89,11 +90,24 @@ func TestSlackConnectAPI(t *testing.T) {
 
 	c.app.Slack = fakeSlack{}
 	c.do("POST", path, map[string]any{"channel": " "}, 400, nil)
-	// No session to take the messages yet.
-	c.do("POST", path, map[string]any{"channel": "C1"}, 409, &e)
-	if !strings.Contains(e.Error, "no session on this computer") {
-		t.Fatalf("no session: %q", e.Error)
+	// No session to take the messages: a channel it can't have starts none.
+	c.do("POST", path, map[string]any{"channel": "C9"}, 400, nil)
+	if ss, _ := c.app.Store.Sessions(ctx, task.ID, ""); len(ss) != 0 {
+		t.Fatalf("sessions = %+v", ss)
 	}
+	// One it can has a new orchestrator, told it is connected.
+	var empty, started store.Task
+	c.do("POST", "/api/tasks", map[string]any{"title": "empty"}, 201, &empty)
+	c.do("POST", "/api/tasks/"+itoa(empty.ID)+"/slack", map[string]any{"channel": "C1"}, 200, &started)
+	c.app.Wait()
+	ss, _ := c.app.Store.Sessions(ctx, empty.ID, "")
+	if len(ss) != 1 || started.Slack == nil || started.Slack.SessionID == nil || *started.Slack.SessionID != ss[0].ID || ss[0].Title != "Slack #help" {
+		t.Fatalf("started = %+v, sessions = %+v", started.Slack, ss)
+	}
+	if msgs, _ := c.app.Store.Messages(ctx, ss[0].ID, 0); len(msgs) == 0 || msgs[0].Content != fmt.Sprintf(app.OrchestratorStart, "help") {
+		t.Fatalf("messages = %+v", msgs)
+	}
+	c.do("DELETE", "/api/tasks/"+itoa(empty.ID)+"/slack", nil, 200, nil)
 	older, _ := c.app.Store.CreateSession(ctx, store.Session{TaskID: task.ID, Title: "older"})
 	latest, _ := c.app.Store.CreateSession(ctx, store.Session{TaskID: task.ID, Title: "latest"})
 	elsewhere, _ := c.app.Store.CreateSession(ctx, store.Session{TaskID: other.ID, Title: "elsewhere"})
@@ -183,9 +197,16 @@ func TestSlackConnectMCP(t *testing.T) {
 	if text, isErr := c.tool("connect_slack_channel", map[string]any{"task_id": 999, "channel": "C1"}); !isErr {
 		t.Fatalf("no task: %s", text)
 	}
-	if text, isErr := c.tool("connect_slack_channel", map[string]any{"task_id": task.ID, "channel": "C1"}); !isErr || !strings.Contains(text, "start one first") {
+	var empty store.Task
+	c.do("POST", "/api/tasks", map[string]any{"title": "empty"}, 201, &empty)
+	if text, isErr := c.tool("connect_slack_channel", map[string]any{"task_id": empty.ID, "channel": "C1"}); isErr || !strings.Contains(text, `"channel_name":"help"`) {
 		t.Fatalf("no session: %v %s", isErr, text)
 	}
+	c.app.Wait()
+	if ss, _ := c.app.Store.Sessions(ctx, empty.ID, ""); len(ss) != 1 {
+		t.Fatalf("no session: started %+v", ss)
+	}
+	c.tool("disconnect_slack_channel", map[string]any{"task_id": empty.ID})
 	sess, _ := c.app.Store.CreateSession(ctx, store.Session{TaskID: task.ID, Title: "orchestrator"})
 	if text, isErr := c.tool("connect_slack_channel", map[string]any{"task_id": task.ID, "channel": "C9"}); !isErr || !strings.Contains(text, "invite it") {
 		t.Fatalf("bot not in channel: %v %s", isErr, text)
