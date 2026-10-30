@@ -37,8 +37,12 @@ Once per workspace.
    | `channels:read`, `groups:read` | the channel's name and whether the bot is in it (`conversations.info`) |
    | `users:read` | authors' names |
    | `chat:write` | posting the task's thread to the channel |
+   | `reactions:write` | :eyes: on each message the orchestrator was given |
 
-   Nothing else (no reactions, files, events or Socket Mode).
+   Nothing else (no files, events or Socket Mode). An app installed before `reactions:write`
+   was added needs it added under *OAuth & Permissions* (or the manifest pasted again) and
+   **Reinstall to Workspace**; the token stays the same. Until then messages still go to the
+   orchestrator, only without the reaction (the failure is logged).
 2. **Install to Workspace**, then copy the **Bot User OAuth Token** (`xoxb-…`) from
    *OAuth & Permissions*.
 3. In each channel you will connect, invite the bot: `/invite @JeanBot`.
@@ -128,6 +132,9 @@ notifies once; it is not retried.
   poll fails and shows in the status.
 - The bot's own messages and system messages (joins, topic …) are skipped; `<@U…>` becomes
   `@Name`. Files, reactions and edits are not taken in.
+- Each message handed to the orchestrator gets the bot's :eyes:, so the channel sees it was
+  picked up; one that waits on the task's thread (no orchestrator) gets none. The reaction
+  stays: the answer in the thread shows the rest.
 - A message over 12,000 characters goes out in parts, the rest in the first one's thread.
 - No allowlist: anyone in the channel can give the orchestrator work, which runs with the
   app's permission mode. Connect only channels whose members you trust.
@@ -147,8 +154,8 @@ go build -o /tmp/slack-e2e/assistant ./cmd/assistant
 1. [ ] Create a test task; connect it to the test channel without a session: an orchestrator
        session "Slack #…" starts, the dialog shows `#channel`, "Synced …".
 2. [ ] Write a request in the channel (as a person, not the bot): it shows on the task's thread
-       as "Name (Slack)", the orchestrator gets it, creates a sub-task with a session reporting
-       to it, and says in the request's thread that work started.
+       as "Name (Slack)", the bot puts :eyes: on it, the orchestrator gets it, creates a
+       sub-task with a session reporting to it, and says in the request's thread that work started.
 3. [ ] The sub-session finishes: the orchestrator posts the result in the same thread.
 4. [ ] A request that needs a decision: the sub-agent asks, the question shows in the thread,
        your answer there goes back to the sub-agent, and the result follows.

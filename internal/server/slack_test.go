@@ -50,6 +50,8 @@ func (fakeSlack) PostMessage(context.Context, string, string, string) (string, e
 	return "1793351453.000100", nil
 }
 
+func (fakeSlack) AddReaction(context.Context, string, string, string) error { return nil }
+
 func (fakeSlack) UserName(context.Context, string) (string, error) { return "Ana", nil }
 
 type slackTaskResp struct {

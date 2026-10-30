@@ -170,6 +170,17 @@ func (c *Client) PostMessage(ctx context.Context, channel, markdown, threadTS st
 	return out.TS, err
 }
 
+// AddReaction adds the emoji name (without colons, e.g. "eyes") to the
+// message ts of the channel. A reaction the bot already gave is no error.
+func (c *Client) AddReaction(ctx context.Context, channel, ts, name string) error {
+	q := url.Values{"channel": {ChannelID(channel)}, "timestamp": {ts}, "name": {name}}
+	err := c.call(ctx, "reactions.add", q, &struct{}{})
+	if err != nil && strings.HasSuffix(err.Error(), ": already_reacted") {
+		return nil
+	}
+	return err
+}
+
 // UserName returns the name the user shows as: display name, else real name,
 // else user name. Names are kept in memory once looked up.
 func (c *Client) UserName(ctx context.Context, userID string) (string, error) {

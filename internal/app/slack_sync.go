@@ -362,6 +362,7 @@ func (a *App) pollSlack(ctx context.Context, c store.SlackChannel) (*string, err
 		if err := a.Store.SetSlackDelivered(ctx, c.ChannelID, taken, *c.SessionID); err != nil {
 			errs = append(errs, err)
 		}
+		a.slackSeen(ctx, c.ChannelID, taken)
 	}
 	return &why, errors.Join(errs...)
 }
@@ -377,6 +378,23 @@ func (a *App) deliverSlack(ctx context.Context, c store.SlackChannel, text strin
 		return fmt.Sprintf("session %d can't take them: %v", *c.SessionID, err)
 	}
 	return ""
+}
+
+// slackSeenEmoji is the reaction that shows on a Slack message once the
+// orchestrator has it.
+const slackSeenEmoji = "eyes"
+
+// slackSeen reacts to the messages the orchestrator was given, so the channel
+// sees they were picked up. A failure (an app installed without
+// reactions:write, a message deleted …) is only logged, once a poll: the
+// messages went to the orchestrator all the same.
+func (a *App) slackSeen(ctx context.Context, channel string, taken []string) {
+	for _, ts := range taken {
+		if err := a.Slack.AddReaction(ctx, channel, ts, slackSeenEmoji); err != nil {
+			log.Printf("slack: reacting to %s in %s: %v", ts, channel, err)
+			return
+		}
+	}
 }
 
 // slackWritten are the subtypes of messages someone wrote; the others (a

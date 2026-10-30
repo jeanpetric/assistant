@@ -141,6 +141,32 @@ func TestPostMessage(t *testing.T) {
 	}
 }
 
+func TestAddReaction(t *testing.T) {
+	f := &fake{t: t, answer: func(_ string, form url.Values) string {
+		switch form.Get("timestamp") {
+		case "1.0":
+			return `{"ok":true}`
+		case "2.0":
+			return `{"ok":false,"error":"already_reacted"}`
+		}
+		return `{"ok":false,"error":"missing_scope"}`
+	}}
+	c := f.start()
+	ctx := context.Background()
+	if err := c.AddReaction(ctx, "C1", "1.0", "eyes"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.AddReaction(ctx, "C1", "2.0", "eyes"); err != nil {
+		t.Fatalf("already_reacted: %v", err)
+	}
+	if err := c.AddReaction(ctx, "C1", "3.0", "eyes"); err == nil || !strings.Contains(err.Error(), "reactions.add: missing_scope") {
+		t.Fatalf("missing_scope: %v", err)
+	}
+	if want := "reactions.add channel=C1&name=eyes&timestamp=1.0"; f.calls[0] != want {
+		t.Fatalf("call = %q", f.calls[0])
+	}
+}
+
 func TestUserNameIsCached(t *testing.T) {
 	f := &fake{t: t, answer: func(_ string, form url.Values) string {
 		switch form.Get("user") {

@@ -32,14 +32,15 @@ type fakeSlack struct {
 	msgs     map[string][]slack.Message
 	users    map[string]string
 	calls    map[string]int
-	fail     map[string]string // method → its ok:false error
-	next     int64             // the latest ts's seconds
+	fail     map[string]string   // method → its ok:false error
+	reacted  map[string][]string // "channel ts" → the bot's reactions
+	next     int64               // the latest ts's seconds
 }
 
 func newFakeSlack(t *testing.T) (*fakeSlack, *slack.Client) {
 	f := &fakeSlack{channels: map[string]string{"C1": "help"}, others: map[string]string{"C9": "random"},
 		msgs: map[string][]slack.Message{}, users: map[string]string{"UANA": "Ana", "UIVO": "Ivo", botUser: "JeanBot"},
-		calls: map[string]int{}, fail: map[string]string{}, next: 1793351453}
+		calls: map[string]int{}, fail: map[string]string{}, reacted: map[string][]string{}, next: 1793351453}
 	srv := httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(srv.Close)
 	return f, &slack.Client{Token: "xoxb-test", BaseURL: srv.URL}
@@ -61,6 +62,13 @@ func (f *fakeSlack) add(channel string, m slack.Message) string {
 	}
 	f.msgs[channel] = append(f.msgs[channel], m)
 	return m.TS
+}
+
+// reactions are the bot's reactions on the channel's message ts.
+func (f *fakeSlack) reactions(channel, ts string) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.reacted[channel+" "+ts]
 }
 
 func (f *fakeSlack) count(method string) int {
@@ -140,6 +148,17 @@ func (f *fakeSlack) serve(w http.ResponseWriter, r *http.Request) {
 			Text: r.Form.Get("markdown_text"), ThreadTS: r.Form.Get("thread_ts")}
 		f.msgs[ch] = append(f.msgs[ch], m)
 		reply(map[string]any{"channel": ch, "ts": m.TS})
+	case "reactions.add":
+		ts, name, key := r.Form.Get("timestamp"), r.Form.Get("name"), ch+" "+r.Form.Get("timestamp")
+		switch {
+		case !slices.ContainsFunc(f.msgs[ch], func(m slack.Message) bool { return m.TS == ts }):
+			json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "message_not_found"})
+		case slices.Contains(f.reacted[key], name):
+			json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "already_reacted"})
+		default:
+			f.reacted[key] = append(f.reacted[key], name)
+			reply(map[string]any{})
+		}
 	default:
 		http.Error(w, "unknown method", http.StatusNotFound)
 	}
@@ -328,6 +347,66 @@ func TestSlackOneMessagePerPoll(t *testing.T) {
 	if len(lines) != 3 || !strings.HasSuffix(lines[0], ": one") || !strings.HasSuffix(lines[1], ": two") || !strings.HasSuffix(lines[2], ": three") ||
 		!strings.Contains(lines[1], "thread "+root+":") {
 		t.Fatalf("lines = %q", lines)
+	}
+}
+
+// Each message handed to the orchestrator gets the bot's :eyes:, top-level
+// and thread replies alike; one that only waits on the task's thread gets
+// none.
+func TestSlackReactsToDelivered(t *testing.T) {
+	s := newSlackApp(t)
+	f := s.f
+	root := f.post("C1", "UANA", "export fails", "")
+	reply := f.post("C1", "UIVO", "same here", root)
+	s.sync(t)
+	for _, ts := range []string{root, reply} {
+		if got := f.reactions("C1", ts); !slices.Equal(got, []string{"eyes"}) {
+			t.Fatalf("reactions on %s = %q", ts, got)
+		}
+	}
+	if n := f.count("reactions.add"); n != 2 {
+		t.Fatalf("%d reactions.add calls", n)
+	}
+
+	if _, err := s.a.ConnectSlack(context.Background(), s.task.ID, "C1", nil); err != nil {
+		t.Fatal(err)
+	}
+	waiting := f.post("C1", "UANA", "anyone?", "")
+	s.sync(t)
+	if got := f.reactions("C1", waiting); got != nil {
+		t.Fatalf("reactions on an undelivered message = %q", got)
+	}
+}
+
+// Reactions failing (an app without reactions:write) don't stop the
+// messages, the sync or its status; a reaction already there is no error.
+func TestSlackReactionFailureIsIgnored(t *testing.T) {
+	s := newSlackApp(t)
+	f := s.f
+	f.fail["reactions.add"] = "missing_scope"
+	f.post("C1", "UANA", "one", "")
+	f.post("C1", "UIVO", "two", "")
+	s.sync(t)
+	if len(s.prompts()) != 1 || len(s.thread(t)) != 2 {
+		t.Fatalf("prompts = %q, thread = %v", s.prompts(), s.thread(t))
+	}
+	if n := f.count("reactions.add"); n != 1 {
+		t.Fatalf("%d reactions.add calls, want one a poll", n)
+	}
+	if st := s.a.SlackStatus(s.task.ID); st.Error != "" || st.Undelivered != "" {
+		t.Fatalf("status = %+v", st)
+	}
+	if got := notifications(t, s.a); len(got) != 0 {
+		t.Fatalf("notifications = %q", got)
+	}
+
+	delete(f.fail, "reactions.add")
+	ts := f.post("C1", "UANA", "three", "")
+	f.mu.Lock()
+	f.reacted["C1 "+ts] = []string{"eyes"}
+	f.mu.Unlock()
+	if err := s.a.Slack.AddReaction(context.Background(), "C1", ts, "eyes"); err != nil {
+		t.Fatalf("already reacted: %v", err)
 	}
 }
 
