@@ -1,0 +1,29 @@
+# systemd unit for the assistant sync hub on Ubuntu (docs/sync.md).
+# Install: /etc/systemd/system/assistant.service, then
+#   sudo systemctl daemon-reload && sudo systemctl enable --now assistant
+# The config at /var/lib/assistant/config.json sets
+# "sync_listen": "127.0.0.1:6768", which nginx proxies /sync/ to.
+
+[Unit]
+Description=assistant sync hub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=assistant
+Group=assistant
+ExecStart=/usr/local/bin/assistant -config /var/lib/assistant/config.json
+WorkingDirectory=/var/lib/assistant
+Restart=on-failure
+RestartSec=5
+
+# The app writes only its own directory (database, key, config).
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/assistant
+
+[Install]
+WantedBy=multi-user.target
