@@ -18,15 +18,17 @@ type Lane struct {
 }
 
 type Task struct {
-	ID          int64             `json:"id"`
-	Title       string            `json:"title"`
-	Description string            `json:"description"`
-	Kind        string            `json:"kind"`
-	ProjectID   int64             `json:"project_id"`
-	LaneID      int64             `json:"lane_id"`
-	Position    int               `json:"position"`
-	Workdir     string            `json:"workdir"`
-	Fields      map[string]string `json:"fields"`
+	ID          int64  `json:"id"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	Kind        string `json:"kind"`
+	ProjectID   int64  `json:"project_id"`
+	LaneID      int64  `json:"lane_id"`
+	Position    int    `json:"position"`
+	Workdir     string `json:"workdir"`
+	// The workdir shared by every computer; Workdir is this one's (see local_paths.go).
+	WorkdirDefault string            `json:"workdir_default"`
+	Fields         map[string]string `json:"fields"`
 	// Earlier tasks this one builds on, in order: their agents' results go
 	// into the context of this task's agents.
 	ContextFrom []int64 `json:"context_from"`
@@ -176,13 +178,13 @@ func (s *Store) DeleteFieldDef(ctx context.Context, key string) error {
 
 // ---- tasks ----
 
-const taskCols = `id, title, description, kind, project_id, lane_id, position, workdir, due_at, reminded_at, archived_at, lane_changed_at, created_at, updated_at, watched`
+var taskCols = `id, title, description, kind, project_id, lane_id, position, ` + localWorkdir("task", "tasks") + `, due_at, reminded_at, archived_at, lane_changed_at, created_at, updated_at, watched`
 
 func scanTask(sc interface{ Scan(...any) error }) (Task, error) {
 	var t Task
 	var laneChanged, created, updated int64
 	var due, reminded, archived sql.NullInt64
-	err := sc.Scan(&t.ID, &t.Title, &t.Description, &t.Kind, &t.ProjectID, &t.LaneID, &t.Position, &t.Workdir, &due, &reminded, &archived,
+	err := sc.Scan(&t.ID, &t.Title, &t.Description, &t.Kind, &t.ProjectID, &t.LaneID, &t.Position, &t.Workdir, &t.WorkdirDefault, &due, &reminded, &archived,
 		&laneChanged, &created, &updated, &t.Watched)
 	t.CreatedAt, t.UpdatedAt, t.LaneChangedAt = fromMillis(created), fromMillis(updated), fromMillis(laneChanged)
 	t.DueAt, t.RemindedAt, t.ArchivedAt = fromNullMillis(due), fromNullMillis(reminded), fromNullMillis(archived)
@@ -402,6 +404,9 @@ func (s *Store) CreateTask(ctx context.Context, t Task) (Task, error) {
 		if err != nil {
 			return err
 		}
+		if err := putLocalWorkdir(ctx, tx, "task", id, t.Workdir); err != nil {
+			return err
+		}
 		if err := setContextFrom(ctx, tx, id, t.ContextFrom); err != nil {
 			return err
 		}
@@ -428,10 +433,13 @@ func (s *Store) UpdateTask(ctx context.Context, t Task) error {
 	return s.tx(ctx, func(tx *sql.Tx) error {
 		due := toNullMillis(t.DueAt)
 		err := affected(tx.ExecContext(ctx,
-			`UPDATE tasks SET title = ?, description = ?, kind = ?, workdir = ?,
+			`UPDATE tasks SET title = ?, description = ?, kind = ?,
 				reminded_at = CASE WHEN due_at IS ? THEN reminded_at END, due_at = ?, updated_at = ? WHERE id = ?`,
-			t.Title, t.Description, t.Kind, t.Workdir, due, due, s.ts(), t.ID))
+			t.Title, t.Description, t.Kind, due, due, s.ts(), t.ID))
 		if err != nil {
+			return err
+		}
+		if err := setLocalWorkdir(ctx, tx, "task", "tasks", t.ID, t.Workdir); err != nil {
 			return err
 		}
 		return setFields(ctx, tx, t.ID, t.Fields)

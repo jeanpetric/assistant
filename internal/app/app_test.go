@@ -1941,3 +1941,43 @@ func TestMoveRuleMovesTaskAfterTurn(t *testing.T) {
 		}
 	})
 }
+
+// Agents run in this computer's workdir of the task, project or rule, not the
+// default shared with other computers.
+func TestSessionsRunInLocalWorkdirs(t *testing.T) {
+	a, r := newApp(t)
+	ctx := context.Background()
+	lanes := lanesByName(t, a)
+	p, _ := a.Store.CreateProject(ctx, store.Project{Name: "P", Workdir: "/shared/p"})
+	p.Workdir = "/here/p"
+	if err := a.Store.UpdateProject(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	inProject, _ := a.Store.CreateTask(ctx, store.Task{Title: "In project", ProjectID: p.ID, LaneID: lanes["Todo"]})
+	if got, _ := a.StartSession(ctx, StartOpts{TaskID: inProject.ID, Prompt: "x"}); got.Workdir != "/here/p" {
+		t.Fatalf("project's session runs in %q", got.Workdir)
+	}
+	own, _ := a.Store.CreateTask(ctx, store.Task{Title: "Own", ProjectID: p.ID, Workdir: "/shared/t"})
+	own.Workdir = "/here/t"
+	if err := a.Store.UpdateTask(ctx, own); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := a.StartSession(ctx, StartOpts{TaskID: own.ID, Prompt: "x"}); got.Workdir != "/here/t" {
+		t.Fatalf("task's session runs in %q", got.Workdir)
+	}
+	rule, _ := a.Store.SaveRule(ctx, store.Rule{Name: "Go", ToLaneID: lanes["In progress"], Enabled: true, Prompt: "go", Workdir: "/shared/r"})
+	rule.Workdir = "/here/r"
+	if _, err := a.Store.SaveRule(ctx, rule); err != nil {
+		t.Fatal(err)
+	}
+	a.Wait()
+	started, err := a.MoveTask(ctx, inProject.ID, lanes["In progress"], 0)
+	if err != nil || len(started) != 1 || started[0].Workdir != "/here/r" {
+		t.Fatalf("rule started %+v, %v", started, err)
+	}
+	a.Wait()
+	reqs := r.requests()
+	if last := reqs[len(reqs)-1]; last.Workdir != "/here/r" {
+		t.Fatalf("agent ran in %q", last.Workdir)
+	}
+}

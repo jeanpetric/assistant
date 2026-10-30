@@ -341,7 +341,8 @@ func TestSyncTriggersOnReopen(t *testing.T) {
 	// From change capture (migration 34) on, the later ones included.
 	exec(t, s, `PRAGMA user_version = 33`, `ALTER TABLE transition_rules DROP COLUMN kind`, `DROP TABLE sync_state`,
 		`DROP TABLE sync_outbox`, `DROP TABLE sync_rows`, `DROP TABLE sync_keys`, `DROP TABLE id_leases`, `DROP TABLE project_hidden_lanes`,
-		`DROP TABLE task_messages`)
+		`DROP TABLE task_messages`, `DROP TABLE local_paths`, `DROP TABLE local_settings`, `DROP TRIGGER local_paths_project`,
+		`DROP TRIGGER local_paths_task`, `DROP TRIGGER local_paths_rule`)
 	migrations = append(migrations, `UPDATE lanes SET name = 'Migrated' WHERE id = 1;`)
 	defer func() { migrations = migrations[:len(migrations)-1] }()
 	s.Close()

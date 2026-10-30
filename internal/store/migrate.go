@@ -548,6 +548,36 @@ CREATE TABLE task_messages (
 CREATE INDEX task_messages_task ON task_messages(task_id, id);
 CREATE INDEX task_messages_session ON task_messages(session_id);
 `,
+	// Paths differ between computers: each keeps its own workdir for projects,
+	// tasks and rules in local_paths (never synced; the synced columns stay as
+	// the default for other computers) and its own list of workdirs offered in
+	// the UI in local_settings. Both start with this computer's values.
+	`
+CREATE TABLE local_paths (
+	kind TEXT NOT NULL CHECK (kind IN ('project', 'task', 'rule')),
+	ref_id INTEGER NOT NULL,
+	workdir TEXT NOT NULL,
+	PRIMARY KEY (kind, ref_id)
+);
+INSERT INTO local_paths (kind, ref_id, workdir)
+	SELECT 'project', id, workdir FROM projects WHERE workdir != ''
+	UNION ALL SELECT 'task', id, workdir FROM tasks WHERE workdir != ''
+	UNION ALL SELECT 'rule', id, workdir FROM transition_rules WHERE workdir != '';
+CREATE TRIGGER local_paths_project AFTER DELETE ON projects BEGIN
+	DELETE FROM local_paths WHERE kind = 'project' AND ref_id = OLD.id;
+END;
+CREATE TRIGGER local_paths_task AFTER DELETE ON tasks BEGIN
+	DELETE FROM local_paths WHERE kind = 'task' AND ref_id = OLD.id;
+END;
+CREATE TRIGGER local_paths_rule AFTER DELETE ON transition_rules BEGIN
+	DELETE FROM local_paths WHERE kind = 'rule' AND ref_id = OLD.id;
+END;
+CREATE TABLE local_settings (
+	id INTEGER PRIMARY KEY CHECK (id = 1),
+	workdirs TEXT NOT NULL DEFAULT '[]'
+);
+INSERT INTO local_settings (id, workdirs) SELECT 1, COALESCE((SELECT workdirs FROM settings WHERE id = 1), '[]');
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

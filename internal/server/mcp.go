@@ -110,8 +110,8 @@ var (
 	pFields           = map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}, "description": "Custom fields by key, e.g. {\"pull_request\": \"https://…\"}; see get_board for the keys. An empty value removes a field. Empty productive, pull_request, slack and trello fields fill themselves from such a link in the description, and pull_request from a PR an agent opens (gh pr create)."}
 	pDueAt            = prop("string", "Due time, RFC 3339 (e.g. 2026-10-21T09:00:00+02:00); a notification fires when it's reached")
 	pKind             = map[string]any{"type": "string", "enum": taskKinds}
-	pWorkdir          = prop("string", "Absolute working directory for agent sessions")
-	pProjectWorkdir   = prop("string", "Default working directory for agent sessions on the project's tasks; empty means the app default")
+	pWorkdir          = prop("string", "Absolute working directory for agent sessions on this computer")
+	pProjectWorkdir   = prop("string", "Default working directory on this computer for agent sessions on the project's tasks; empty means the app default")
 	pSkillAutomations = map[string]any{"type": "array", "description": "When the skill runs by itself: after an agent turn on a task finishes successfully, in that session, " +
 		"if the task matches one of these. Left out keeps the saved list; [] means only by hand (run_skill).",
 		"items": schema(nil, map[string]any{

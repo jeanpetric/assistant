@@ -14,12 +14,15 @@ type Project struct {
 	Color    string `json:"color"`
 	Position int    `json:"position"`
 	Workdir  string `json:"workdir"` // agents on its tasks run here unless the task or session says otherwise
-	Watched  int    `json:"watched"` // its watched tasks on the board
+	// The workdir it was created with, shared by every computer; Workdir is
+	// this computer's own if it has one (see local_paths.go).
+	WorkdirDefault string `json:"workdir_default"`
+	Watched        int    `json:"watched"` // its watched tasks on the board
 	// Lanes its board leaves out (in lane order), unless tasks of the project are in them.
 	HiddenLanes []int64 `json:"hidden_lanes"`
 }
 
-const projectCols = `id, name, color, position, workdir,
+var projectCols = `id, name, color, position, ` + localWorkdir("project", "projects") + `,
 	(SELECT COUNT(*) FROM tasks WHERE tasks.project_id = projects.id AND tasks.watched AND tasks.archived_at IS NULL)`
 
 var (
@@ -37,7 +40,7 @@ func (s *Store) Projects(ctx context.Context) ([]Project, error) {
 	out := []Project{}
 	for rows.Next() {
 		var p Project
-		if err := rows.Scan(&p.ID, &p.Name, &p.Color, &p.Position, &p.Workdir, &p.Watched); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.Color, &p.Position, &p.Workdir, &p.WorkdirDefault, &p.Watched); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -60,7 +63,7 @@ func (s *Store) Projects(ctx context.Context) ([]Project, error) {
 func (s *Store) Project(ctx context.Context, id int64) (Project, error) {
 	var p Project
 	err := s.db.QueryRowContext(ctx, `SELECT `+projectCols+` FROM projects WHERE id = ?`, id).
-		Scan(&p.ID, &p.Name, &p.Color, &p.Position, &p.Workdir, &p.Watched)
+		Scan(&p.ID, &p.Name, &p.Color, &p.Position, &p.Workdir, &p.WorkdirDefault, &p.Watched)
 	if errors.Is(err, sql.ErrNoRows) {
 		return p, ErrNotFound
 	}
@@ -92,21 +95,35 @@ func (s *Store) hiddenLanes(ctx context.Context, projectID int64) (map[int64][]i
 	return out, rows.Err()
 }
 
+// CreateProject adds the project with its workdir both as the default and as
+// this computer's own.
 func (s *Store) CreateProject(ctx context.Context, p Project) (Project, error) {
-	id, err := s.insert(ctx, "projects",
-		`INSERT INTO projects (id, name, color, workdir, position) VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(position), -1) + 1 FROM projects))`,
-		p.Name, p.Color, p.Workdir)
+	var id int64
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		var err error
+		id, err = s.insertTx(ctx, tx, "projects",
+			`INSERT INTO projects (id, name, color, workdir, position) VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(position), -1) + 1 FROM projects))`,
+			p.Name, p.Color, p.Workdir)
+		if err != nil {
+			return err
+		}
+		return putLocalWorkdir(ctx, tx, "project", id, p.Workdir)
+	})
 	if err != nil {
 		return Project{}, err
 	}
 	return s.Project(ctx, id)
 }
 
-// UpdateProject saves name, colour, workdir and hidden lanes; the position
-// stays. Every hidden lane must exist and at least one lane stay shown.
+// UpdateProject saves name, colour, workdir (this computer's, see
+// setLocalWorkdir) and hidden lanes; the position stays. Every hidden lane
+// must exist and at least one lane stay shown.
 func (s *Store) UpdateProject(ctx context.Context, p Project) error {
 	return s.tx(ctx, func(tx *sql.Tx) error {
-		if err := affected(tx.ExecContext(ctx, `UPDATE projects SET name = ?, color = ?, workdir = ? WHERE id = ?`, p.Name, p.Color, p.Workdir, p.ID)); err != nil {
+		if err := affected(tx.ExecContext(ctx, `UPDATE projects SET name = ?, color = ? WHERE id = ?`, p.Name, p.Color, p.ID)); err != nil {
+			return err
+		}
+		if err := setLocalWorkdir(ctx, tx, "project", "projects", p.ID, p.Workdir); err != nil {
 			return err
 		}
 		return setHiddenLanes(ctx, tx, p.ID, p.HiddenLanes)

@@ -215,7 +215,7 @@ func TestIDTablesCoverIntegerKeys(t *testing.T) {
 		tables = append(tables, name)
 	}
 	rows.Close()
-	local := map[string]bool{"settings": true, "sync_node": true, "sync_state": true, "sync_outbox": true}
+	local := map[string]bool{"settings": true, "sync_node": true, "sync_state": true, "sync_outbox": true, "local_settings": true}
 	for _, name := range tables {
 		if !idTables[name] && !local[name] {
 			t.Errorf("table %s is not in idTables", name)

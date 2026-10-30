@@ -14,7 +14,8 @@ type Settings struct {
 	// Nil (or a non-positive duration) turns auto-archive off.
 	ArchiveLaneID       *int64 `json:"archive_lane_id"`
 	ArchiveAfterMinutes int    `json:"archive_after_minutes"`
-	// Working directories agents can be started in, offered as a dropdown.
+	// Working directories agents can be started in, offered as a dropdown:
+	// this computer's (local_settings, not synced).
 	Workdirs []string `json:"workdirs"`
 	// SessionPrompt is a template appended to every agent turn's system
 	// prompt (see app.SessionPromptData); empty sends nothing.
@@ -35,7 +36,7 @@ func (s *Store) Settings(ctx context.Context) (Settings, error) {
 	var x Settings
 	var lane, sessionLane sql.NullInt64
 	var dirs string
-	err := s.db.QueryRowContext(ctx, `SELECT archive_lane_id, archive_after_minutes, workdirs, session_prompt, session_lane_id FROM settings WHERE id = 1`).
+	err := s.db.QueryRowContext(ctx, `SELECT archive_lane_id, archive_after_minutes, (SELECT workdirs FROM local_settings WHERE id = 1), session_prompt, session_lane_id FROM settings WHERE id = 1`).
 		Scan(&lane, &x.ArchiveAfterMinutes, &dirs, &x.SessionPrompt, &sessionLane)
 	if err != nil {
 		return x, err
@@ -51,8 +52,13 @@ func (s *Store) SaveSettings(ctx context.Context, x Settings) error {
 		x.Workdirs = []string{}
 	}
 	dirs, _ := json.Marshal(x.Workdirs)
-	return affected(s.db.ExecContext(ctx, `UPDATE settings SET archive_lane_id = ?, archive_after_minutes = ?, workdirs = ?, session_prompt = ?, session_lane_id = ? WHERE id = 1`,
-		x.ArchiveLaneID, x.ArchiveAfterMinutes, string(dirs), x.SessionPrompt, x.SessionLaneID))
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		if err := affected(tx.ExecContext(ctx, `UPDATE local_settings SET workdirs = ? WHERE id = 1`, string(dirs))); err != nil {
+			return err
+		}
+		return affected(tx.ExecContext(ctx, `UPDATE settings SET archive_lane_id = ?, archive_after_minutes = ?, session_prompt = ?, session_lane_id = ? WHERE id = 1`,
+			x.ArchiveLaneID, x.ArchiveAfterMinutes, x.SessionPrompt, x.SessionLaneID))
+	})
 }
 
 // ArchiveTask takes the task off the board; it keeps its lane. Archiving an

@@ -118,6 +118,14 @@ function workdirSelect(value, defaultLabel, attrs) {
   return select([['', defaultLabel], ...dirs.map(d => [d, d])], value || '', attrs);
 }
 
+// workdirSelect for a project, task or rule x: its workdir here, or '' for
+// the shared default it was created with (on any computer), if it has one.
+function localWorkdirSelect(x, defaultLabel, attrs) {
+  const shared = x.workdir_default || '';
+  const label = shared ? `Shared default (${shared})` : defaultLabel;
+  return workdirSelect(x.workdir === shared ? '' : x.workdir, label, attrs);
+}
+
 function remember(key, value) {
   try { localStorage.setItem(key, value); } catch (_) { /* storage unavailable */ }
 }
@@ -705,7 +713,7 @@ async function taskView(id, { every, leave, reload }) {
     h('div', { class: 'field-row' }, due, clearDue),
     descriptionField(t.description, text => save({ description: text })),
     h('label', {}, 'Working directory for agents'),
-    workdirSelect(t.workdir, `Project default (${taskWorkdir({ ...t, workdir: '' })})`, { onchange: e => save({ workdir: e.target.value }) }),
+    localWorkdirSelect(t, `Project default (${taskWorkdir({ ...t, workdir: '' })})`, { onchange: e => save({ workdir: e.target.value }) }),
     fields,
     memories.el,
     buildsOn.el,
@@ -1749,7 +1757,7 @@ async function renderSettings() {
     b.projects.map((p, i) => {
       const name = h('input', { value: p.name });
       const color = h('input', { type: 'color', value: p.color || '#888888', style: 'width:42px;padding:2px' });
-      const workdir = workdirSelect(p.workdir, `App default (${state.meta.workdir})`, { title: 'Default working directory for agents' });
+      const workdir = localWorkdirSelect(p, `App default (${state.meta.workdir})`, { title: 'Default working directory for agents' });
       const shows = b.all_lanes.map(l => h('input', { type: 'checkbox', checked: !p.hidden_lanes.includes(l.id) }));
       const saveProject = async () => {
         const hidden = b.all_lanes.filter((l, j) => !shows[j].checked).map(l => l.id);
@@ -2106,7 +2114,7 @@ function ruleDialog(rule, b, skills, done) {
   fillMoveTo();
   const prompt = h('textarea', { rows: 6 }, rule.prompt);
   const mode = select(modeOptions(true), rule.mode);
-  const workdir = workdirSelect(rule.workdir, "Task directory, else the project's, else app default");
+  const workdir = localWorkdirSelect(rule, "Task directory, else the project's, else app default");
   const doneLane = doneLaneSelect(lanes, rule.done_lane_id);
   // A skill continues an existing session: prompt, mode and directory are the session's.
   const sessionOpts = h('div', {},

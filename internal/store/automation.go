@@ -23,8 +23,10 @@ type Rule struct {
 	SkillID    *int64 `json:"skill_id"`
 	Mode       string `json:"mode"`
 	Workdir    string `json:"workdir"`
-	DoneLaneID *int64 `json:"done_lane_id"` // copied to the sessions the rule starts
-	Enabled    bool   `json:"enabled"`
+	// The workdir shared by every computer; Workdir is this one's (see local_paths.go).
+	WorkdirDefault string `json:"workdir_default"`
+	DoneLaneID     *int64 `json:"done_lane_id"` // copied to the sessions the rule starts
+	Enabled        bool   `json:"enabled"`
 }
 
 const (
@@ -57,13 +59,13 @@ type Notification struct {
 
 // ---- rules ----
 
-const ruleCols = `id, name, project_id, kind, from_lane_id, to_lane_id, prompt, skill_id, mode, workdir, done_lane_id, enabled`
+var ruleCols = `id, name, project_id, kind, from_lane_id, to_lane_id, prompt, skill_id, mode, ` + localWorkdir("rule", "r") + `, done_lane_id, enabled`
 
 func scanRule(sc interface{ Scan(...any) error }) (Rule, error) {
 	var r Rule
 	var project, from, skill, doneLane sql.NullInt64
 	var enabled int
-	err := sc.Scan(&r.ID, &r.Name, &project, &r.Kind, &from, &r.ToLaneID, &r.Prompt, &skill, &r.Mode, &r.Workdir, &doneLane, &enabled)
+	err := sc.Scan(&r.ID, &r.Name, &project, &r.Kind, &from, &r.ToLaneID, &r.Prompt, &skill, &r.Mode, &r.Workdir, &r.WorkdirDefault, &doneLane, &enabled)
 	r.ProjectID, r.FromLaneID, r.SkillID, r.DoneLaneID = fromNullID(project), fromNullID(from), fromNullID(skill), fromNullID(doneLane)
 	r.Enabled = enabled == 1
 	return r, err
@@ -87,7 +89,7 @@ func (s *Store) queryRules(ctx context.Context, q string, args ...any) ([]Rule, 
 }
 
 func (s *Store) Rules(ctx context.Context) ([]Rule, error) {
-	return s.queryRules(ctx, `SELECT `+ruleCols+` FROM transition_rules ORDER BY id`)
+	return s.queryRules(ctx, `SELECT `+ruleCols+` FROM transition_rules r ORDER BY id`)
 }
 
 // MatchingRules returns enabled rules for a move from -> to of a task of this
@@ -122,29 +124,38 @@ func (s *Store) DoneLaneInto(ctx context.Context, kind string, projectID, to int
 }
 
 func (s *Store) Rule(ctx context.Context, id int64) (Rule, error) {
-	r, err := scanRule(s.db.QueryRowContext(ctx, `SELECT `+ruleCols+` FROM transition_rules WHERE id = ?`, id))
+	r, err := scanRule(s.db.QueryRowContext(ctx, `SELECT `+ruleCols+` FROM transition_rules r WHERE id = ?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return r, ErrNotFound
 	}
 	return r, err
 }
 
+// SaveRule adds a rule (ID 0) with its workdir both as the default and as
+// this computer's own, or saves one, its workdir as this computer's (see
+// setLocalWorkdir).
 func (s *Store) SaveRule(ctx context.Context, r Rule) (Rule, error) {
-	if r.ID == 0 {
-		id, err := s.insert(ctx, "transition_rules", `INSERT INTO transition_rules (id, name, project_id, kind, from_lane_id, to_lane_id, prompt, skill_id,
-			mode, workdir, done_lane_id, enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, r.Name, r.ProjectID, r.Kind, r.FromLaneID, r.ToLaneID, r.Prompt,
-			r.SkillID, r.Mode, r.Workdir, r.DoneLaneID, boolInt(r.Enabled))
-		if err != nil {
-			return r, err
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		if r.ID == 0 {
+			id, err := s.insertTx(ctx, tx, "transition_rules", `INSERT INTO transition_rules (id, name, project_id, kind, from_lane_id, to_lane_id, prompt, skill_id,
+				mode, workdir, done_lane_id, enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, r.Name, r.ProjectID, r.Kind, r.FromLaneID, r.ToLaneID, r.Prompt,
+				r.SkillID, r.Mode, r.Workdir, r.DoneLaneID, boolInt(r.Enabled))
+			if err != nil {
+				return err
+			}
+			r.ID = id
+			return putLocalWorkdir(ctx, tx, "rule", id, r.Workdir)
 		}
-		r.ID = id
-	} else {
-		err := affected(s.db.ExecContext(ctx, `UPDATE transition_rules SET name = ?, project_id = ?, kind = ?, from_lane_id = ?, to_lane_id = ?,
-			prompt = ?, skill_id = ?, mode = ?, workdir = ?, done_lane_id = ?, enabled = ? WHERE id = ?`,
-			r.Name, r.ProjectID, r.Kind, r.FromLaneID, r.ToLaneID, r.Prompt, r.SkillID, r.Mode, r.Workdir, r.DoneLaneID, boolInt(r.Enabled), r.ID))
+		err := affected(tx.ExecContext(ctx, `UPDATE transition_rules SET name = ?, project_id = ?, kind = ?, from_lane_id = ?, to_lane_id = ?,
+			prompt = ?, skill_id = ?, mode = ?, done_lane_id = ?, enabled = ? WHERE id = ?`,
+			r.Name, r.ProjectID, r.Kind, r.FromLaneID, r.ToLaneID, r.Prompt, r.SkillID, r.Mode, r.DoneLaneID, boolInt(r.Enabled), r.ID))
 		if err != nil {
-			return r, err
+			return err
 		}
+		return setLocalWorkdir(ctx, tx, "rule", "transition_rules", r.ID, r.Workdir)
+	})
+	if err != nil {
+		return r, err
 	}
 	return s.Rule(ctx, r.ID)
 }

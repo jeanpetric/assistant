@@ -51,6 +51,9 @@ var localTables = map[string]bool{
 	"id_leases":   true, // id blocks a hub gave out
 	// Messages wait for the agent process, which runs on the session's node.
 	"queued_messages": true,
+	// Paths are this computer's (see the migration making them).
+	"local_paths":    true,
+	"local_settings": true,
 }
 
 // SetSyncEnabled turns change capture on or off. Off (the default), changes
