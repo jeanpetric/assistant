@@ -936,8 +936,8 @@ function slackEditor(task, sessions) {
   };
   const draw = () => {
     const c = task.slack;
-    el.replaceChildren(h('label', {}, 'Slack — the channel\'s messages come to the Activity thread and its orchestrator; the thread goes to the channel'),
-      c ? [
+    el.replaceChildren(...[h('label', {}, 'Slack — the channel\'s messages come to the Activity thread and its orchestrator; the thread goes to the channel'),
+      ...(c ? [
         h('div', { class: 'field-row' },
           h('a', { class: 'grow slack-channel', href: c.url, target: '_blank', rel: 'noopener' }, '#' + c.channel_name),
           h('button', { class: 'ghost small', onclick: disconnect }, 'Disconnect')),
@@ -948,7 +948,7 @@ function slackEditor(task, sessions) {
       ] : [
         h('div', { class: 'field-row' }, channel, h('button', { class: 'small', onclick: connect }, 'Connect')),
         owned.length > 1 ? h('div', { class: 'field-row' }, orchestrator) : null,
-      ]);
+      ])].filter(Boolean));
   };
   channel.addEventListener('keydown', e => { if (e.key === 'Enter') connect(); });
   draw();

@@ -50,7 +50,8 @@ function h(tag, attrs, ...children) {
   for (const [k, v] of Object.entries(attrs)) if (k.startsWith('on')) on[k.slice(2)] = v;
   return {
     tag, attrs, value: attrs.value || '', children: children.flat(Infinity).filter(c => c != null && c !== false),
-    replaceChildren(...k) { this.children = k.flat(Infinity).filter(c => c != null && c !== false); },
+    // As the DOM's: nodes and strings only, no arrays or null.
+    replaceChildren(...k) { if (k.some(c => c == null || Array.isArray(c))) fail('replaceChildren with ' + k); this.children = k; },
     addEventListener(ev, fn) { on[ev] = fn; },
     fire(ev) { return on[ev]({ preventDefault() {}, stopPropagation() {} }); },
     get text() { return this.children.map(c => typeof c === 'object' ? c.text : String(c)).join(''); },
