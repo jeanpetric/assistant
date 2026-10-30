@@ -643,6 +643,16 @@ CREATE TRIGGER slack_messages_task_message AFTER DELETE ON task_messages BEGIN
 	UPDATE slack_messages SET task_message_id = NULL WHERE task_message_id = OLD.id;
 END;
 `,
+	// delivered_to is the session a Slack message taken in went to, whose
+	// messages on the task's thread go to that message's Slack thread by
+	// default. Rows already seen went to no one known.
+	`
+ALTER TABLE slack_messages ADD COLUMN delivered_to INTEGER;
+CREATE INDEX slack_messages_delivered ON slack_messages(channel_id, delivered_to);
+CREATE TRIGGER slack_messages_session AFTER DELETE ON sessions BEGIN
+	UPDATE slack_messages SET delivered_to = NULL WHERE delivered_to = OLD.id;
+END;
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

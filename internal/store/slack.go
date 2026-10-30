@@ -177,3 +177,49 @@ func (s *Store) SetSlackLastReply(ctx context.Context, channelID, ts, lastReply 
 		ON CONFLICT (channel_id, ts) DO UPDATE SET last_reply_ts = excluded.last_reply_ts`, channelID, ts, lastReply)
 	return err
 }
+
+// AddSlackSent records a message posted to Slack for the task message
+// m.TaskMessageID, so polling follows its replies and doesn't take it in.
+// Polling may have recorded it already, as the bot's own message.
+func (s *Store) AddSlackSent(ctx context.Context, m SlackMessage) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO slack_messages (channel_id, ts, thread_ts, task_message_id, last_reply_ts) VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT (channel_id, ts) DO UPDATE SET thread_ts = excluded.thread_ts, task_message_id = excluded.task_message_id`,
+		m.ChannelID, m.TS, m.ThreadTS, m.TaskMessageID, m.LastReplyTS)
+	return err
+}
+
+// SlackThreadOf gives the channel and Slack thread (its root's ts) of the
+// task message's first Slack message; ErrNotFound if it has none.
+func (s *Store) SlackThreadOf(ctx context.Context, taskMessageID int64) (channelID, thread string, err error) {
+	err = s.db.QueryRowContext(ctx, `SELECT channel_id, CASE thread_ts WHEN '' THEN ts ELSE thread_ts END FROM slack_messages
+		WHERE task_message_id = ? ORDER BY ts LIMIT 1`, taskMessageID).Scan(&channelID, &thread)
+	if errors.Is(err, sql.ErrNoRows) {
+		err = ErrNotFound
+	}
+	return channelID, thread, err
+}
+
+// SetSlackDelivered records that the channel's messages ts went to the session.
+func (s *Store) SetSlackDelivered(ctx context.Context, channelID string, ts []string, sessionID int64) error {
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		for _, t := range ts {
+			if _, err := tx.ExecContext(ctx, `UPDATE slack_messages SET delivered_to = ? WHERE channel_id = ? AND ts = ?`,
+				sessionID, channelID, t); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// SlackLastThread gives the Slack thread (its root's ts) of the latest of
+// the channel's messages that went to the session; ErrNotFound if none did.
+func (s *Store) SlackLastThread(ctx context.Context, channelID string, sessionID int64) (string, error) {
+	var thread string
+	err := s.db.QueryRowContext(ctx, `SELECT CASE thread_ts WHEN '' THEN ts ELSE thread_ts END FROM slack_messages
+		WHERE channel_id = ? AND delivered_to = ? ORDER BY ts DESC LIMIT 1`, channelID, sessionID).Scan(&thread)
+	if errors.Is(err, sql.ErrNoRows) {
+		err = ErrNotFound
+	}
+	return thread, err
+}

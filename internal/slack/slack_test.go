@@ -136,7 +136,7 @@ func TestPostMessage(t *testing.T) {
 	if ts, err := c.PostMessage(ctx, "C1", "in thread", "5.0"); err != nil || ts != "9.05.0" {
 		t.Fatalf("PostMessage in thread = %q, %v", ts, err)
 	}
-	if want := "chat.postMessage channel=C1&text=hello+%26+bye|chat.postMessage channel=C1&text=in+thread&thread_ts=5.0"; strings.Join(f.calls, "|") != want {
+	if want := "chat.postMessage channel=C1&markdown_text=hello+%26+bye|chat.postMessage channel=C1&markdown_text=in+thread&thread_ts=5.0"; strings.Join(f.calls, "|") != want {
 		t.Fatalf("calls = %q", f.calls)
 	}
 }

@@ -55,7 +55,7 @@ func TestReportFinished(t *testing.T) {
 	a, r := newApp(t)
 	ctx := context.Background()
 	orch, task := orchestrated(t, a)
-	if _, err := a.PostTaskMessage(ctx, store.TaskMessage{TaskID: orch.TaskID, SessionID: &orch.ID, Body: "Ship it?", Question: true}, 0); err != nil {
+	if _, err := a.PostTaskMessage(ctx, store.TaskMessage{TaskID: orch.TaskID, SessionID: &orch.ID, Body: "Ship it?", Question: true}, PostOpts{}); err != nil {
 		t.Fatal(err)
 	}
 	r.result = func(req agent.Request) string {
@@ -150,7 +150,7 @@ func TestReportAsks(t *testing.T) {
 	r.result = func(req agent.Request) string {
 		if req.Prompt == "fix it" {
 			ss, _ := a.Store.Sessions(ctx, task.ID, "")
-			if _, err := a.PostTaskMessage(ctx, store.TaskMessage{TaskID: task.ID, SessionID: &ss[0].ID, Body: "Which DB?", Question: true}, 0); err != nil {
+			if _, err := a.PostTaskMessage(ctx, store.TaskMessage{TaskID: task.ID, SessionID: &ss[0].ID, Body: "Which DB?", Question: true}, PostOpts{}); err != nil {
 				t.Error(err)
 			}
 			return "I asked on the thread."

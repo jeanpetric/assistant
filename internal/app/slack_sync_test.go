@@ -134,6 +134,12 @@ func (f *fakeSlack) serve(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		f.page(w, r, thread, reply)
+	case "chat.postMessage":
+		f.next++
+		m := slack.Message{TS: fmt.Sprintf("%d.000100", f.next), User: botUser, BotID: botID,
+			Text: r.Form.Get("markdown_text"), ThreadTS: r.Form.Get("thread_ts")}
+		f.msgs[ch] = append(f.msgs[ch], m)
+		reply(map[string]any{"channel": ch, "ts": m.TS})
 	default:
 		http.Error(w, "unknown method", http.StatusNotFound)
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -250,5 +251,90 @@ func TestSlackMigrationKeepsData(t *testing.T) {
 	sid := int64(7)
 	if _, err := s.ConnectSlack(ctx, SlackChannel{TaskID: 5, ChannelID: "C1", SessionID: &sid, Cursor: "1.0"}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Upgrading keeps the Slack messages seen, none of them delivered to a
+// session yet; then a delivered message gives its session's thread, until
+// the session goes.
+func TestSlackDeliveredMigrationKeepsData(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := migrationWith(t, "ADD COLUMN delivered_to")
+	for _, m := range migrations[:n] {
+		if _, err := db.Exec(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, q := range []string{
+		fmt.Sprintf(`PRAGMA user_version = %d`, n),
+		`INSERT INTO tasks (id, title, lane_id, position, project_id, created_at, updated_at) VALUES (5, 'Support', 1, 0, 1, 0, 0)`,
+		`INSERT INTO sessions (id, task_id, title, status, mode, created_at, updated_at) VALUES (7, 5, 'Orchestrator', 'idle', 'plan', 0, 0)`,
+		`INSERT INTO task_messages (id, task_id, session_id, author, body, question, created_at) VALUES (11, 5, NULL, 'Ana', 'help', 0, 0)`,
+		`INSERT INTO slack_channels (task_id, channel_id, channel_name, session_id, cursor, connected_at) VALUES (5, 'C1', 'help', 7, '10.0', 0)`,
+		`INSERT INTO slack_messages (channel_id, ts, thread_ts, task_message_id, last_reply_ts) VALUES ('C1', '10.0', '', 11, '12.0')`,
+		`INSERT INTO slack_messages (channel_id, ts, thread_ts, task_message_id, last_reply_ts) VALUES ('C1', '12.0', '10.0', NULL, '')`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(q, err)
+		}
+	}
+	db.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	if th, err := s.SlackThreads(ctx, "C1"); err != nil || len(th) != 1 || th["10.0"].LastReplyTS != "12.0" || *th["10.0"].TaskMessageID != 11 {
+		t.Fatalf("threads = %+v, %v", th, err)
+	}
+	if ch, thread, err := s.SlackThreadOf(ctx, 11); err != nil || ch != "C1" || thread != "10.0" {
+		t.Fatalf("thread of 11 = %q %q, %v", ch, thread, err)
+	}
+	if _, err := s.SlackLastThread(ctx, "C1", 7); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("last thread: %v", err)
+	}
+	if err := s.SetSlackDelivered(ctx, "C1", []string{"10.0", "12.0"}, 7); err != nil {
+		t.Fatal(err)
+	}
+	if thread, err := s.SlackLastThread(ctx, "C1", 7); err != nil || thread != "10.0" {
+		t.Fatalf("last thread = %q, %v", thread, err)
+	}
+	exec(t, s, `DELETE FROM sessions WHERE id = 7`)
+	if _, err := s.SlackLastThread(ctx, "C1", 7); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("last thread after the session went: %v", err)
+	}
+}
+
+// A message posted to Slack is recorded once, whether polling saw it first
+// or not.
+func TestAddSlackSent(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	task, _ := s.CreateTask(ctx, Task{Title: "Support"})
+	if _, err := s.ConnectSlack(ctx, SlackChannel{TaskID: task.ID, ChannelID: "C1", Cursor: "1.0"}); err != nil {
+		t.Fatal(err)
+	}
+	x, _ := s.AddTaskMessage(ctx, TaskMessage{TaskID: task.ID, Body: "news"})
+	// Polling took the bot's message as seen, with no task message.
+	if _, err := s.AddSlackMessage(ctx, SlackMessage{ChannelID: "C1", TS: "5.0", LastReplyTS: "5.0"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, ts := range []string{"5.0", "6.0"} {
+		if err := s.AddSlackSent(ctx, SlackMessage{ChannelID: "C1", TS: ts, TaskMessageID: &x.ID, LastReplyTS: ts}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	th, err := s.SlackThreads(ctx, "C1")
+	if err != nil || len(th) != 2 || th["5.0"].TaskMessageID == nil || *th["5.0"].TaskMessageID != x.ID || th["5.0"].LastReplyTS != "5.0" {
+		t.Fatalf("threads = %+v, %v", th, err)
+	}
+	if _, thread, err := s.SlackThreadOf(ctx, x.ID); err != nil || thread != "5.0" {
+		t.Fatalf("thread = %q, %v", thread, err)
 	}
 }

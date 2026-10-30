@@ -26,21 +26,39 @@ const AnswerPrompt = "The user answered your question on the task's activity thr
 
 // PostedMessage is a message added to a task's thread and, for the user's,
 // the question it answered and whether the answer waits in the asking
-// session's queue.
+// session's queue. Slack is how it went to the task's Slack channel, if
+// the task has one.
 type PostedMessage struct {
 	store.TaskMessage
-	AnsweredID *int64 `json:"answered_id"`
-	Queued     bool   `json:"queued"`
+	AnsweredID *int64     `json:"answered_id"`
+	Queued     bool       `json:"queued"`
+	Slack      *SlackSent `json:"slack,omitempty"`
+}
+
+// PostOpts are a task message's options: the question the user's answers
+// (0: the task's latest open one), and where in the task's Slack channel it
+// goes: in the thread of the task message ReplyTo, or TopLevel. Neither: the
+// thread of the latest Slack message that went to the posting session, else
+// top level.
+type PostOpts struct {
+	AnswerTo int64
+	ReplyTo  int64
+	TopLevel bool
 }
 
 // PostTaskMessage adds a message to the task's activity thread.
 //
 // From a session (SessionID set), a question flags the session as waiting
 // for the user and notifies them. From the user, the message answers the
-// question answerTo (0: the task's latest open one, if any): it goes to the
-// session that asked as its next message, queued while it works, and the
-// question is answered. With no open question it only stays on the thread.
-func (a *App) PostTaskMessage(ctx context.Context, m store.TaskMessage, answerTo int64) (PostedMessage, error) {
+// question o.AnswerTo (0: the task's latest open one, if any): it goes to
+// the session that asked as its next message, queued while it works, and
+// the question is answered. With no open question it only stays on the
+// thread.
+//
+// On a task connected to a Slack channel the message goes there too, unless
+// it came from Slack (Author set); see PostOpts for where. Failing to post
+// it leaves it on the thread and shows in the task's Slack status.
+func (a *App) PostTaskMessage(ctx context.Context, m store.TaskMessage, o PostOpts) (PostedMessage, error) {
 	m.Body = strings.TrimSpace(m.Body)
 	if m.Body == "" {
 		return PostedMessage{}, fmt.Errorf("%w: body is required", ErrBadMessage)
@@ -48,6 +66,18 @@ func (a *App) PostTaskMessage(ctx context.Context, m store.TaskMessage, answerTo
 	if _, err := a.Store.Task(ctx, m.TaskID); err != nil {
 		return PostedMessage{}, err
 	}
+	to, err := a.slackTarget(ctx, m, o)
+	if err != nil {
+		return PostedMessage{}, err
+	}
+	x, err := a.postTaskMessage(ctx, m, o.AnswerTo)
+	if err == nil && to != nil {
+		x.Slack = a.postSlack(ctx, *to, x.TaskMessage)
+	}
+	return x, err
+}
+
+func (a *App) postTaskMessage(ctx context.Context, m store.TaskMessage, answerTo int64) (PostedMessage, error) {
 	if m.SessionID != nil {
 		if answerTo != 0 {
 			return PostedMessage{}, fmt.Errorf("%w: only the user answers questions", ErrBadMessage)

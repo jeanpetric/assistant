@@ -1663,7 +1663,8 @@ func (s *Server) listTaskMessages(w http.ResponseWriter, r *http.Request) {
 
 // postTaskMessage adds to the task's activity thread: an agent's message
 // (session_id set), or the user's, which answers answer_to or else the
-// latest open question (see app.PostTaskMessage).
+// latest open question; on a task connected to Slack it goes to the channel
+// too, reply_to and top_level saying where (see app.PostTaskMessage).
 func (s *Server) postTaskMessage(w http.ResponseWriter, r *http.Request) {
 	id, err := pathID(r)
 	if err != nil {
@@ -1675,12 +1676,15 @@ func (s *Server) postTaskMessage(w http.ResponseWriter, r *http.Request) {
 		SessionID *int64 `json:"session_id"`
 		Question  bool   `json:"question"`
 		AnswerTo  int64  `json:"answer_to"`
+		ReplyTo   int64  `json:"reply_to"`
+		TopLevel  bool   `json:"top_level"`
 	}
 	if err := decode(r, &in); err != nil {
 		writeErr(w, err)
 		return
 	}
-	x, err := s.app.PostTaskMessage(r.Context(), store.TaskMessage{TaskID: id, SessionID: in.SessionID, Body: in.Body, Question: in.Question}, in.AnswerTo)
+	x, err := s.app.PostTaskMessage(r.Context(), store.TaskMessage{TaskID: id, SessionID: in.SessionID, Body: in.Body, Question: in.Question},
+		app.PostOpts{AnswerTo: in.AnswerTo, ReplyTo: in.ReplyTo, TopLevel: in.TopLevel})
 	if err != nil {
 		writeErr(w, err)
 		return

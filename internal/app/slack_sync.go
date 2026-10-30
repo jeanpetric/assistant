@@ -28,6 +28,8 @@ type SlackStatus struct {
 	Error      string     `json:"error"`
 	// Undelivered: why the latest messages could not go to the orchestrator.
 	Undelivered string `json:"undelivered,omitempty"`
+	// PostError: why the latest task message could not go to the channel.
+	PostError string `json:"post_error,omitempty"`
 }
 
 // SlackStatus returns the status of the last poll of the task's channel.
@@ -161,7 +163,7 @@ func (a *App) setSlackStatus(ctx context.Context, c store.SlackChannel, err erro
 	}
 	a.mu.Lock()
 	prev := a.slackStatus[c.TaskID]
-	st.Undelivered = prev.Undelivered
+	st.Undelivered, st.PostError = prev.Undelivered, prev.PostError
 	if delivery != nil {
 		st.Undelivered = *delivery
 	}
@@ -255,7 +257,7 @@ func (a *App) pollSlack(ctx context.Context, c store.SlackChannel) (*string, err
 	// Recorded before the thread's latest reply and the cursor move past
 	// them, so a poll cut short takes nothing in twice and loses nothing.
 	slices.SortStableFunc(in, func(x, y slackIn) int { return tsCmp(x.msg.TS, y.msg.TS) })
-	var lines []string
+	var lines, taken []string
 	for _, x := range in {
 		sm := store.SlackMessage{ChannelID: c.ChannelID, TS: x.msg.TS, ThreadTS: x.thread}
 		if x.thread == "" {
@@ -276,6 +278,7 @@ func (a *App) pollSlack(ctx context.Context, c store.SlackChannel) (*string, err
 			if thread == "" {
 				thread = x.msg.TS
 			}
+			taken = append(taken, x.msg.TS)
 			lines = append(lines, fmt.Sprintf("[Slack #%s] %s — task_message %d, ts %s, thread %s: %s",
 				c.ChannelName, added.Author, added.ID, x.msg.TS, thread, added.Body))
 		}
@@ -294,6 +297,12 @@ func (a *App) pollSlack(ctx context.Context, c store.SlackChannel) (*string, err
 		return nil, errors.Join(errs...)
 	}
 	why := a.deliverSlack(ctx, c, strings.Join(lines, "\n"))
+	if why == "" {
+		// The orchestrator's next messages go to the latest one's thread.
+		if err := a.Store.SetSlackDelivered(ctx, c.ChannelID, taken, *c.SessionID); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	return &why, errors.Join(errs...)
 }
 

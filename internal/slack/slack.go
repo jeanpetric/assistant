@@ -151,10 +151,14 @@ func (c *Client) pages(ctx context.Context, method string, q url.Values, limit i
 	}
 }
 
-// PostMessage posts text to the channel, in the thread of threadTS unless it
-// is empty, and returns the new message's ts.
-func (c *Client) PostMessage(ctx context.Context, channel, text, threadTS string) (string, error) {
-	q := url.Values{"channel": {ChannelID(channel)}, "text": {text}}
+// MaxMarkdown is the most characters PostMessage takes in one message.
+const MaxMarkdown = 12000
+
+// PostMessage posts markdown to the channel, in the thread of threadTS unless
+// it is empty, and returns the new message's ts. Slack renders the Markdown
+// itself (markdown_text), up to MaxMarkdown characters.
+func (c *Client) PostMessage(ctx context.Context, channel, markdown, threadTS string) (string, error) {
+	q := url.Values{"channel": {ChannelID(channel)}, "markdown_text": {markdown}}
 	if threadTS != "" {
 		q.Set("thread_ts", threadTS)
 	}

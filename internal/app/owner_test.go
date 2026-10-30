@@ -74,14 +74,14 @@ func TestAnswerToForeignSessionRefused(t *testing.T) {
 	task, _ := a.Store.CreateTask(ctx, store.Task{Title: "Remote"})
 	sess, _ := a.StartSession(ctx, StartOpts{TaskID: task.ID, Prompt: "go"})
 	a.Wait()
-	if _, err := a.PostTaskMessage(ctx, store.TaskMessage{TaskID: task.ID, SessionID: &sess.ID, Body: "Which one?", Question: true}, 0); err != nil {
+	if _, err := a.PostTaskMessage(ctx, store.TaskMessage{TaskID: task.ID, SessionID: &sess.ID, Body: "Which one?", Question: true}, PostOpts{}); err != nil {
 		t.Fatal(err)
 	}
 	sess, _ = a.Store.Session(ctx, sess.ID)
 	makeForeign(t, a.Store, sess)
 	n := len(r.requests())
 
-	_, err := a.PostTaskMessage(ctx, store.TaskMessage{TaskID: task.ID, Body: "The first"}, 0)
+	_, err := a.PostTaskMessage(ctx, store.TaskMessage{TaskID: task.ID, Body: "The first"}, PostOpts{})
 	if !errors.Is(err, ErrForeignSession) {
 		t.Fatalf("answer: %v", err)
 	}

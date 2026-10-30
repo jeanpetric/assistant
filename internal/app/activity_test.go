@@ -23,8 +23,8 @@ func TestQuestionAndAnswer(t *testing.T) {
 	r.fail = func(req agent.Request) error {
 		if req.Prompt == "refine" {
 			sid := sessionOf(t, a, task.ID)
-			a.PostTaskMessage(ctx, store.TaskMessage{TaskID: task.ID, SessionID: &sid, Body: "Filled in acceptance."}, 0)
-			x, err := a.PostTaskMessage(ctx, store.TaskMessage{TaskID: task.ID, SessionID: &sid, Body: "Show the lane or refuse the move?", Question: true}, 0)
+			a.PostTaskMessage(ctx, store.TaskMessage{TaskID: task.ID, SessionID: &sid, Body: "Filled in acceptance."}, PostOpts{})
+			x, err := a.PostTaskMessage(ctx, store.TaskMessage{TaskID: task.ID, SessionID: &sid, Body: "Show the lane or refuse the move?", Question: true}, PostOpts{})
 			if err != nil {
 				t.Error(err)
 			}
@@ -56,7 +56,7 @@ func TestQuestionAndAnswer(t *testing.T) {
 		t.Fatalf("task moved to lane %d while its question waits", got.LaneID)
 	}
 
-	x, err := a.PostTaskMessage(ctx, store.TaskMessage{TaskID: task.ID, Body: "  show it "}, 0)
+	x, err := a.PostTaskMessage(ctx, store.TaskMessage{TaskID: task.ID, Body: "  show it "}, PostOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,11 +99,11 @@ func TestAnswerQueuedWhileRunning(t *testing.T) {
 	r.block = make(chan struct{})
 	task, _ := a.Store.CreateTask(ctx, store.Task{Title: "t"})
 	sess, _ := a.StartSession(ctx, StartOpts{TaskID: task.ID, Prompt: "go"})
-	q, err := a.PostTaskMessage(ctx, store.TaskMessage{TaskID: task.ID, SessionID: &sess.ID, Body: "A or B?", Question: true}, 0)
+	q, err := a.PostTaskMessage(ctx, store.TaskMessage{TaskID: task.ID, SessionID: &sess.ID, Body: "A or B?", Question: true}, PostOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	x, err := a.PostTaskMessage(ctx, store.TaskMessage{TaskID: task.ID, Body: "B"}, q.ID)
+	x, err := a.PostTaskMessage(ctx, store.TaskMessage{TaskID: task.ID, Body: "B"}, PostOpts{AnswerTo: q.ID})
 	if err != nil || !x.Queued || *x.AnsweredID != q.ID {
 		t.Fatalf("answer = %+v, %v", x, err)
 	}
@@ -126,8 +126,8 @@ func TestTaskMessageWithoutQuestion(t *testing.T) {
 	task, _ := a.Store.CreateTask(ctx, store.Task{Title: "t"})
 	sess, _ := a.StartSession(ctx, StartOpts{TaskID: task.ID, Prompt: "go"})
 	a.Wait()
-	note, _ := a.PostTaskMessage(ctx, store.TaskMessage{TaskID: task.ID, SessionID: &sess.ID, Body: "Done."}, 0)
-	x, err := a.PostTaskMessage(ctx, store.TaskMessage{TaskID: task.ID, Body: "thanks", Question: true}, 0)
+	note, _ := a.PostTaskMessage(ctx, store.TaskMessage{TaskID: task.ID, SessionID: &sess.ID, Body: "Done."}, PostOpts{})
+	x, err := a.PostTaskMessage(ctx, store.TaskMessage{TaskID: task.ID, Body: "thanks", Question: true}, PostOpts{})
 	if err != nil || x.AnsweredID != nil || x.Question {
 		t.Fatalf("message = %+v, %v", x, err)
 	}
@@ -150,15 +150,15 @@ func TestTaskMessageWithoutQuestion(t *testing.T) {
 		{store.TaskMessage{TaskID: task.ID, Body: "x"}, note.ID, ErrBadMessage},
 		{store.TaskMessage{TaskID: task.ID, SessionID: &sess.ID, Body: "x"}, note.ID, ErrBadMessage},
 	} {
-		if _, err := a.PostTaskMessage(ctx, c.m, c.answerTo); !errors.Is(err, c.want) {
+		if _, err := a.PostTaskMessage(ctx, c.m, PostOpts{AnswerTo: c.answerTo}); !errors.Is(err, c.want) {
 			t.Errorf("%+v answering %d: %v, want %v", c.m, c.answerTo, err, c.want)
 		}
 	}
 
 	// A session with no agent session to resume cannot take an answer.
 	stuck, _ := a.Store.CreateSession(ctx, store.Session{TaskID: task.ID, Title: "stuck", Mode: "plan", Status: store.StatusError})
-	q, _ := a.PostTaskMessage(ctx, store.TaskMessage{TaskID: task.ID, SessionID: &stuck.ID, Body: "Which?", Question: true}, 0)
-	if _, err := a.PostTaskMessage(ctx, store.TaskMessage{TaskID: task.ID, Body: "this"}, 0); !errors.Is(err, ErrNoResume) {
+	q, _ := a.PostTaskMessage(ctx, store.TaskMessage{TaskID: task.ID, SessionID: &stuck.ID, Body: "Which?", Question: true}, PostOpts{})
+	if _, err := a.PostTaskMessage(ctx, store.TaskMessage{TaskID: task.ID, Body: "this"}, PostOpts{}); !errors.Is(err, ErrNoResume) {
 		t.Fatalf("answer to a stuck session: %v", err)
 	}
 	if got, _ := a.Store.TaskMessage(ctx, q.ID); got.AnsweredAt != nil {
@@ -180,7 +180,7 @@ func TestSessionReplyAnswersQuestion(t *testing.T) {
 	task, _ := a.Store.CreateTask(ctx, store.Task{Title: "t"})
 	sess, _ := a.StartSession(ctx, StartOpts{TaskID: task.ID, Prompt: "go"})
 	a.Wait()
-	q, _ := a.PostTaskMessage(ctx, store.TaskMessage{TaskID: task.ID, SessionID: &sess.ID, Body: "A or B?", Question: true}, 0)
+	q, _ := a.PostTaskMessage(ctx, store.TaskMessage{TaskID: task.ID, SessionID: &sess.ID, Body: "A or B?", Question: true}, PostOpts{})
 	if _, err := a.SendMessage(ctx, sess.ID, "B"); err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +188,7 @@ func TestSessionReplyAnswersQuestion(t *testing.T) {
 	if got, _ := a.Store.TaskMessage(ctx, q.ID); got.AnsweredAt == nil {
 		t.Fatal("question open after a reply in the session")
 	}
-	x, err := a.PostTaskMessage(ctx, store.TaskMessage{TaskID: task.ID, Body: "fyi"}, 0)
+	x, err := a.PostTaskMessage(ctx, store.TaskMessage{TaskID: task.ID, Body: "fyi"}, PostOpts{})
 	a.Wait()
 	if err != nil || x.AnsweredID != nil || len(r.requests()) != 2 {
 		t.Fatalf("message = %+v, %v, %d turns", x, err, len(r.requests()))

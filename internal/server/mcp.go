@@ -486,11 +486,15 @@ func (s *Server) mcpTools() []mcpTool {
 			Description: "Post a short message (1-3 sentences, like on Slack) on a task's activity thread, the user's overview of what its agent sessions do: " +
 				"what you did, decided or handed over to another session. The details stay in your session, which the message links to. " +
 				"Pass your own session_id (your system prompt names it). With question: true it asks the user for a decision: they get a notification, " +
-				"your session shows it needs them, and their answer arrives as your next message, so end your turn after asking.",
+				"your session shows it needs them, and their answer arrives as your next message, so end your turn after asking. " +
+				"On a task connected to a Slack channel the message is posted there too: by default in the thread of the latest Slack message you were given, " +
+				"else at the top of the channel; reply_to or top_level choose otherwise. The result's slack says where it went, or its error.",
 			InputSchema: schema([]string{"task_id", "session_id", "body"}, map[string]any{
 				"task_id": pTaskID, "session_id": prop("integer", "Your session's id"),
-				"body":     prop("string", "The message, Markdown, 1-3 sentences"),
-				"question": prop("boolean", "Ask the user for a decision and wait for the answer"),
+				"body":      prop("string", "The message, Markdown, 1-3 sentences (longer for an answer posted to Slack)"),
+				"question":  prop("boolean", "Ask the user for a decision and wait for the answer"),
+				"reply_to":  prop("integer", "Slack: post in the thread of this task message (the task_message id of a Slack message you were given)"),
+				"top_level": prop("boolean", "Slack: post at the top of the channel, not in a thread; only when asked to"),
 			}),
 			call: func(a mcpArgs) (string, string, any, error) {
 				if _, err := a.id("session_id"); err != nil {

@@ -77,6 +77,11 @@ func TestTaskMessagesAPI(t *testing.T) {
 	c.do("POST", "/api/tasks/"+tid+"/messages", map[string]any{"body": " "}, 400, nil)
 	c.do("POST", "/api/tasks/"+tid+"/messages", map[string]any{"body": "x", "answer_to": list[0].ID}, 400, nil)
 	c.do("POST", "/api/tasks/"+tid+"/messages", map[string]any{"body": "x", "session_id": 999}, 400, nil)
+	// reply_to and top_level reach the app, which refuses the two together.
+	c.do("POST", "/api/tasks/"+tid+"/messages", map[string]any{"body": "x", "reply_to": list[0].ID, "top_level": true}, 400, nil)
+	if text, isErr := c.tool("post_task_message", map[string]any{"task_id": task.ID, "session_id": sess.ID, "body": "x", "reply_to": list[0].ID, "top_level": true}); !isErr || !strings.Contains(text, "top_level") {
+		t.Fatalf("post_task_message = %q", text)
+	}
 	c.do("POST", "/api/tasks/999/messages", map[string]any{"body": "x"}, 404, nil)
 	c.do("GET", "/api/tasks/999/messages", nil, 404, nil)
 }

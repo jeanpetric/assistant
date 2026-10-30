@@ -12,7 +12,7 @@ type SlackClient interface {
 	ConversationInfo(ctx context.Context, channel string) (slack.Channel, error)
 	History(ctx context.Context, channel, oldest string, limit int) ([]slack.Message, error)
 	Replies(ctx context.Context, channel, threadTS, oldest string) ([]slack.Message, error)
-	PostMessage(ctx context.Context, channel, text, threadTS string) (string, error)
+	PostMessage(ctx context.Context, channel, markdown, threadTS string) (string, error)
 	UserName(ctx context.Context, userID string) (string, error)
 }
 
