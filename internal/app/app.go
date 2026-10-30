@@ -84,6 +84,7 @@ type App struct {
 	slackKick   chan struct{}
 	slackStatus map[int64]SlackStatus // by task id
 	slackMe     *slack.Identity       // the bot, once known
+	slackURL    string                // the workspace's URL, once known; under mu
 
 	// SyncRole is this node's part in sync: RoleOff, RoleHub or RoleClient.
 	// A hub is only the shared database: it runs no schedules, reminders

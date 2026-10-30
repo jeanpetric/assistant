@@ -49,6 +49,7 @@ type Identity struct {
 	BotID  string `json:"bot_id"`
 	User   string `json:"user"`
 	Team   string `json:"team"`
+	URL    string `json:"url"` // the workspace, e.g. https://acme.slack.com/
 }
 
 type Channel struct {

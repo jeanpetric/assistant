@@ -112,6 +112,9 @@ func (s *Server) board(w http.ResponseWriter, r *http.Request) {
 			limitsByTask[x.TaskID] = l
 		}
 	}
+	for i := range tasks {
+		s.app.WithSlack(&tasks[i])
+	}
 	writeJSON(w, 200, map[string]any{"projects": projects, "project_id": projectID, "lanes": shown, "all_lanes": lanes, "tasks": tasks, "fields": fields,
 		"running": runningByTask, "running_limits": limitsByTask, "running_context": contextByTask, "needs_input": needsInput,
 		"agent_status": agentStatus})
@@ -704,8 +707,110 @@ func (s *Server) getTask(w http.ResponseWriter, r *http.Request) {
 	if st, ok := statuses[id]; ok {
 		agentStatus = &st
 	}
+	s.app.WithSlack(&t)
 	writeJSON(w, 200, map[string]any{"task": t, "sessions": out, "schedules": schedules, "builds_on": builds, "used_by": usedBy,
 		"artifacts": artifacts, "activity": activity, "memories": memories, "agent_status": agentStatus})
+}
+
+// connectSlack connects the task to a Slack channel (its id or archive URL):
+// the channel's messages come to the task's thread and go to the
+// orchestrator, session_id or else this computer's latest session of the task.
+func (s *Server) connectSlack(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	id, err := pathID(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	var in struct {
+		Channel   string `json:"channel"`
+		SessionID *int64 `json:"session_id"`
+	}
+	if err := decode(r, &in); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if strings.TrimSpace(in.Channel) == "" {
+		writeErr(w, badRequest{"channel is required: its id or link"})
+		return
+	}
+	if _, err := s.app.Store.Task(ctx, id); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if s.app.Slack == nil {
+		writeErr(w, app.ErrSlackOff)
+		return
+	}
+	if in.SessionID == nil {
+		sessions, err := s.app.Store.Sessions(ctx, id, "")
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		for _, x := range sessions { // the latest first
+			if x.Owned {
+				in.SessionID = &x.ID
+				break
+			}
+		}
+		if in.SessionID == nil {
+			writeErr(w, errNoOrchestrator)
+			return
+		}
+	} else {
+		x, err := s.app.Store.Session(ctx, *in.SessionID)
+		if errors.Is(err, store.ErrNotFound) {
+			err = badRequest{"no such session"}
+		}
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		if !x.Owned {
+			writeErr(w, app.ForeignSessionError{Node: x.Node()})
+			return
+		}
+	}
+	if _, err := s.app.ConnectSlack(ctx, id, in.Channel, in.SessionID); err != nil {
+		writeErr(w, err)
+		return
+	}
+	s.slackTask(w, r, id)
+}
+
+// errNoOrchestrator: a task is connected to Slack only with one of its
+// sessions on this computer to take the channel's messages.
+var errNoOrchestrator = errors.New("the task has no session on this computer to take the channel's messages: start one first")
+
+// disconnectSlack ends the task's connection to its channel; the session and
+// the thread stay.
+func (s *Server) disconnectSlack(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if _, err := s.app.Store.Task(r.Context(), id); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.app.DisconnectSlack(r.Context(), id); err != nil && !errors.Is(err, store.ErrNotFound) {
+		writeErr(w, err)
+		return
+	}
+	s.slackTask(w, r, id)
+}
+
+// slackTask answers with the task, its slack as it is now.
+func (s *Server) slackTask(w http.ResponseWriter, r *http.Request, id int64) {
+	t, err := s.app.Store.Task(r.Context(), id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	s.app.WithSlack(&t)
+	writeJSON(w, 200, t)
 }
 
 // taskRef names a related task for the task page.

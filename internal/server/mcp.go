@@ -178,8 +178,9 @@ func (s *Server) mcpTools() []mcpTool {
 		{
 			Name: "get_task",
 			Description: "One task with its schedules and agent sessions (without transcripts; use get_session for those), the tasks it builds on (builds_on), the tasks that build on it (used_by), its memories, " +
-				"its activity thread (activity: short messages from its sessions, session_id, and the user, session_id null, oldest first; a question is open while answered_at is null) " +
-				"and agent_status (null if none; " + agentStatusDoc + ").",
+				"its activity thread (activity: short messages from its sessions, session_id, and the user, session_id null, oldest first; a question is open while answered_at is null), " +
+				"agent_status (null if none; " + agentStatusDoc + ") " +
+				"and, in task, slack: its Slack channel here (channel_id, channel_name, session_id the orchestrator, url, last_sync_at, error), null if none.",
 			InputSchema: schema([]string{"task_id"}, map[string]any{"task_id": pTaskID}),
 			call:        byID("GET", "/api/tasks/%d", "task_id", false),
 			post:        taskWithoutTranscripts,
@@ -502,6 +503,25 @@ func (s *Server) mcpTools() []mcpTool {
 				}
 				return byID("POST", "/api/tasks/%d/messages", "task_id", true)(a)
 			},
+		},
+		{
+			Name: "connect_slack_channel",
+			Description: "Connect a task to a Slack channel on this computer: from now on the channel's messages, top-level and in threads, come to the task's activity thread " +
+				"and go to its orchestrator session, and what is posted on the thread goes to the channel (see post_task_message). Earlier messages are not taken in. " +
+				"The bot must be in the channel. The orchestrator is session_id, else the task's latest session on this computer; a task without one can't be connected yet. " +
+				"Connecting a task already connected replaces its channel. The result is the task, its slack the connection.",
+			InputSchema: schema([]string{"task_id", "channel"}, map[string]any{
+				"task_id":    pTaskID,
+				"channel":    prop("string", "The channel's id (C…) or link (https://….slack.com/archives/C…)"),
+				"session_id": prop("integer", "The orchestrator session, one of the task's on this computer (default: its latest)"),
+			}),
+			call: byID("POST", "/api/tasks/%d/slack", "task_id", true),
+		},
+		{
+			Name:        "disconnect_slack_channel",
+			Description: "Disconnect a task from its Slack channel: the channel is no longer read nor posted to. The task's sessions and its activity thread stay.",
+			InputSchema: schema([]string{"task_id"}, map[string]any{"task_id": pTaskID}),
+			call:        byID("DELETE", "/api/tasks/%d/slack", "task_id", false),
 		},
 		{
 			Name:        "delete_queued_message",

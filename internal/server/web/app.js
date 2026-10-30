@@ -242,6 +242,15 @@ function fieldLinks(task) {
       : h('span', { class: 'badge', title: f.label }, task.fields[f.key]));
 }
 
+// The Slack channel the task is connected to, a link to it; red while its sync fails.
+function slackBadge(t) {
+  if (!t.slack) return null;
+  return h('a', {
+    class: 'badge slack' + (t.slack.error ? ' failed' : ''), href: t.slack.url, target: '_blank', rel: 'noopener',
+    title: t.slack.error ? `Slack: ${t.slack.error}` : 'Connected to this Slack channel', onclick: e => e.stopPropagation(),
+  }, '#' + t.slack.channel_name);
+}
+
 function kindBadge(kind) {
   return kind && kind !== 'task' ? h('span', { class: 'badge kind-' + kind }, kind) : null;
 }
@@ -388,7 +397,7 @@ function card(t) {
   // A click opens the task in a dialog over the board.
   const el = h('article', { class: 'card', draggable: 'true', onclick: () => openTaskDialog(t.id) },
     h('div', { class: 'card-title' }, t.title),
-    h('div', { class: 'card-meta' }, watchedBadge(t), kindBadge(t.kind), dueBadge(t), buildsOnBadge(t), needsInputBadge(state.board.needs_input[t.id]), runningBadge(state.board.running[t.id]), outcomeBadge(t.id, state.board.agent_status[t.id]), fieldLinks(t)),
+    h('div', { class: 'card-meta' }, watchedBadge(t), kindBadge(t.kind), dueBadge(t), buildsOnBadge(t), needsInputBadge(state.board.needs_input[t.id]), runningBadge(state.board.running[t.id]), outcomeBadge(t.id, state.board.agent_status[t.id]), slackBadge(t), fieldLinks(t)),
     runningMeta(state.board.running_context[t.id], state.board.running_limits[t.id]));
   el.dataset.id = t.id;
   el.addEventListener('dragstart', e => {
@@ -464,7 +473,7 @@ async function renderList() {
       h('td', {}, laneName(t.lane_id)),
       h('td', {}, kindBadge(t.kind) || 'task'),
       h('td', { class: 'small', title: fmtTime(t.due_at) }, dueBadge(t)),
-      h('td', {}, needsInputBadge(b.needs_input[t.id]), runningBadge(b.running[t.id]), outcomeBadge(t.id, b.agent_status[t.id]), fieldLinks(t)),
+      h('td', {}, needsInputBadge(b.needs_input[t.id]), runningBadge(b.running[t.id]), outcomeBadge(t.id, b.agent_status[t.id]), slackBadge(t), fieldLinks(t)),
       h('td', { class: 'muted small' }, ago(t.updated_at)))));
   }
   draw();
@@ -626,6 +635,7 @@ async function taskView(id, { every, leave, reload }) {
     sessionPanel.drawContextLabel();
     return refs;
   });
+  const slack = slackEditor(t, data.sessions);
   // A change of the memories shows in the context label and the sessions' Update memory.
   const memoriesChanged = d => {
     t.memories = d.task.memories;
@@ -717,6 +727,7 @@ async function taskView(id, { every, leave, reload }) {
     fields,
     memories.el,
     buildsOn.el,
+    slack.el,
     h('div', { class: 'row', style: 'margin-top:14px' },
       h('span', { class: 'muted small grow' }, 'Created ' + fmtTime(t.created_at)),
       h('button', { class: 'ghost', title: 'Copy a link to this task, to paste wherever you refer to it', onclick: () => copyTaskLink(id) },
@@ -770,6 +781,7 @@ async function taskView(id, { every, leave, reload }) {
   showTab(activity.openCount() || recall('task.tab') === 'activity' ? 'activity' : 'sessions');
   const main = h('div', {}, h('div', { class: 'task-tabs' }, tabSessions, tabActivity), sessionsTab, activity.el);
   let sessionsState = JSON.stringify(data.sessions.map(s => [s.id, s.status, s.needs_input, s.seen]));
+  every(5000, () => slack.reload());
   every(2000, async () => {
     components.forEach(c => c.drawLimits());
     activity.reload();
@@ -895,6 +907,60 @@ function activityPanel(taskId, messages, { openSession, onChange }) {
     isShown: () => !el.classList.contains('hidden'),
     focus: () => { el.scrollIntoView({ block: 'end' }); input.focus(); },
   };
+}
+
+// The task's Slack channel: connect one by id or link, its messages going to an orchestrator session
+// (the latest on this computer unless picked), or see how it syncs and disconnect it.
+function slackEditor(task, sessions) {
+  const el = h('div');
+  const channel = h('input', { placeholder: 'Channel id or link (https://….slack.com/archives/C…)' });
+  const owned = sessions.filter(s => s.owned).reverse(); // newest first
+  const orchestrator = select([['', 'Latest session'], ...owned.map(s => [s.id, s.title || `Session ${s.id}`])], '');
+  const connect = async () => {
+    const body = { channel: channel.value };
+    if (orchestrator.value) body.session_id = Number(orchestrator.value);
+    const t = await api('POST', `/api/tasks/${task.id}/slack`, body);
+    task.slack = t.slack;
+    channel.value = '';
+    draw();
+  };
+  const disconnect = async () => {
+    if (!confirm(`Disconnect #${task.slack.channel_name}? Its messages stop coming here; the sessions and the thread stay.`)) return;
+    const t = await api('DELETE', `/api/tasks/${task.id}/slack`);
+    task.slack = t.slack;
+    draw();
+  };
+  const sessionTitle = id => {
+    const s = sessions.find(x => x.id === id);
+    return s ? s.title || `Session ${id}` : `Session ${id}`;
+  };
+  const draw = () => {
+    const c = task.slack;
+    el.replaceChildren(h('label', {}, 'Slack — the channel\'s messages come to the Activity thread and its orchestrator; the thread goes to the channel'),
+      c ? [
+        h('div', { class: 'field-row' },
+          h('a', { class: 'grow slack-channel', href: c.url, target: '_blank', rel: 'noopener' }, '#' + c.channel_name),
+          h('button', { class: 'ghost small', onclick: disconnect }, 'Disconnect')),
+        h('div', { class: 'small' },
+          c.error ? h('span', { style: 'color:var(--danger)' }, `Sync failed: ${c.error}`)
+            : h('span', { class: 'muted' }, c.last_sync_at ? `Synced ${ago(c.last_sync_at)}` : 'Not synced yet'),
+          c.session_id ? h('span', { class: 'muted' }, ` · orchestrator: ${sessionTitle(c.session_id)}`) : null),
+      ] : [
+        h('div', { class: 'field-row' }, channel, h('button', { class: 'small', onclick: connect }, 'Connect')),
+        owned.length > 1 ? h('div', { class: 'field-row' }, orchestrator) : null,
+      ]);
+  };
+  channel.addEventListener('keydown', e => { if (e.key === 'Enter') connect(); });
+  draw();
+  // The status of a connected channel, as polling goes on.
+  const reload = async () => {
+    if (!task.slack) return;
+    const t = await api('GET', `/api/tasks/${task.id}`).then(d => d.task);
+    if (JSON.stringify(t.slack) === JSON.stringify(task.slack) || document.activeElement === channel) return;
+    task.slack = t.slack;
+    draw();
+  };
+  return { el, reload };
 }
 
 // The tasks this one builds on, editable, and the tasks that build on it.

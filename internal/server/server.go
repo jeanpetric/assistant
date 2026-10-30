@@ -15,6 +15,7 @@ import (
 
 	"github.com/jeanpetric/assistant/internal/agent"
 	"github.com/jeanpetric/assistant/internal/app"
+	"github.com/jeanpetric/assistant/internal/slack"
 	"github.com/jeanpetric/assistant/internal/store"
 )
 
@@ -74,6 +75,8 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/tasks/{id}/artifacts", s.listArtifacts)
 	m.HandleFunc("GET /api/tasks/{id}/messages", s.listTaskMessages)
 	m.HandleFunc("POST /api/tasks/{id}/messages", s.postTaskMessage)
+	m.HandleFunc("POST /api/tasks/{id}/slack", s.connectSlack)
+	m.HandleFunc("DELETE /api/tasks/{id}/slack", s.disconnectSlack)
 
 	m.HandleFunc("GET /api/sessions", s.listSessions)
 	m.HandleFunc("POST /api/sessions", s.startStandaloneSession)
@@ -170,10 +173,12 @@ func writeErr(w http.ResponseWriter, err error) {
 		status = http.StatusNotFound
 	case errors.Is(err, store.ErrLaneNotEmpty), errors.Is(err, store.ErrProjectNotEmpty), errors.Is(err, store.ErrLastProject),
 		errors.Is(err, app.ErrBusy), errors.Is(err, app.ErrNoResume), errors.Is(err, app.ErrStopping),
-		errors.Is(err, store.ErrMemoryChanged), errors.Is(err, app.ErrForeignSession):
+		errors.Is(err, store.ErrMemoryChanged), errors.Is(err, app.ErrForeignSession),
+		errors.Is(err, app.ErrSlackOff), errors.Is(err, errNoOrchestrator), errors.Is(err, store.ErrChannelTaken):
 		status = http.StatusConflict
 	case errors.As(err, new(badRequest)), errors.Is(err, app.ErrBadAction), errors.Is(err, app.ErrBadCron), errors.Is(err, store.ErrBadContext),
-		errors.Is(err, store.ErrBadMemory), errors.Is(err, store.ErrMemoryExists), errors.Is(err, app.ErrNoMemory), errors.Is(err, app.ErrBadMessage):
+		errors.Is(err, store.ErrBadMemory), errors.Is(err, store.ErrMemoryExists), errors.Is(err, app.ErrNoMemory), errors.Is(err, app.ErrBadMessage),
+		errors.Is(err, app.ErrNotOnTask), errors.Is(err, slack.ErrNotInChannel), errors.Is(err, slack.ErrChannelNotFound):
 		status = http.StatusBadRequest
 	}
 	if status == http.StatusInternalServerError {

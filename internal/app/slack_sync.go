@@ -133,6 +133,9 @@ func (a *App) SyncSlack(ctx context.Context) error {
 		me, err := a.Slack.AuthTest(ctx)
 		if err == nil {
 			a.slackMe = &me
+			a.mu.Lock()
+			a.slackURL = me.URL
+			a.mu.Unlock()
 		}
 		for _, c := range channels {
 			a.setSlackStatus(ctx, c, err, nil)

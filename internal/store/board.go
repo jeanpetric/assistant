@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -45,6 +46,19 @@ type Task struct {
 	LaneChangedAt time.Time `json:"lane_changed_at"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
+	// Slack is the task's connection to a Slack channel here; nil: none.
+	Slack *TaskSlack `json:"slack"`
+}
+
+// TaskSlack is a task's Slack channel as the task shows it: the connection
+// (slack_channels) and how its last poll went, which only the app knows.
+type TaskSlack struct {
+	ChannelID   string     `json:"channel_id"`
+	ChannelName string     `json:"channel_name"`
+	SessionID   *int64     `json:"session_id"` // the orchestrator
+	URL         string     `json:"url"`        // the channel in Slack
+	LastSyncAt  *time.Time `json:"last_sync_at"`
+	Error       string     `json:"error"`
 }
 
 type FieldDef struct {
@@ -178,14 +192,20 @@ func (s *Store) DeleteFieldDef(ctx context.Context, key string) error {
 
 // ---- tasks ----
 
-var taskCols = `id, title, description, kind, project_id, lane_id, position, ` + localWorkdir("task", "tasks") + `, due_at, reminded_at, archived_at, lane_changed_at, created_at, updated_at, watched`
+var taskCols = `id, title, description, kind, project_id, lane_id, position, ` + localWorkdir("task", "tasks") + `, due_at, reminded_at, archived_at, lane_changed_at, created_at, updated_at, watched,
+	(SELECT json_object('channel_id', channel_id, 'channel_name', channel_name, 'session_id', session_id) FROM slack_channels sc WHERE sc.task_id = tasks.id)`
 
 func scanTask(sc interface{ Scan(...any) error }) (Task, error) {
 	var t Task
 	var laneChanged, created, updated int64
 	var due, reminded, archived sql.NullInt64
+	var slack sql.NullString
 	err := sc.Scan(&t.ID, &t.Title, &t.Description, &t.Kind, &t.ProjectID, &t.LaneID, &t.Position, &t.Workdir, &t.WorkdirDefault, &due, &reminded, &archived,
-		&laneChanged, &created, &updated, &t.Watched)
+		&laneChanged, &created, &updated, &t.Watched, &slack)
+	if err == nil && slack.Valid {
+		t.Slack = &TaskSlack{}
+		err = json.Unmarshal([]byte(slack.String), t.Slack)
+	}
 	t.CreatedAt, t.UpdatedAt, t.LaneChangedAt = fromMillis(created), fromMillis(updated), fromMillis(laneChanged)
 	t.DueAt, t.RemindedAt, t.ArchivedAt = fromNullMillis(due), fromNullMillis(reminded), fromNullMillis(archived)
 	t.Fields = map[string]string{}

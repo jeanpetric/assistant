@@ -148,6 +148,8 @@ main { padding: 20px; }
 .badge.due { color: var(--text); }
 .badge.due.overdue { color: var(--danger); border-color: var(--danger); }
 .badge.running { color: var(--ok); border-color: var(--ok); }
+.badge.slack { text-decoration: none; }
+.badge.slack.failed { color: var(--danger); border-color: var(--danger); }
 .badge.needs-input { color: var(--warn); border-color: var(--warn); font-weight: 600; }
 a.badge { text-decoration: none; }
 .badge.outcome-finished { color: var(--accent); border-color: var(--accent); }
