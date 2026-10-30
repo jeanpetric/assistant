@@ -37,6 +37,7 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/board", s.board)
 	m.HandleFunc("GET /api/meta", s.meta)
 	m.HandleFunc("GET /api/settings", s.getSettings)
+	m.HandleFunc("GET /api/sync/status", s.syncStatus)
 	m.HandleFunc("PUT /api/settings", s.saveSettings)
 	m.HandleFunc("GET /api/archive", s.archivedTasks)
 	m.HandleFunc("GET /api/watched", s.watchedTasks)

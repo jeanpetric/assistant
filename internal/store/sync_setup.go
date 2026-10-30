@@ -161,11 +161,14 @@ func (s *Store) StartSeed(ctx context.Context, node int64) (int, error) {
 		if err != nil {
 			return err
 		}
-		// This computer's sessions stay its own under the new node. Before
-		// the change log is cleared: sync on, the update is recorded there.
-		_, err = tx.ExecContext(ctx, `UPDATE sessions SET node_id = ? WHERE node_id = (SELECT node_id FROM sync_node WHERE id = 1)`, node)
-		if err != nil {
-			return err
+		// This computer's sessions, schedules and tasks stay its own under
+		// the new node. Before the change log is cleared: sync on, the
+		// updates are recorded there.
+		for _, tbl := range []string{"sessions", "schedules", "tasks"} {
+			_, err = tx.ExecContext(ctx, `UPDATE `+tbl+` SET node_id = ? WHERE node_id = (SELECT node_id FROM sync_node WHERE id = 1)`, node)
+			if err != nil {
+				return err
+			}
 		}
 		for _, q := range []string{
 			`DELETE FROM sync_rows`, `DELETE FROM sync_outbox`, `DELETE FROM id_blocks`,

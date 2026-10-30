@@ -2351,6 +2351,21 @@ async function refreshGlobal() {
     rc.textContent = running.length;
     rc.classList.toggle('hidden', !running.length);
   } catch (_) { /* server restarting */ }
+  api('GET', '/api/sync/status').then(st => drawSyncStatus(document.getElementById('sync-status'), st)).catch(() => {});
+}
+
+// The header's sync indicator, shown only on a computer syncing with a hub:
+// online or offline, changes not pushed yet and the last sync.
+function drawSyncStatus(el, st) {
+  const client = st.role === 'client';
+  el.classList.toggle('hidden', !client);
+  if (!client) return;
+  el.classList.toggle('offline', !st.online);
+  const parts = [st.online ? '● Synced' + (st.synced_at ? ' ' + ago(st.synced_at) : '') : '○ Offline'];
+  if (st.pending) parts.push(`${st.pending} pending`);
+  el.textContent = parts.join(' · ');
+  el.title = [`Sync with ${st.server}`, st.synced_at ? `last sync ${fmtTime(st.synced_at)}` : 'never synced',
+    st.pending ? `${st.pending} changes waiting to be pushed` : 'nothing waiting to be pushed', st.error].filter(Boolean).join('\n');
 }
 
 async function toggleNotifications() {

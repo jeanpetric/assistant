@@ -91,6 +91,8 @@ label { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 3px;
   border-radius: 9px; background: var(--accent); color: var(--accent-text);
   font-size: 11px; text-align: center;
 }
+.sync-status { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.sync-status.offline { color: var(--danger); }
 main { padding: 20px; }
 .limits { font-family: var(--mono); }
 .limits .warn { color: var(--warn); font-weight: 600; }

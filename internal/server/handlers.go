@@ -245,6 +245,15 @@ type trelloView struct {
 	Boards     []trelloBoardView `json:"boards"`
 }
 
+func (s *Server) syncStatus(w http.ResponseWriter, r *http.Request) {
+	st, err := s.app.SyncStatus(r.Context())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, st)
+}
+
 func (s *Server) getTrello(w http.ResponseWriter, r *http.Request) {
 	boards, err := s.app.Store.TrelloBoards(r.Context())
 	if err != nil {

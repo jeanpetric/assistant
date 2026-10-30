@@ -74,6 +74,57 @@ type App struct {
 	trelloMu     sync.Mutex   // one sync at a time
 	trelloKick   chan struct{}
 	trelloStatus map[int64]TrelloStatus // by board id
+
+	// SyncRole is this node's part in sync: RoleOff, RoleHub or RoleClient.
+	// A hub is only the shared database: it runs no schedules, reminders
+	// or auto-archive.
+	SyncRole string
+	// SyncServer is the hub a client syncs with, SyncClient how that goes,
+	// nil while the database is not in sync yet.
+	SyncServer string
+	SyncClient func(context.Context) (ClientStatus, error)
+}
+
+const (
+	RoleOff    = "off"
+	RoleHub    = "hub"
+	RoleClient = "client"
+)
+
+// SyncStatus is this node's part in sync and, on a client, how its sync goes.
+type SyncStatus struct {
+	Role string `json:"role"`
+	*ClientStatus
+}
+
+// ClientStatus is a sync client's syncclient.Status (that package's tests
+// use this one's, so it is not imported).
+type ClientStatus struct {
+	Server   string     `json:"server"`
+	Online   bool       `json:"online"`
+	Pending  int        `json:"pending"`
+	SyncedAt *time.Time `json:"synced_at,omitempty"`
+	Error    string     `json:"error,omitempty"`
+}
+
+// errNotInSync: a client's database was neither seeded nor joined.
+const errNotInSync = "this database is not in sync yet: run assistant sync seed (the first node) or assistant sync join (an empty database), then restart"
+
+func (a *App) SyncStatus(ctx context.Context) (SyncStatus, error) {
+	st := SyncStatus{Role: a.SyncRole}
+	if st.Role == "" {
+		st.Role = RoleOff
+	}
+	if st.Role != RoleClient {
+		return st, nil
+	}
+	if a.SyncClient == nil {
+		st.ClientStatus = &ClientStatus{Server: a.SyncServer, Error: errNotInSync}
+		return st, nil
+	}
+	cs, err := a.SyncClient(ctx)
+	st.ClientStatus = &cs
+	return st, err
 }
 
 func New(s *store.Store, r agent.Runner, workdir, mode string) *App {
@@ -1131,7 +1182,11 @@ func (a *App) RunAutoArchive(ctx context.Context) error {
 }
 
 // RunScheduler checks schedules, due reminders and auto-archive every interval until ctx is done.
+// A hub runs none of them: each node runs its own (see DueSchedules, DueTasks).
 func (a *App) RunScheduler(ctx context.Context, interval time.Duration) {
+	if a.SyncRole == RoleHub {
+		return
+	}
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {

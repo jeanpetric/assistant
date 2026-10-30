@@ -588,6 +588,15 @@ UPDATE sessions SET node_id = COALESCE(
 	(SELECT r.node_id FROM sync_rows r WHERE r.tbl = 'sessions' AND r.pk_json = json_array(sessions.id)),
 	(SELECT node_id FROM sync_node WHERE id = 1), 1);
 `,
+	// The node that made a schedule runs it, and the node that made a task
+	// sends its due reminder: synced rows are seen everywhere, but each is
+	// acted on once. Existing rows are this database's own.
+	`
+ALTER TABLE schedules ADD COLUMN node_id INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE tasks ADD COLUMN node_id INTEGER NOT NULL DEFAULT 1;
+UPDATE schedules SET node_id = COALESCE((SELECT node_id FROM sync_node WHERE id = 1), 1);
+UPDATE tasks SET node_id = COALESCE((SELECT node_id FROM sync_node WHERE id = 1), 1);
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

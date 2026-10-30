@@ -288,6 +288,13 @@ func (s *Server) mcpTools() []mcpTool {
 			call:        byID("DELETE", "/api/lanes/%d", "lane_id", false),
 		},
 		{
+			Name: "sync_status",
+			Description: "How this computer takes part in syncing the assistant's database between computers: role is off (not synced), hub (the shared database the others sync with; it runs no schedules or reminders) " +
+				"or client (syncs with the hub). A client also gives server, online (the hub answered the latest request), pending (changed rows not pushed yet), synced_at (last exchange) and error (why the latest request failed).",
+			InputSchema: schema(nil, map[string]any{}),
+			call:        fixed("GET", "/api/sync/status", false),
+		},
+		{
 			Name: "list_trello_boards",
 			Description: "The Trello boards kept in sync: each board's open cards become tasks (title, description, due date, a trello link field) in its project and lane, " +
 				"a due date changed on Trello updates its task, and a task moved into the board's done lane gets its card archived (moved out, the card comes back). " +

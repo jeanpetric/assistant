@@ -123,17 +123,23 @@ func main() {
 	if cfg.Agent != "" && !slices.Contains(agent.Agents, cfg.Agent) {
 		log.Fatalf("unknown agent %q: want one of %s", cfg.Agent, strings.Join(agent.Agents, ", "))
 	}
+	if cfg.SyncListen != "" && cfg.SyncServer != "" {
+		log.Fatal("sync_listen and sync_server both set: a node is the hub or syncs with one")
+	}
 	a := app.New(st, runner, cfg.Workdir, cfg.Mode)
 	a.DefaultAgent = cfg.Agent
+	switch {
+	case cfg.SyncListen != "":
+		a.SyncRole = app.RoleHub
+	case cfg.SyncServer != "":
+		a.SyncRole, a.SyncServer = app.RoleClient, cfg.SyncServer
+	}
 	go a.RunScheduler(ctx, 5*time.Second)
 	if cfg.TrelloKey != "" && cfg.TrelloToken != "" {
 		a.Trello = &trello.Client{Key: cfg.TrelloKey, Token: cfg.TrelloToken}
 		go a.RunTrelloSync(ctx, time.Minute)
 	}
 
-	if cfg.SyncListen != "" && cfg.SyncServer != "" {
-		log.Fatal("sync_listen and sync_server both set: a node is the hub or syncs with one")
-	}
 	if cfg.SyncListen != "" {
 		if err := serveSync(ctx, st, cfg.SyncListen); err != nil {
 			log.Fatal(err)
@@ -148,6 +154,10 @@ func main() {
 		if c == nil {
 			close(syncDone)
 		} else {
+			a.SyncClient = func(ctx context.Context) (app.ClientStatus, error) {
+				st, err := c.Status(ctx)
+				return app.ClientStatus(st), err
+			}
 			go func() {
 				defer close(syncDone)
 				c.Run(ctx)

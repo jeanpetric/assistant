@@ -45,6 +45,7 @@ type Schedule struct {
 	Enabled    bool       `json:"enabled"`
 	NextRunAt  *time.Time `json:"next_run_at"`
 	LastRunAt  *time.Time `json:"last_run_at"`
+	NodeID     int64      `json:"node_id"` // the node that made it, the only one it runs on
 }
 
 type Notification struct {
@@ -166,13 +167,13 @@ func (s *Store) DeleteRule(ctx context.Context, id int64) error {
 
 // ---- schedules ----
 
-const scheduleCols = `id, task_id, cron, action, prompt, mode, done_lane_id, enabled, next_run_at, last_run_at`
+const scheduleCols = `id, task_id, cron, action, prompt, mode, done_lane_id, enabled, next_run_at, last_run_at, node_id`
 
 func scanSchedule(sc interface{ Scan(...any) error }) (Schedule, error) {
 	var x Schedule
 	var enabled int
 	var doneLane, next, last sql.NullInt64
-	err := sc.Scan(&x.ID, &x.TaskID, &x.Cron, &x.Action, &x.Prompt, &x.Mode, &doneLane, &enabled, &next, &last)
+	err := sc.Scan(&x.ID, &x.TaskID, &x.Cron, &x.Action, &x.Prompt, &x.Mode, &doneLane, &enabled, &next, &last, &x.NodeID)
 	x.DoneLaneID = fromNullID(doneLane)
 	x.Enabled = enabled == 1
 	x.NextRunAt, x.LastRunAt = fromNullMillis(next), fromNullMillis(last)
@@ -200,10 +201,12 @@ func (s *Store) Schedules(ctx context.Context, taskID int64) ([]Schedule, error)
 	return s.querySchedules(ctx, `SELECT `+scheduleCols+` FROM schedules WHERE task_id = ? ORDER BY id`, taskID)
 }
 
-// DueSchedules returns enabled schedules whose next run is at or before now.
+// DueSchedules returns this node's enabled schedules whose next run is at or
+// before now. Another node's schedules run there.
 func (s *Store) DueSchedules(ctx context.Context, now time.Time) ([]Schedule, error) {
 	return s.querySchedules(ctx, `SELECT `+scheduleCols+` FROM schedules
-		WHERE enabled = 1 AND next_run_at IS NOT NULL AND next_run_at <= ? ORDER BY next_run_at`, now.UnixMilli())
+		WHERE enabled = 1 AND next_run_at IS NOT NULL AND next_run_at <= ?
+			AND node_id = (SELECT node_id FROM sync_node WHERE id = 1) ORDER BY next_run_at`, now.UnixMilli())
 }
 
 func (s *Store) Schedule(ctx context.Context, id int64) (Schedule, error) {
@@ -216,8 +219,8 @@ func (s *Store) Schedule(ctx context.Context, id int64) (Schedule, error) {
 
 func (s *Store) SaveSchedule(ctx context.Context, x Schedule) (Schedule, error) {
 	if x.ID == 0 {
-		id, err := s.insert(ctx, "schedules", `INSERT INTO schedules (id, task_id, cron, action, prompt, mode, done_lane_id, enabled, next_run_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, x.TaskID, x.Cron, x.Action, x.Prompt, x.Mode, x.DoneLaneID, boolInt(x.Enabled), toNullMillis(x.NextRunAt))
+		id, err := s.insert(ctx, "schedules", `INSERT INTO schedules (id, task_id, cron, action, prompt, mode, done_lane_id, enabled, next_run_at, node_id)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT node_id FROM sync_node WHERE id = 1))`, x.TaskID, x.Cron, x.Action, x.Prompt, x.Mode, x.DoneLaneID, boolInt(x.Enabled), toNullMillis(x.NextRunAt))
 		if err != nil {
 			return x, err
 		}

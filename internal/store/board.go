@@ -398,8 +398,8 @@ func (s *Store) CreateTask(ctx context.Context, t Task) (Task, error) {
 		now := s.ts()
 		var err error
 		id, err = s.insertTx(ctx, tx, "tasks", `
-			INSERT INTO tasks (id, title, description, kind, project_id, lane_id, position, workdir, due_at, lane_changed_at, created_at, updated_at, watched)
-			VALUES (?, ?, ?, ?, ?, ?, `+nextPosition+`, ?, ?, ?, ?, ?, ?)`,
+			INSERT INTO tasks (id, title, description, kind, project_id, lane_id, position, workdir, due_at, lane_changed_at, created_at, updated_at, watched, node_id)
+			VALUES (?, ?, ?, ?, ?, ?, `+nextPosition+`, ?, ?, ?, ?, ?, ?, (SELECT node_id FROM sync_node WHERE id = 1))`,
 			t.Title, t.Description, t.Kind, t.ProjectID, t.LaneID, t.ProjectID, t.LaneID, t.Workdir, toNullMillis(t.DueAt), now, now, now, boolInt(t.Watched))
 		if err != nil {
 			return err
@@ -516,11 +516,12 @@ func setFields(ctx context.Context, tx *sql.Tx, taskID int64, fields map[string]
 	return nil
 }
 
-// DueTasks returns tasks whose due time is at or before now and that haven't been reminded yet.
-// Fields are not loaded.
+// DueTasks returns tasks whose due time is at or before now and that haven't been reminded yet,
+// of those this node made: the node that made a task reminds of it. Fields are not loaded.
 func (s *Store) DueTasks(ctx context.Context, now time.Time) ([]Task, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+taskCols+` FROM tasks
-		WHERE reminded_at IS NULL AND due_at IS NOT NULL AND due_at <= ? ORDER BY due_at, id`, now.UnixMilli())
+		WHERE reminded_at IS NULL AND due_at IS NOT NULL AND due_at <= ?
+			AND node_id = (SELECT node_id FROM sync_node WHERE id = 1) ORDER BY due_at, id`, now.UnixMilli())
 	if err != nil {
 		return nil, err
 	}
