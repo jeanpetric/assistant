@@ -198,6 +198,7 @@ function route() {
 async function loadBoard() {
   state.board = await api('GET', '/api/board' + (state.projectId ? `?project_id=${state.projectId}` : ''));
   state.projectId = state.board.project_id; // the server falls back to the first project
+  if (state.meta && state.board.kinds) state.meta.kinds = state.board.kinds; // added or deleted since, here or on another computer
   drawProjectSelect();
   return state.board;
 }
@@ -251,8 +252,22 @@ function slackBadge(t) {
   }, '#' + t.slack.channel_name);
 }
 
+// Kinds with a colour of their own in style.css; any other gets one from
+// kindPalette by its name's hash, so it's the same everywhere.
+const styledKinds = ['coding', 'research', 'discussion', 'reminder'];
+const kindPalette = ['#0f8b8d', '#d1495b', '#5c7cfa', '#e67700', '#2b8a3e', '#ae3ec9', '#1c7ed6', '#a0522d'];
+
+function kindColor(kind) {
+  let hash = 0;
+  for (const c of kind) hash = (hash * 31 + c.codePointAt(0)) >>> 0;
+  return kindPalette[hash % kindPalette.length];
+}
+
 function kindBadge(kind) {
-  return kind && kind !== 'task' ? h('span', { class: 'badge kind-' + kind }, kind) : null;
+  if (!kind || kind === 'task') return null;
+  const attrs = { class: 'badge kind-' + kind };
+  if (!styledKinds.includes(kind)) attrs.style = 'color:' + kindColor(kind);
+  return h('span', attrs, kind);
 }
 
 function dueBadge(t) {
@@ -1802,8 +1817,8 @@ async function revisionDialog(revisionId, latest, done) {
 
 async function renderSettings() {
   const b = await loadBoard();
-  const [rules, settings, skills, trello] = await Promise.all([api('GET', '/api/rules'), api('GET', '/api/settings'), api('GET', '/api/skills'),
-    api('GET', '/api/trello')]);
+  const [rules, settings, skills, trello, kinds] = await Promise.all([api('GET', '/api/rules'), api('GET', '/api/settings'), api('GET', '/api/skills'),
+    api('GET', '/api/trello'), api('GET', '/api/kinds')]);
   state.skills = skills;
   const rerender = () => renderSettings();
 
@@ -1913,7 +1928,36 @@ async function renderSettings() {
       : h('p', { class: 'muted' }, 'No rules yet.'));
 
   view.replaceChildren(h('div', { style: 'max-width:900px' }, projects, lanes, workdirsPanel(settings.workdirs, rerender), rulesPanel,
-    skillsPanel(skills, b, rerender), sessionPromptPanel(settings), sessionLanePanel(b.all_lanes, settings), archivePanel(b.all_lanes, settings), trelloPanel(b, trello, rerender), fields));
+    skillsPanel(skills, b, rerender), sessionPromptPanel(settings), sessionLanePanel(b.all_lanes, settings), archivePanel(b.all_lanes, settings), trelloPanel(b, trello, rerender), fields,
+    kindsPanel(kinds, rerender)));
+}
+
+// kindsPanel lists the task kinds, to add one or delete one: task and
+// reminder can't be, nor one a transition rule or skill automation is for.
+function kindsPanel(kinds, rerender) {
+  const name = h('input', { placeholder: 'kind, e.g. bug' });
+  const add = async () => {
+    if (!name.value.trim()) return;
+    state.meta.kinds = (await api('POST', '/api/kinds', { name: name.value })).map(k => k.name);
+    rerender();
+  };
+  name.addEventListener('keydown', e => { if (e.key === 'Enter') add(); });
+  const del = async k => {
+    const tasks = k.tasks ? ` Its ${k.tasks === 1 ? 'task becomes' : k.tasks + ' tasks become'} kind task.` : '';
+    if (!confirm(`Delete kind ${k.name}?${tasks}`)) return;
+    state.meta.kinds = (await api('DELETE', `/api/kinds/${encodeURIComponent(k.name)}`)).map(k => k.name);
+    rerender();
+  };
+  const uses = k => [k.tasks && `${k.tasks} task${k.tasks === 1 ? '' : 's'}`, k.rules && `${k.rules} rule${k.rules === 1 ? '' : 's'}`,
+    k.automations && `${k.automations} skill automation${k.automations === 1 ? '' : 's'}`].filter(Boolean).join(', ');
+  return h('div', { class: 'panel' }, h('h2', {}, 'Task kinds'),
+    h('p', { class: 'muted small' }, 'What a task is. Transition rules and skill automations can be for one kind. ' +
+      'Deleting a kind makes its tasks kind task; one a rule or skill automation is for can\'t be deleted, nor task and reminder.'),
+    h('table', {}, h('tbody', {}, kinds.map(k => h('tr', {},
+      h('td', {}, kindBadge(k.name) || h('span', { class: 'badge' }, k.name)),
+      h('td', { class: 'muted small' }, uses(k)),
+      h('td', {}, k.built_in ? h('span', { class: 'muted small' }, 'built in') : h('button', { class: 'danger small', onclick: () => del(k) }, 'Delete')))))),
+    h('div', { class: 'row', style: 'margin-top:10px' }, h('div', { class: 'grow' }, name), h('button', { onclick: add }, 'Add')));
 }
 
 // ---------- skills ----------

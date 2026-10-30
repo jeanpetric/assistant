@@ -17,8 +17,8 @@ One Go binary, one SQLite file, no JavaScript build step.
   one at the top or with `⌥K`; the board, list and archive show only its tasks. Create, rename
   and reorder them in *Settings → Projects*, where each can also get a default working directory
   for its agents; a task moves to another project from its page.
-- **Flexible tasks**: title, description, kind (task / coding / research / discussion / reminder),
-  working directory, and **custom fields** (Productive task, pull request, Slack thread out of
+- **Flexible tasks**: title, description, kind (task / coding / research / discussion / reminder
+  out of the box — add and delete kinds in *Settings → Task kinds*), working directory, and **custom fields** (Productive task, pull request, Slack thread out of
   the box — add more in Settings). In the *New task* dialog `⌘↵` creates the task from any field.
 - **Builds on**: a task can build on earlier tasks (search by words or `#id`). Its agents then get
   a summary of each source task's sessions after the task brief; *+ Follow-up task* creates one,
@@ -188,7 +188,8 @@ claude mcp add --scope user --transport http assistant http://127.0.0.1:6767/mcp
 Tools cover the whole app:
 
 - **Tasks**: `get_board`, `get_task`, `search_tasks`, `create_task`, `update_task`, `move_task`,
-  `archive_task`, `unarchive_task`, `list_archived_tasks`, `delete_task`
+  `archive_task`, `unarchive_task`, `list_archived_tasks`, `delete_task`, `list_kinds`, `add_kind`,
+  `delete_kind`
 - **Lanes & projects**: `create_lane`, `update_lane`, `delete_lane`, `create_project`,
   `update_project`, `delete_project`
 - **Sessions**: `start_session`, `list_sessions`, `get_session`, `send_message`,

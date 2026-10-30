@@ -345,7 +345,8 @@ func TestSyncTriggersOnReopen(t *testing.T) {
 		`DROP TABLE sync_outbox`, `DROP TABLE sync_rows`, `DROP TABLE sync_keys`, `DROP TABLE id_leases`, `DROP TABLE project_hidden_lanes`,
 		`DROP TABLE task_messages`, `DROP TABLE local_paths`, `DROP TABLE local_settings`, `DROP TRIGGER local_paths_project`,
 		`DROP TRIGGER local_paths_task`, `DROP TRIGGER local_paths_rule`, `DROP TABLE slack_channels`, `DROP TABLE slack_messages`,
-		`DROP TRIGGER slack_channels_task`, `DROP TRIGGER slack_channels_session`, `DROP TRIGGER slack_messages_session`)
+		`DROP TRIGGER slack_channels_task`, `DROP TRIGGER slack_channels_session`, `DROP TRIGGER slack_messages_session`,
+		`DROP TABLE task_kinds`)
 	migrations = append(migrations, `UPDATE lanes SET name = 'Migrated' WHERE id = 1;`)
 	defer func() { migrations = migrations[:len(migrations)-1] }()
 	s.Close()

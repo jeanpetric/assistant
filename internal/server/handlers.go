@@ -21,8 +21,6 @@ import (
 
 // ---- board & meta ----
 
-var taskKinds = []string{"task", "coding", "research", "discussion", "reminder"}
-
 // board returns the lanes and the tasks of one project (?project_id=, else the
 // first project), plus every project to switch to. lanes are those the
 // project shows (see shownLanes), all_lanes every lane.
@@ -115,7 +113,12 @@ func (s *Server) board(w http.ResponseWriter, r *http.Request) {
 	for i := range tasks {
 		s.app.WithSlack(&tasks[i])
 	}
-	writeJSON(w, 200, map[string]any{"projects": projects, "project_id": projectID, "lanes": shown, "all_lanes": lanes, "tasks": tasks, "fields": fields,
+	kinds, err := s.app.Store.Kinds(ctx)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"projects": projects, "project_id": projectID, "lanes": shown, "all_lanes": lanes, "tasks": tasks, "fields": fields, "kinds": kinds,
 		"running": runningByTask, "running_limits": limitsByTask, "running_context": contextByTask, "needs_input": needsInput,
 		"agent_status": agentStatus})
 }
@@ -150,6 +153,11 @@ func agentMeta() []map[string]any {
 }
 
 func (s *Server) meta(w http.ResponseWriter, r *http.Request) {
+	kinds, err := s.app.Store.Kinds(r.Context())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
 	writeJSON(w, 200, map[string]any{
 		"modes":         agent.Modes,
 		"models":        agent.Models,
@@ -157,7 +165,7 @@ func (s *Server) meta(w http.ResponseWriter, r *http.Request) {
 		"default_mode":  s.app.DefaultMode,
 		"default_agent": cmp.Or(s.app.DefaultAgent, agent.Claude),
 		"workdir":       s.app.DefaultWorkdir,
-		"kinds":         taskKinds,
+		"kinds":         kinds,
 	})
 }
 
@@ -606,6 +614,60 @@ func (s *Server) deleteField(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(204)
 }
 
+// ---- task kinds ----
+
+var kindNameRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,30}$`)
+
+// checkKind rejects a kind that isn't one; empty is fine (a new task's
+// default, any kind for a rule or automation).
+func (s *Server) checkKind(ctx context.Context, kind string) error {
+	if kind == "" {
+		return nil
+	}
+	ok, err := s.app.Store.HasKind(ctx, kind)
+	if err == nil && !ok {
+		err = badRequest{"unknown kind " + kind}
+	}
+	return err
+}
+
+func (s *Server) kinds(w http.ResponseWriter, r *http.Request) {
+	xs, err := s.app.Store.KindUses(r.Context())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, xs)
+}
+
+func (s *Server) addKind(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Name string `json:"name"`
+	}
+	if err := decode(r, &in); err != nil {
+		writeErr(w, err)
+		return
+	}
+	name := strings.TrimSpace(in.Name)
+	if !kindNameRe.MatchString(name) {
+		writeErr(w, badRequest{"name must start with a lowercase letter and have only lowercase letters, digits, _ or - (at most 31)"})
+		return
+	}
+	if err := s.app.Store.AddKind(r.Context(), name); err != nil {
+		writeErr(w, err)
+		return
+	}
+	s.kinds(w, r)
+}
+
+func (s *Server) deleteKind(w http.ResponseWriter, r *http.Request) {
+	if err := s.app.Store.DeleteKind(r.Context(), r.PathValue("name")); err != nil {
+		writeErr(w, err)
+		return
+	}
+	s.kinds(w, r)
+}
+
 // ---- tasks ----
 
 func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
@@ -619,6 +681,10 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.checkProject(r.Context(), t.ProjectID); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.checkKind(r.Context(), t.Kind); err != nil {
 		writeErr(w, err)
 		return
 	}
@@ -873,6 +939,14 @@ func (s *Server) updateTask(w http.ResponseWriter, r *http.Request) {
 		cur.Description = *in.Description
 	}
 	if in.Kind != nil {
+		if *in.Kind == "" {
+			writeErr(w, badRequest{"kind is required"})
+			return
+		}
+		if err := s.checkKind(r.Context(), *in.Kind); err != nil {
+			writeErr(w, err)
+			return
+		}
 		cur.Kind = *in.Kind
 	}
 	if in.Workdir != nil {
@@ -1538,8 +1612,8 @@ func (s *Server) saveRule(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	if rule.Kind != "" && !slices.Contains(taskKinds, rule.Kind) {
-		writeErr(w, badRequest{"unknown kind " + rule.Kind})
+	if err := s.checkKind(r.Context(), rule.Kind); err != nil {
+		writeErr(w, err)
 		return
 	}
 	if rule.ProjectID != nil && *rule.ProjectID == 0 {
@@ -1656,8 +1730,8 @@ func (s *Server) saveSkill(w http.ResponseWriter, r *http.Request, x store.Skill
 		if a.LaneID != nil && *a.LaneID == 0 {
 			a.LaneID = nil
 		}
-		if a.Kind != "" && !slices.Contains(taskKinds, a.Kind) {
-			writeErr(w, badRequest{"unknown kind " + a.Kind})
+		if err := s.checkKind(r.Context(), a.Kind); err != nil {
+			writeErr(w, err)
 			return
 		}
 		if a.ProjectID != nil {

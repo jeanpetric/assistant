@@ -653,6 +653,21 @@ CREATE TRIGGER slack_messages_session AFTER DELETE ON sessions BEGIN
 	UPDATE slack_messages SET delivered_to = NULL WHERE delivered_to = OLD.id;
 END;
 `,
+	// Task kinds are a list the user edits, shared by every node. It starts
+	// with the kinds there were, then every other kind tasks, transition rules
+	// and skill automations already have, so none is left unknown.
+	`
+CREATE TABLE task_kinds (
+	name TEXT PRIMARY KEY,
+	position INTEGER NOT NULL
+);
+INSERT INTO task_kinds (name, position) VALUES
+	('task', 0), ('coding', 1), ('research', 2), ('discussion', 3), ('reminder', 4);
+INSERT OR IGNORE INTO task_kinds (name, position)
+	SELECT kind, 4 + ROW_NUMBER() OVER (ORDER BY kind) FROM (
+		SELECT kind FROM tasks UNION SELECT kind FROM transition_rules UNION SELECT kind FROM skill_automations
+	) WHERE kind != '' AND kind NOT IN ('task', 'coding', 'research', 'discussion', 'reminder');
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

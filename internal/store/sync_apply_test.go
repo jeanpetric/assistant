@@ -595,3 +595,31 @@ func TestExportChanges(t *testing.T) {
 		t.Fatalf("delete %+v", rest)
 	}
 }
+
+// Kinds added and deleted on one node are on every node after a sync, as are
+// the tasks a deleted kind made kind task.
+func TestApplyKinds(t *testing.T) {
+	ctx := context.Background()
+	ns := nodes(t, 2)
+	a, b := ns[0], ns[1]
+	tk, err := a.CreateTask(ctx, Task{Title: "talk", Kind: "discussion"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	exchange(t, a, b)
+	if err := a.AddKind(ctx, "bug"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.DeleteKind(ctx, "discussion"); err != nil {
+		t.Fatal(err)
+	}
+	exchange(t, a, b)
+	same(t, a, b)
+	want := []string{"task", "coding", "research", "reminder", "bug"}
+	if kinds, err := b.Kinds(ctx); err != nil || !slices.Equal(kinds, want) {
+		t.Fatalf("kinds on b = %v, %v", kinds, err)
+	}
+	if got, ok := task(t, b, tk.ID); !ok || got.Kind != "task" {
+		t.Fatalf("task on b = %+v", got)
+	}
+}

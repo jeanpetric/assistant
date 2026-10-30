@@ -60,6 +60,9 @@ func (s *Server) routes() {
 
 	m.HandleFunc("POST /api/fields", s.saveField)
 	m.HandleFunc("DELETE /api/fields/{key}", s.deleteField)
+	m.HandleFunc("GET /api/kinds", s.kinds)
+	m.HandleFunc("POST /api/kinds", s.addKind)
+	m.HandleFunc("DELETE /api/kinds/{name}", s.deleteKind)
 
 	m.HandleFunc("GET /api/tasks", s.searchTasks)
 	m.HandleFunc("POST /api/tasks", s.createTask)
@@ -174,7 +177,8 @@ func writeErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, store.ErrLaneNotEmpty), errors.Is(err, store.ErrProjectNotEmpty), errors.Is(err, store.ErrLastProject),
 		errors.Is(err, app.ErrBusy), errors.Is(err, app.ErrNoResume), errors.Is(err, app.ErrStopping),
 		errors.Is(err, store.ErrMemoryChanged), errors.Is(err, app.ErrForeignSession),
-		errors.Is(err, app.ErrSlackOff), errors.Is(err, store.ErrChannelTaken):
+		errors.Is(err, app.ErrSlackOff), errors.Is(err, store.ErrChannelTaken),
+		errors.Is(err, store.ErrKindExists), errors.Is(err, store.ErrKindBuiltIn), errors.Is(err, store.ErrKindInUse):
 		status = http.StatusConflict
 	case errors.As(err, new(badRequest)), errors.Is(err, app.ErrBadAction), errors.Is(err, app.ErrBadCron), errors.Is(err, store.ErrBadContext),
 		errors.Is(err, store.ErrBadMemory), errors.Is(err, store.ErrMemoryExists), errors.Is(err, app.ErrNoMemory), errors.Is(err, app.ErrBadMessage),

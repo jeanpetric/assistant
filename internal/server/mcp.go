@@ -109,7 +109,7 @@ var (
 	pProjectID = prop("integer", "Project id (see get_board); every project has its own board on the shared lanes")
 	pFields    = map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}, "description": "Custom fields by key, e.g. {\"pull_request\": \"https://…\"}; see get_board for the keys. An empty value removes a field. Empty productive, pull_request, slack and trello fields fill themselves from such a link in the description, and pull_request from a PR an agent opens (gh pr create)."}
 	pDueAt     = prop("string", "Due time, RFC 3339 (e.g. 2026-10-21T09:00:00+02:00); a notification fires when it's reached")
-	pKind      = map[string]any{"type": "string", "enum": taskKinds}
+	pKind      = prop("string", "Task kind: one of kinds in get_board or list_kinds (default task)")
 	pWorkdir   = prop("string", "Absolute working directory for agent sessions on this computer")
 	pReportTo  = prop("integer", "Session id told how each of this session's turns ends: its final reply, its error, the question it asked on its task's thread, "+
 		"or that it was cancelled, as that session's next message (queued while it works). Use it to hear back from sessions you start")
@@ -117,7 +117,7 @@ var (
 	pSkillAutomations = map[string]any{"type": "array", "description": "When the skill runs by itself: after an agent turn on a task finishes successfully, in that session, " +
 		"if the task matches one of these. Left out keeps the saved list; [] means only by hand (run_skill).",
 		"items": schema(nil, map[string]any{
-			"kind":       map[string]any{"type": "string", "enum": append([]string{""}, taskKinds...), "description": "Task kind; empty matches any"},
+			"kind":       prop("string", "Task kind (one of kinds in get_board or list_kinds); empty matches any"),
 			"project_id": prop("integer", "Only tasks of this project; left out matches any"),
 			"lane_id":    prop("integer", "Only tasks in this lane when the turn ends; left out matches any"),
 			"enabled":    prop("boolean", "Off keeps the automation without running it"),
@@ -170,7 +170,7 @@ func (s *Server) mcpTools() []mcpTool {
 	return []mcpTool{
 		{
 			Name:        "get_board",
-			Description: "The kanban board of one project (the first if project_id is left out): every project, the lanes the project shows (in order; all_lanes has every lane, hidden ones included), the project's tasks on the board, custom field definitions, how many agent sessions run per task and, per task id, agent_status: what its agents are up to (" + agentStatusDoc + "). Start here to find project, lane and task ids.",
+			Description: "The kanban board of one project (the first if project_id is left out): every project, the lanes the project shows (in order; all_lanes has every lane, hidden ones included), the project's tasks on the board, custom field definitions, the task kinds, how many agent sessions run per task and, per task id, agent_status: what its agents are up to (" + agentStatusDoc + "). Start here to find project, lane and task ids.",
 			InputSchema: schema(nil, map[string]any{"project_id": pProjectID}),
 			call:        list("/api/board", "project_id"),
 			post:        boardSummary,
@@ -369,6 +369,32 @@ func (s *Server) mcpTools() []mcpTool {
 				"automations": pSkillAutomations,
 			}),
 			call: byID("PATCH", "/api/skills/%d", "skill_id", true),
+		},
+		{
+			Name: "list_kinds",
+			Description: "The task kinds, in order: each with built_in (task and reminder can't be deleted) and how many tasks (archived ones included), " +
+				"transition rules and skill automations have it. Rules and skill automations can be for one kind.",
+			InputSchema: schema(nil, map[string]any{}),
+			call:        fixed("GET", "/api/kinds", false),
+		},
+		{
+			Name:        "add_kind",
+			Description: "Add a task kind at the end of the list. Returns the list.",
+			InputSchema: schema([]string{"name"}, map[string]any{"name": prop("string", "Lowercase letters, digits, _ or -, starting with a letter; at most 31")}),
+			call:        fixed("POST", "/api/kinds", true),
+		},
+		{
+			Name: "delete_kind",
+			Description: "Delete a task kind; its tasks become kind task. Refused for task and reminder, and while transition rules or skill automations have it. " +
+				"Returns the list.",
+			InputSchema: schema([]string{"name"}, map[string]any{"name": prop("string", "The kind")}),
+			call: func(a mcpArgs) (string, string, any, error) {
+				var name string
+				if err := json.Unmarshal(a["name"], &name); err != nil || name == "" {
+					return "", "", nil, fmt.Errorf("name must be a non-empty string")
+				}
+				return "DELETE", "/api/kinds/" + url.PathEscape(name), nil, nil
+			},
 		},
 		{
 			Name:        "delete_skill",
