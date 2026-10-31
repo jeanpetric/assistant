@@ -507,6 +507,26 @@ func TestApplyRejectsLocalTables(t *testing.T) {
 	}
 }
 
+// A node not yet upgraded may still send rows of the Trello tables; they are
+// skipped, and the rest of the batch applies.
+func TestApplySkipsDroppedTables(t *testing.T) {
+	ns := nodes(t, 2)
+	a, b := ns[0], ns[1]
+	task, err := a.CreateTask(context.Background(), Task{Title: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	changes := append(export(t, a),
+		Change{Table: "trello_boards", Key: json.RawMessage(`[1]`), ChangedAtMs: 1, NodeID: 1, Row: json.RawMessage(`{"id":1,"board":"b"}`)},
+		Change{Table: "trello_cards", Key: json.RawMessage(`["c1"]`), ChangedAtMs: 1, NodeID: 1, Deleted: true})
+	if err := b.ApplyChanges(context.Background(), changes); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Task(context.Background(), task.ID); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // A row taken out and put back on one node is back on the other: only rows
 // with ids stay deleted.
 func TestApplyReAddedKey(t *testing.T) {

@@ -1817,8 +1817,8 @@ async function revisionDialog(revisionId, latest, done) {
 
 async function renderSettings() {
   const b = await loadBoard();
-  const [rules, settings, skills, trello, kinds] = await Promise.all([api('GET', '/api/rules'), api('GET', '/api/settings'), api('GET', '/api/skills'),
-    api('GET', '/api/trello'), api('GET', '/api/kinds')]);
+  const [rules, settings, skills, kinds] = await Promise.all([api('GET', '/api/rules'), api('GET', '/api/settings'), api('GET', '/api/skills'),
+    api('GET', '/api/kinds')]);
   state.skills = skills;
   const rerender = () => renderSettings();
 
@@ -1896,7 +1896,7 @@ async function renderSettings() {
   const fLabel = h('input', { placeholder: 'Label' });
   const fType = select([['url', 'Link'], ['text', 'Text']], 'url');
   const fields = h('div', { class: 'panel' }, h('h2', {}, 'Task fields'),
-    h('p', { class: 'muted small' }, 'Extra attributes every task can have: links to Productive, PRs, Slack threads… The url fields productive, pull_request, slack and trello fill themselves from a link of their kind in the task\'s description, and pull_request from the PR an agent opens.'),
+    h('p', { class: 'muted small' }, 'Extra attributes every task can have: links to Productive, PRs, Slack threads… The url fields productive, pull_request and slack fill themselves from a link of their kind in the task\'s description, and pull_request from the PR an agent opens.'),
     h('table', {}, h('tbody', {}, b.fields.map(f => h('tr', {},
       h('td', {}, h('code', {}, f.key)), h('td', {}, f.label), h('td', { class: 'muted' }, f.type),
       h('td', {}, h('button', {
@@ -1928,7 +1928,7 @@ async function renderSettings() {
       : h('p', { class: 'muted' }, 'No rules yet.'));
 
   view.replaceChildren(h('div', { style: 'max-width:900px' }, projects, lanes, workdirsPanel(settings.workdirs, rerender), rulesPanel,
-    skillsPanel(skills, b, rerender), sessionPromptPanel(settings), sessionLanePanel(b.all_lanes, settings), archivePanel(b.all_lanes, settings), trelloPanel(b, trello, rerender), fields,
+    skillsPanel(skills, b, rerender), sessionPromptPanel(settings), sessionLanePanel(b.all_lanes, settings), archivePanel(b.all_lanes, settings), fields,
     kindsPanel(kinds, rerender)));
 }
 
@@ -2136,55 +2136,6 @@ function archivePanel(lanes, settings) {
     h('div', { class: 'row' },
       h('div', { class: 'grow' }, h('label', {}, 'Lane'), lane),
       h('div', {}, h('label', {}, 'After'), h('div', { class: 'row' }, amount, unitSel))));
-}
-
-// Trello sync: boards whose open cards become tasks, each with its project, lane and the lane that archives its cards.
-function trelloPanel(b, trello, rerender) {
-  const id = el => (el.value ? Number(el.value) : null);
-  const selects = x => [
-    select([['', `First project (${b.projects[0]?.name ?? ''})`], ...b.projects.map(p => [p.id, p.name])], x.project_id ?? ''),
-    select([['', `First lane (${b.all_lanes[0]?.name ?? ''})`], ...b.all_lanes.map(l => [l.id, l.name])], x.lane_id ?? ''),
-    select([['', 'Done lane: none'], ...b.all_lanes.map(l => [l.id, 'Done lane: ' + l.name])], x.done_lane_id ?? ''),
-  ];
-  const body = (board, [project, lane, done]) => ({ board: board.value, project_id: id(project), lane_id: id(lane), done_lane_id: id(done) });
-  const status = x => !trello.configured ? null
-    : x.error ? h('span', { style: 'color:var(--danger)' }, `Last sync failed: ${x.error}`)
-      : h('span', { class: 'muted' }, x.last_sync_at ? `Last synced ${fmtTime(x.last_sync_at)}` : 'Not synced yet');
-  const row = (board, sels, ...end) => h('div', { class: 'row' }, h('div', { class: 'grow' }, board), sels.map(el => h('div', {}, el)), ...end);
-
-  const boards = trello.boards.map(x => {
-    const board = h('input', { value: x.board, title: 'Board URL, short link or id' });
-    const sels = selects(x);
-    const save = async () => { await api('PUT', `/api/trello/boards/${x.id}`, body(board, sels)); toast('Saved'); };
-    [board, ...sels].forEach(el => el.addEventListener('change', save));
-    return h('div', { style: 'margin-bottom:10px' },
-      row(board, sels, h('button', {
-        class: 'danger', title: 'Stop syncing this board; its tasks stay',
-        onclick: async () => {
-          if (confirm(`Stop syncing ${x.board}? Its tasks stay here.`)) { await api('DELETE', `/api/trello/boards/${x.id}`); rerender(); }
-        },
-      }, 'Remove')),
-      h('div', { class: 'small' }, status(x)));
-  });
-
-  const board = h('input', { placeholder: 'https://trello.com/b/…' });
-  const sels = selects({});
-  const add = async () => {
-    if (!board.value.trim()) { toast('Enter a board URL'); return; }
-    await api('POST', '/api/trello/boards', body(board, sels));
-    rerender();
-  };
-  board.addEventListener('keydown', e => { if (e.key === 'Enter') add(); });
-
-  return h('div', { class: 'panel' }, h('h2', {}, 'Trello'),
-    h('p', { class: 'muted small' }, "Every minute each board's open cards become tasks in its project, with their description and due date, and a card's new due date updates its task. A task moved into its board's done lane gets its card archived on Trello; moved out again, the card comes back."),
-    !trello.configured ? h('p', { class: 'small muted' }, 'Off: add trello_key and trello_token to ~/.assistant/config.json and restart.') : null,
-    boards.length ? boards : h('p', { class: 'muted' }, 'No boards yet.'),
-    row(board, sels, h('button', { onclick: add }, 'Add')),
-    h('div', { class: 'row', style: 'margin-top:10px' }, h('div', { class: 'grow' }), h('button', {
-      class: 'ghost', disabled: !trello.configured || !trello.boards.length,
-      onclick: async () => { await api('POST', '/api/trello/sync'); rerender(); },
-    }, 'Sync now')));
 }
 
 // A rule with neither prompt nor skill moves the task to its done lane once an agent turn on it finishes.

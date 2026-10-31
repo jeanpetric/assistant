@@ -31,15 +31,6 @@ One Go binary, one SQLite file, no JavaScript build step.
 - **Due times & quick reminders**: any task can have a due time; when it's reached you get a
   notification. *⏰ Reminder* (`⌥R`) creates a reminder task in two keystrokes, with presets
   like *15 min* or *Tomorrow 9:00*.
-- **Trello**: with `trello_key` and `trello_token` in the config, *Settings → Trello* syncs any
-  number of boards, each with its own project, lane and *Done lane*. Every minute a board's open
-  cards become tasks (title, description, due date, a *Trello card* link) in its project and
-  lane; a due date changed on Trello updates its task. Moving a task into its board's *Done lane*
-  archives the card on Trello; moving it out brings the card back. A removed board's tasks stay,
-  and adding it again doesn't import them twice. The MCP tools `list_trello_boards`,
-  `add_trello_board`, `update_trello_board` and `remove_trello_board` do the same.
-  Create the key at trello.com/power-ups/admin and a token with read and write scope from the
-  key's page (*Allowed origins* doesn't matter: the server calls Trello, not the browser).
 
 ### Agent sessions
 
@@ -132,8 +123,6 @@ Settings live in `~/.assistant/config.json` (created with defaults on first run)
   "workdir": "$HOME",
   "agent": "claude",
   "mode": "bypassPermissions",
-  "trello_key": "",
-  "trello_token": "",
   "sync_listen": "",
   "sync_server": "",
   "sync_key": "~/.assistant/sync_ed25519",
@@ -142,7 +131,7 @@ Settings live in `~/.assistant/config.json` (created with defaults on first run)
 ```
 
 Every key also has a flag that overrides the file for one run: `-port`, `-db`, `-claude`,
-`-claude-args`, `-gemini`, `-gemini-args`, `-workdir`, `-agent`, `-mode`, `-trello-key`, `-trello-token`, `-sync-listen`, `-sync-server`, `-sync-key`, `-slack-token-file`, plus `-config` to point at another file. Avoid ports
+`-claude-args`, `-gemini`, `-gemini-args`, `-workdir`, `-agent`, `-mode`, `-sync-listen`, `-sync-server`, `-sync-key`, `-slack-token-file`, plus `-config` to point at another file. Avoid ports
 6665–6669: browsers refuse them.
 
 Agents run with your user's permissions. The server only binds to 127.0.0.1 and rejects

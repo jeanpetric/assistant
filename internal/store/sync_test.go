@@ -216,8 +216,8 @@ func TestSyncNamesRowsByKey(t *testing.T) {
 		}
 	}
 	exec(t, s, `INSERT INTO field_defs (key, label, position) VALUES ('jira', 'Jira', 9)`,
-		fmt.Sprintf(`INSERT INTO trello_cards (card_id, task_id) VALUES ('abc123', %d)`, task.ID))
-	if got := outbox(t, s); !slices.Equal(got, []string{`insert field_defs ["jira"]`, `insert trello_cards ["abc123"]`}) {
+		`INSERT INTO task_kinds (name, position) VALUES ('bug', 9)`)
+	if got := outbox(t, s); !slices.Equal(got, []string{`insert field_defs ["jira"]`, `insert task_kinds ["bug"]`}) {
 		t.Fatalf("text keys: %v", got)
 	}
 }
@@ -346,7 +346,9 @@ func TestSyncTriggersOnReopen(t *testing.T) {
 		`DROP TABLE task_messages`, `DROP TABLE local_paths`, `DROP TABLE local_settings`, `DROP TRIGGER local_paths_project`,
 		`DROP TRIGGER local_paths_task`, `DROP TRIGGER local_paths_rule`, `DROP TABLE slack_channels`, `DROP TABLE slack_messages`,
 		`DROP TRIGGER slack_channels_task`, `DROP TRIGGER slack_channels_session`, `DROP TRIGGER slack_messages_session`,
-		`DROP TABLE task_kinds`)
+		`DROP TABLE task_kinds`, `CREATE TABLE trello_cards (card_id TEXT PRIMARY KEY)`, `CREATE TABLE trello_boards (id INTEGER PRIMARY KEY)`,
+		`ALTER TABLE settings ADD COLUMN trello_board TEXT`, `ALTER TABLE settings ADD COLUMN trello_project_id INTEGER`,
+		`ALTER TABLE settings ADD COLUMN trello_lane_id INTEGER`, `ALTER TABLE settings ADD COLUMN trello_done_lane_id INTEGER`)
 	migrations = append(migrations, `UPDATE lanes SET name = 'Migrated' WHERE id = 1;`)
 	defer func() { migrations = migrations[:len(migrations)-1] }()
 	s.Close()

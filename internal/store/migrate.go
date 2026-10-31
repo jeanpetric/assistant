@@ -668,6 +668,22 @@ INSERT OR IGNORE INTO task_kinds (name, position)
 		SELECT kind FROM tasks UNION SELECT kind FROM transition_rules UNION SELECT kind FROM skill_automations
 	) WHERE kind != '' AND kind NOT IN ('task', 'coding', 'research', 'discussion', 'reminder');
 `,
+	// The Trello sync is gone: its tables, the settings' trello_* columns, the
+	// Trello card field with its values, and the sync bookkeeping of their rows.
+	`
+DROP TABLE trello_cards;
+DROP TABLE trello_boards;
+ALTER TABLE settings DROP COLUMN trello_board;
+ALTER TABLE settings DROP COLUMN trello_project_id;
+ALTER TABLE settings DROP COLUMN trello_lane_id;
+ALTER TABLE settings DROP COLUMN trello_done_lane_id;
+DELETE FROM task_fields WHERE key = 'trello';
+DELETE FROM field_defs WHERE key = 'trello';
+DELETE FROM sync_outbox WHERE tbl IN ('trello_cards', 'trello_boards');
+DELETE FROM sync_rows WHERE tbl IN ('trello_cards', 'trello_boards');
+DELETE FROM id_blocks WHERE tbl = 'trello_boards';
+DELETE FROM id_leases WHERE tbl = 'trello_boards';
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

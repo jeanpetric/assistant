@@ -33,8 +33,6 @@ var syncTables = map[string][]string{
 	"memories":             {"id"},
 	"memory_revisions":     {"id"},
 	"task_memories":        {"task_id", "memory_id"},
-	"trello_cards":         {"card_id"},
-	"trello_boards":        {"id"},
 	"project_hidden_lanes": {"project_id", "lane_id"},
 	"task_messages":        {"id"},
 	"task_kinds":           {"name"},
@@ -350,7 +348,14 @@ type applier struct {
 	changed [][2]string // rows the changes changed: table, key
 }
 
+// droppedTables were synced once: a node not yet upgraded may still send
+// their rows, which are skipped.
+var droppedTables = map[string]bool{"trello_cards": true, "trello_boards": true}
+
 func (a *applier) apply(c Change) error {
+	if droppedTables[c.Table] {
+		return nil
+	}
 	if _, ok := syncTables[c.Table]; !ok {
 		return errors.New("not a synced table")
 	}

@@ -14,13 +14,12 @@ func TestLinkFields(t *testing.T) {
 	a.Store.UpsertFieldDef(ctx, store.FieldDef{Key: "note", Label: "Note", Type: "text"})
 	desc := "Fix https://app.productive.io/1-org/tasks/42, see https://github.com/o/r/pull/7. " +
 		"Older: https://github.com/o/r/pull/3 and https://github.com/o/r/issues/9, " +
-		"thread https://acme.slack.com/archives/C1/p2 and https://trello.com/c/abc."
+		"thread https://acme.slack.com/archives/C1/p2."
 	got := a.LinkFields(ctx, desc, nil)
 	want := map[string]string{
 		"productive":   "https://app.productive.io/1-org/tasks/42",
 		"pull_request": "https://github.com/o/r/pull/7",
 		"slack":        "https://acme.slack.com/archives/C1/p2",
-		"trello":       "https://trello.com/c/abc",
 	}
 	if len(got) != len(want) {
 		t.Fatalf("got %v", got)
@@ -41,10 +40,10 @@ func TestLinkFields(t *testing.T) {
 	}
 
 	// Only defined url fields are filled.
-	a.Store.DeleteFieldDef(ctx, "trello")
+	a.Store.DeleteFieldDef(ctx, "slack")
 	a.Store.UpsertFieldDef(ctx, store.FieldDef{Key: "productive", Label: "Productive", Type: "text"})
 	got = a.LinkFields(ctx, desc, nil)
-	if got["trello"] != "" || got["productive"] != "" {
+	if got["slack"] != "" || got["productive"] != "" {
 		t.Fatalf("filled an undefined or text field: %v", got)
 	}
 	if got := a.LinkFields(ctx, "no links here", nil); len(got) != 0 {

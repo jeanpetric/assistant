@@ -24,7 +24,6 @@ import (
 	"github.com/jeanpetric/assistant/internal/store"
 	"github.com/jeanpetric/assistant/internal/syncauth"
 	"github.com/jeanpetric/assistant/internal/syncclient"
-	"github.com/jeanpetric/assistant/internal/trello"
 )
 
 func main() {
@@ -40,8 +39,6 @@ func main() {
 	flag.StringVar(&f.Workdir, "workdir", "", "default working directory for agent sessions (config: workdir)")
 	flag.StringVar(&f.Agent, "agent", "", "default agent for new sessions: "+strings.Join(agent.Agents, ", ")+" (config: agent)")
 	flag.StringVar(&f.Mode, "mode", "", "default permission mode: "+strings.Join(agent.Modes, ", ")+" (config: mode)")
-	flag.StringVar(&f.TrelloKey, "trello-key", "", "Trello API key (config: trello_key)")
-	flag.StringVar(&f.TrelloToken, "trello-token", "", "Trello API token (config: trello_token)")
 	flag.StringVar(&f.SyncListen, "sync-listen", "", "address to serve /sync/* on as the sync hub, e.g. 127.0.0.1:6768; empty: not a hub (config: sync_listen)")
 	flag.StringVar(&f.SyncServer, "sync-server", "", "sync hub to keep this node in sync with, e.g. https://assistant.example.com; empty: no sync (config: sync_server)")
 	flag.StringVar(&f.SyncKey, "sync-key", "", "Ed25519 key signing sync requests, created if missing (config: sync_key)")
@@ -77,10 +74,6 @@ func main() {
 			cfg.Agent = f.Agent
 		case "mode":
 			cfg.Mode = f.Mode
-		case "trello-key":
-			cfg.TrelloKey = f.TrelloKey
-		case "trello-token":
-			cfg.TrelloToken = f.TrelloToken
 		case "sync-listen":
 			cfg.SyncListen = f.SyncListen
 		case "sync-server":
@@ -138,10 +131,6 @@ func main() {
 		a.SyncRole, a.SyncServer = app.RoleClient, cfg.SyncServer
 	}
 	go a.RunScheduler(ctx, 5*time.Second)
-	if cfg.TrelloKey != "" && cfg.TrelloToken != "" {
-		a.Trello = &trello.Client{Key: cfg.TrelloKey, Token: cfg.TrelloToken}
-		go a.RunTrelloSync(ctx, time.Minute)
-	}
 	if sc, err := slackClient(cfg.SlackTokenFile); err != nil {
 		log.Fatal(err)
 	} else if sc != nil {

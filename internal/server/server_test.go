@@ -100,7 +100,7 @@ func TestBoardFlow(t *testing.T) {
 	c := newClient(t)
 	var b board
 	c.do("GET", "/api/board", nil, 200, &b)
-	if len(b.Lanes) != 5 || len(b.Fields) != 4 {
+	if len(b.Lanes) != 5 || len(b.Fields) != 3 {
 		t.Fatalf("board = %+v", b)
 	}
 	todo, wip := b.Lanes[1].ID, b.Lanes[2].ID

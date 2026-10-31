@@ -142,7 +142,7 @@ notifies once; it is not retried.
 ## 7. Manual check
 
 On a test instance, never your own: a worktree build on another port, with its own config
-(no Trello, no sync), an empty DB and a workdir in `/tmp`, the real token file.
+(no sync), an empty DB and a workdir in `/tmp`, the real token file.
 
 ```sh
 mkdir -p /tmp/slack-e2e/work

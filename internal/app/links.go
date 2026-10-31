@@ -19,7 +19,6 @@ var linkKinds = []struct {
 	{"pull_request", regexp.MustCompile(`^https://github\.com/[^/]+/[^/]+/pull/\d+`)},
 	{"productive", regexp.MustCompile(`^https://app\.productive\.io/.*/tasks?/`)},
 	{"slack", regexp.MustCompile(`^https://[^/]+\.slack\.com/archives/`)},
-	{"trello", regexp.MustCompile(`^https://trello\.com/c/`)},
 }
 
 // LinkFields returns the link fields the text fills: per kind of link, the

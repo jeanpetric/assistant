@@ -21,10 +21,6 @@ type Config struct {
 	// Agent runs sessions that name none: claude or gemini.
 	Agent string `json:"agent"`
 	Mode  string `json:"mode"`
-	// Trello API key and token (https://trello.com/power-ups/admin); both
-	// set turns the Trello sync on.
-	TrelloKey   string `json:"trello_key"`
-	TrelloToken string `json:"trello_token"`
 	// SyncListen, when set (e.g. 127.0.0.1:6768), makes this node the sync
 	// hub: /sync/* is served there, and only there, to signed requests.
 	SyncListen string `json:"sync_listen"`
