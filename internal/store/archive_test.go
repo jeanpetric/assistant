@@ -304,8 +304,11 @@ func TestSessionPromptMigrationKeepsSettings(t *testing.T) {
 	defer s.Close()
 	ctx := context.Background()
 	x, err := s.Settings(ctx)
-	if err != nil || x.ArchiveAfterMinutes != 42 || strings.Join(x.Workdirs, ",") != "/a" || x.SessionPrompt != DefaultSessionPrompt {
+	if err != nil || x.ArchiveAfterMinutes != 42 || strings.Join(x.Workdirs, ",") != "/a" {
 		t.Fatalf("settings = %+v, %v", x, err)
+	}
+	if ps, err := s.SessionPrompts(ctx); err != nil || len(ps) != 1 || ps[0].Prompt != DefaultSessionPrompt {
+		t.Fatalf("session prompts = %+v, %v", ps, err)
 	}
 	if task, err := s.Task(ctx, 1); err != nil || task.Title != "kept" {
 		t.Fatalf("task = %+v, %v", task, err)
@@ -346,8 +349,11 @@ func TestSessionLaneMigration(t *testing.T) {
 	defer s.Close()
 	ctx := context.Background()
 	x, err := s.Settings(ctx)
-	if err != nil || x.SessionLaneID == nil || *x.SessionLaneID != 3 || x.ArchiveAfterMinutes != 42 || x.SessionPrompt != "mine" {
+	if err != nil || x.SessionLaneID == nil || *x.SessionLaneID != 3 || x.ArchiveAfterMinutes != 42 {
 		t.Fatalf("settings = %+v, %v", x, err)
+	}
+	if ps, err := s.SessionPrompts(ctx); err != nil || len(ps) != 1 || ps[0].Prompt != "mine" {
+		t.Fatalf("session prompts = %+v, %v", ps, err)
 	}
 	if task, err := s.Task(ctx, 1); err != nil || task.Title != "kept" || task.LaneID != 3 {
 		t.Fatalf("task = %+v, %v", task, err)

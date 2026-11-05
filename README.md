@@ -73,6 +73,11 @@ One Go binary, one SQLite file, no JavaScript build step.
   and runs after a successful turn on a matching task, before the task moves to its done lane;
   run one by hand with *Run skill…*. A skill can use its own model for its turn and keep the
   reply as an **artifact** shown on the task. Ships with a *Research summary* skill (off).
+- **Session prompts** (*Settings → Session prompts*): templates added to the system prompt of
+  every agent turn, so a session in another repo knows it runs for this app. Each goes to every
+  project or only to the projects you tick; a session gets all of its project's, in order.
+  Fields: `{{.Project.Name}}`, `{{.Project.ID}}`, `{{.Task.ID}}`, `{{.Task.Title}}`,
+  `{{.Session.ID}}`, `{{.Session.Workdir}}`.
 - **Recurring schedules** per task (cron syntax): start an agent session or create a reminder.
 - **Notifications** for reminders, due tasks, agents that need you and failed automations — also
   as desktop notifications while the board is open in a browser tab. Clicking one opens the
@@ -184,6 +189,8 @@ Tools cover the whole app:
 - **Sessions**: `start_session`, `list_sessions`, `get_session`, `send_message`,
   `summarize_session`, `dismiss_needs_input`
 - **Skills**: `list_skills`, `create_skill`, `update_skill`, `delete_skill`, `run_skill`
+- **Session prompts**: `list_session_prompts`, `create_session_prompt`, `update_session_prompt`,
+  `delete_session_prompt`
 - **Memory**: `list_memories`, `search_memories`, `get_memory`, `create_memory`,
   `update_memory`, `delete_memory`, `remember`, `update_memories_from_session`
 

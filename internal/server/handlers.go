@@ -182,7 +182,6 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		store.Settings
-		SessionPrompt *string         `json:"session_prompt"`
 		SessionLaneID json.RawMessage `json:"session_lane_id"`
 	}
 	if err := decode(r, &in); err != nil {
@@ -194,15 +193,6 @@ func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeErr(w, err)
 		return
-	}
-	// Leaving session_prompt out keeps the saved one.
-	x.SessionPrompt = cur.SessionPrompt
-	if in.SessionPrompt != nil {
-		x.SessionPrompt = *in.SessionPrompt
-		if _, err := app.RenderSessionPrompt(x.SessionPrompt, app.SessionPromptData{}); err != nil {
-			writeErr(w, badRequest{"session_prompt: " + err.Error()})
-			return
-		}
 	}
 	if x.ArchiveAfterMinutes < 0 {
 		writeErr(w, badRequest{"archive_after_minutes must not be negative"})
@@ -1531,6 +1521,95 @@ func (s *Server) deleteRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.app.Store.DeleteRule(r.Context(), id); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(204)
+}
+
+// ---- session prompts ----
+
+func (s *Server) listSessionPrompts(w http.ResponseWriter, r *http.Request) {
+	xs, err := s.app.Store.SessionPrompts(r.Context())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, xs)
+}
+
+func (s *Server) createSessionPrompt(w http.ResponseWriter, r *http.Request) {
+	x := store.SessionPrompt{AllProjects: true}
+	if err := decode(r, &x); err != nil {
+		writeErr(w, err)
+		return
+	}
+	x.ID = 0
+	s.saveSessionPrompt(w, r, x)
+}
+
+// updateSessionPrompt changes the given keys only; project_ids, if given,
+// replaces the list.
+func (s *Server) updateSessionPrompt(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	x, err := s.app.Store.SessionPrompt(r.Context(), id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	cur := x.ProjectIDs
+	x.ProjectIDs = nil // decoding into the old list would mix old and new entries
+	if err := decode(r, &x); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if x.ProjectIDs == nil {
+		x.ProjectIDs = cur
+	}
+	x.ID = id
+	s.saveSessionPrompt(w, r, x)
+}
+
+func (s *Server) saveSessionPrompt(w http.ResponseWriter, r *http.Request, x store.SessionPrompt) {
+	if x.Name = strings.TrimSpace(x.Name); x.Name == "" {
+		writeErr(w, badRequest{"name is required"})
+		return
+	}
+	if _, err := app.RenderSessionPrompt(x.Prompt, app.SessionPromptData{}); err != nil {
+		writeErr(w, badRequest{"prompt: " + err.Error()})
+		return
+	}
+	ids := []int64{}
+	for _, id := range x.ProjectIDs {
+		if id == 0 || slices.Contains(ids, id) {
+			continue
+		}
+		if err := s.checkProject(r.Context(), id); err != nil {
+			writeErr(w, err)
+			return
+		}
+		ids = append(ids, id)
+	}
+	x.ProjectIDs = ids
+	saved, err := s.app.Store.SaveSessionPrompt(r.Context(), x)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, saved)
+}
+
+func (s *Server) deleteSessionPrompt(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.app.Store.DeleteSessionPrompt(r.Context(), id); err != nil {
 		writeErr(w, err)
 		return
 	}

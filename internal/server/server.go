@@ -95,6 +95,10 @@ func (s *Server) routes() {
 	m.HandleFunc("PUT /api/rules/{id}", s.saveRule)
 	m.HandleFunc("DELETE /api/rules/{id}", s.deleteRule)
 
+	m.HandleFunc("GET /api/session-prompts", s.listSessionPrompts)
+	m.HandleFunc("POST /api/session-prompts", s.createSessionPrompt)
+	m.HandleFunc("PATCH /api/session-prompts/{id}", s.updateSessionPrompt)
+	m.HandleFunc("DELETE /api/session-prompts/{id}", s.deleteSessionPrompt)
 	m.HandleFunc("GET /api/skills", s.listSkills)
 	m.HandleFunc("POST /api/skills", s.createSkill)
 	m.HandleFunc("PATCH /api/skills/{id}", s.updateSkill)

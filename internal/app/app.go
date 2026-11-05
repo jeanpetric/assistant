@@ -1258,7 +1258,7 @@ func renderPrompt(tmpl string, task store.Task, context string) (string, error) 
 	return strings.TrimSpace(buf.String()), err
 }
 
-// SessionPromptData is what the session prompt (Settings.SessionPrompt) can
+// SessionPromptData is what a session prompt (store.SessionPrompt) can
 // reference, e.g. "{{.Project.Name}}", "{{.Task.ID}}" or "{{.Session.Workdir}}".
 // Task is zero for a standalone session.
 type SessionPromptData struct {
@@ -1278,27 +1278,29 @@ func RenderSessionPrompt(tmpl string, d SessionPromptData) (string, error) {
 	return strings.TrimSpace(buf.String()), err
 }
 
-// sessionPrompt is the settings' session prompt for sess, rendered afresh each
+// sessionPrompt is the session prompts for sess's project, rendered afresh each
 // turn so it follows renames, then for a session on a task the ActivityNote,
 // and for the orchestrator of the task's Slack channel the OrchestratorNote.
 // A session without a project gets the first one, where tasks go when no
 // project is named.
 func (a *App) sessionPrompt(ctx context.Context, sess store.Session) (string, error) {
 	prompt, err := a.settingsPrompt(ctx, sess)
-	if err != nil || sess.TaskID == 0 {
+	if sess.TaskID == 0 {
 		return prompt, err
 	}
 	prompt = strings.TrimSpace(prompt + "\n\n" + fmt.Sprintf(ActivityNote, sess.TaskID, sess.ID))
-	note, err := a.orchestratorNote(ctx, sess)
+	note, noteErr := a.orchestratorNote(ctx, sess)
 	if note != "" {
 		prompt += "\n\n" + note
 	}
-	return prompt, err
+	return prompt, errors.Join(err, noteErr)
 }
 
+// settingsPrompt renders the session prompts for the session's project, in
+// order, separated by blank lines; empty renders are left out.
 func (a *App) settingsPrompt(ctx context.Context, sess store.Session) (string, error) {
-	set, err := a.Store.Settings(ctx)
-	if err != nil || strings.TrimSpace(set.SessionPrompt) == "" {
+	prompts, err := a.Store.SessionPrompts(ctx)
+	if err != nil || len(prompts) == 0 {
 		return "", err
 	}
 	d := SessionPromptData{Session: sess}
@@ -1319,7 +1321,21 @@ func (a *App) settingsPrompt(ctx context.Context, sess store.Session) (string, e
 	if err != nil {
 		return "", err
 	}
-	return RenderSessionPrompt(set.SessionPrompt, d)
+	// A prompt that fails to render is left out; the others still go.
+	var parts []string
+	var errs []error
+	for _, p := range prompts {
+		if !p.AppliesTo(d.Project.ID) {
+			continue
+		}
+		text, err := RenderSessionPrompt(p.Prompt, d)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%q: %w", p.Name, err))
+		} else if text != "" {
+			parts = append(parts, text)
+		}
+	}
+	return strings.Join(parts, "\n\n"), errors.Join(errs...)
 }
 
 // Limits on what TaskBrief takes from each task the brief's task builds on.

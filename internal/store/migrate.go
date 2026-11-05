@@ -684,6 +684,22 @@ DELETE FROM sync_rows WHERE tbl IN ('trello_cards', 'trello_boards');
 DELETE FROM id_blocks WHERE tbl = 'trello_boards';
 DELETE FROM id_leases WHERE tbl = 'trello_boards';
 `,
+	// Session prompts are a list, each for every project or for the projects
+	// in project_ids (a JSON array). The one prompt there was carries over as
+	// Default for every project; settings.session_prompt stays, unused.
+	`
+CREATE TABLE session_prompts (
+	id INTEGER PRIMARY KEY,
+	name TEXT NOT NULL,
+	prompt TEXT NOT NULL,
+	all_projects INTEGER NOT NULL DEFAULT 1,
+	project_ids TEXT NOT NULL DEFAULT '[]',
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL
+);
+INSERT INTO session_prompts (id, name, prompt, all_projects, project_ids, created_at, updated_at)
+	SELECT 1, 'Default', session_prompt, 1, '[]', 0, 0 FROM settings WHERE id = 1 AND trim(session_prompt) != '';
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

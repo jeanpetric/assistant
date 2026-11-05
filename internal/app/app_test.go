@@ -1813,19 +1813,20 @@ func TestGeminiAsDefaultAgent(t *testing.T) {
 	a.Wait()
 }
 
-// Every turn carries the settings' session prompt, rendered for the session's
+// Every turn carries the session prompt, rendered for the session's
 // project and task, so an agent working in another repo knows its app.
 func TestSessionPrompt(t *testing.T) {
 	a, r := newApp(t)
 	ctx := context.Background()
 	p, _ := a.Store.CreateProject(ctx, store.Project{Name: "Fantastica", Workdir: "/fantastica"})
 	task, _ := a.Store.CreateTask(ctx, store.Task{Title: "Ship it", ProjectID: p.ID})
-	set, _ := a.Store.Settings(ctx)
-	if !strings.Contains(set.SessionPrompt, "{{.Project.ID}}") {
-		t.Fatalf("default session prompt = %q", set.SessionPrompt)
+	prompts, _ := a.Store.SessionPrompts(ctx)
+	if len(prompts) != 1 || !strings.Contains(prompts[0].Prompt, "{{.Project.ID}}") {
+		t.Fatalf("default session prompts = %+v", prompts)
 	}
-	set.SessionPrompt = "Project {{.Project.Name}} ({{.Project.ID}}){{if .Task.ID}}, task #{{.Task.ID}} {{.Task.Title}}{{end}}, session #{{.Session.ID}} in {{.Session.Workdir}}"
-	a.Store.SaveSettings(ctx, set)
+	set := prompts[0]
+	set.Prompt = "Project {{.Project.Name}} ({{.Project.ID}}){{if .Task.ID}}, task #{{.Task.ID}} {{.Task.Title}}{{end}}, session #{{.Session.ID}} in {{.Session.Workdir}}"
+	a.Store.SaveSessionPrompt(ctx, set)
 
 	sess, err := a.StartSession(ctx, StartOpts{TaskID: task.ID, Prompt: "go"})
 	if err != nil {
@@ -1837,8 +1838,8 @@ func TestSessionPrompt(t *testing.T) {
 	a.Wait()
 	standalone, _ := a.StartSession(ctx, StartOpts{Prompt: "hi", Workdir: "/x"})
 	a.Wait()
-	set.SessionPrompt = "  "
-	a.Store.SaveSettings(ctx, set)
+	set.Prompt = "  "
+	a.Store.SaveSessionPrompt(ctx, set)
 	a.StartSession(ctx, StartOpts{Prompt: "quiet"})
 	a.Wait()
 
@@ -1864,6 +1865,53 @@ func TestSessionPrompt(t *testing.T) {
 	// The transcript shows what the user sent, not the system prompt.
 	if msgs, _ := a.Store.Messages(ctx, sess.ID, 0); msgs[0].Content != "go" {
 		t.Fatalf("first message = %q", msgs[0].Content)
+	}
+}
+
+// A session gets the prompts for its project, in order, each separated by a
+// blank line: those for every project and those linked to its project.
+// Empty renders are left out; one that fails to render leaves the rest.
+func TestSessionPromptsPerProject(t *testing.T) {
+	a, r := newApp(t)
+	ctx := context.Background()
+	web, _ := a.Store.CreateProject(ctx, store.Project{Name: "Web"})
+	docs, _ := a.Store.CreateProject(ctx, store.Project{Name: "Docs"})
+	webTask, _ := a.Store.CreateTask(ctx, store.Task{Title: "w", ProjectID: web.ID})
+	prompts, _ := a.Store.SessionPrompts(ctx)
+	a.Store.DeleteSessionPrompt(ctx, prompts[0].ID)
+	for _, p := range []store.SessionPrompt{
+		{Name: "all", Prompt: "All {{.Project.Name}}", AllProjects: true},
+		{Name: "web", Prompt: "Web only", ProjectIDs: []int64{web.ID}},
+		{Name: "both", Prompt: "Web and docs", ProjectIDs: []int64{docs.ID, web.ID}},
+		{Name: "empty", Prompt: "{{if .Task.ID}}on a task{{end}}", ProjectIDs: []int64{docs.ID}},
+		{Name: "broken", Prompt: "{{.Task.Nope}}", ProjectIDs: []int64{docs.ID}},
+	} {
+		if _, err := a.Store.SaveSessionPrompt(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a.StartSession(ctx, StartOpts{Prompt: "a", ProjectID: web.ID})
+	a.Wait()
+	a.StartSession(ctx, StartOpts{Prompt: "b", ProjectID: docs.ID})
+	a.Wait()
+	a.StartSession(ctx, StartOpts{Prompt: "c"}) // the first project, Assistant
+	a.Wait()
+	sess, _ := a.StartSession(ctx, StartOpts{Prompt: "d", TaskID: webTask.ID})
+	a.Wait()
+	want := []string{
+		"All Web\n\nWeb only\n\nWeb and docs",
+		"All Docs\n\nWeb and docs",
+		"All Assistant",
+		"All Web\n\nWeb only\n\nWeb and docs\n\n" + fmt.Sprintf(ActivityNote, webTask.ID, sess.ID),
+	}
+	reqs := r.requests()
+	if len(reqs) != len(want) {
+		t.Fatalf("requests = %+v", reqs)
+	}
+	for i, w := range want {
+		if reqs[i].SystemPrompt != w {
+			t.Errorf("session %d system prompt = %q, want %q", i, reqs[i].SystemPrompt, w)
+		}
 	}
 }
 

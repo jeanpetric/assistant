@@ -101,6 +101,8 @@ func schema(required []string, props map[string]any) map[string]any {
 	return s
 }
 
+const sessionPromptFields = "{{.Project.Name}}, {{.Project.ID}}, {{.Task.ID}}, {{.Task.Title}}, {{.Session.ID}}, {{.Session.Workdir}}"
+
 func prop(typ, desc string) map[string]any { return map[string]any{"type": typ, "description": desc} }
 
 var (
@@ -124,8 +126,11 @@ var (
 		})}
 	pSkillBody = prop("string", "Instructions for the agent (Markdown), e.g. how a summary should look and where to write it. "+
 		"A prompt template: {{.Task.Title}}, {{.Task.ID}}, {{.Fields.pull_request}}, {{.Context}}")
-	pSkillModel = prop("string", "Model the skill's turn runs with, e.g. fable; empty keeps the session's model")
-	pMemories   = map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "Ids of memories (see list_memories) linked to the task: " +
+	pSessionPrompt  = prop("string", "Go template, e.g. Project {{.Project.Name}}; fields: "+sessionPromptFields)
+	pAllProjects    = prop("boolean", "Applies to every project (default true); false: only to project_ids")
+	pPromptProjects = map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "Projects it applies to when all_projects is false"}
+	pSkillModel     = prop("string", "Model the skill's turn runs with, e.g. fable; empty keeps the session's model")
+	pMemories       = map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "Ids of memories (see list_memories) linked to the task: " +
 		"its agents read them with the task context and update them after each turn. On create, left out links those of the tasks it builds on; [] links none. " +
 		"Use search_memories to find the memories on the task's topic."}
 	pMemoryID          = prop("integer", "Memory id (see list_memories)")
@@ -363,6 +368,37 @@ func (s *Server) mcpTools() []mcpTool {
 				}
 				return "DELETE", "/api/kinds/" + url.PathEscape(name), nil, nil
 			},
+		},
+		{
+			Name: "list_session_prompts",
+			Description: "The session prompts: templates added, in this order, to the system prompt of every agent turn in a session of their projects " +
+				"(all_projects, or the projects in project_ids). Template fields: " + sessionPromptFields + ".",
+			InputSchema: schema(nil, map[string]any{}),
+			call:        fixed("GET", "/api/session-prompts", false),
+		},
+		{
+			Name:        "create_session_prompt",
+			Description: "Add a session prompt (see list_session_prompts). It applies to every project unless all_projects is false.",
+			InputSchema: schema([]string{"name", "prompt"}, map[string]any{
+				"name": prop("string", "What it is for"), "prompt": pSessionPrompt,
+				"all_projects": pAllProjects, "project_ids": pPromptProjects,
+			}),
+			call: fixed("POST", "/api/session-prompts", true),
+		},
+		{
+			Name:        "update_session_prompt",
+			Description: "Change a session prompt; only the given keys change (project_ids, if given, replaces the list).",
+			InputSchema: schema([]string{"session_prompt_id"}, map[string]any{
+				"session_prompt_id": prop("integer", "Session prompt id"), "name": prop("string", "What it is for"), "prompt": pSessionPrompt,
+				"all_projects": pAllProjects, "project_ids": pPromptProjects,
+			}),
+			call: byID("PATCH", "/api/session-prompts/%d", "session_prompt_id", true),
+		},
+		{
+			Name:        "delete_session_prompt",
+			Description: "Delete a session prompt.",
+			InputSchema: schema([]string{"session_prompt_id"}, map[string]any{"session_prompt_id": prop("integer", "Session prompt id")}),
+			call:        byID("DELETE", "/api/session-prompts/%d", "session_prompt_id", false),
 		},
 		{
 			Name:        "delete_skill",

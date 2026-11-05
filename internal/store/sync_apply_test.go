@@ -643,3 +643,36 @@ func TestApplyKinds(t *testing.T) {
 		t.Fatalf("task on b = %+v", got)
 	}
 }
+
+// Session prompts made, changed and deleted on one node are on every node
+// after a sync.
+func TestApplySessionPrompts(t *testing.T) {
+	ctx := context.Background()
+	ns := nodes(t, 2)
+	a, b := ns[0], ns[1]
+	p, err := a.CreateProject(ctx, Project{Name: "Web"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	x, err := a.SaveSessionPrompt(ctx, SessionPrompt{Name: "web", Prompt: "w", ProjectIDs: []int64{p.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	exchange(t, a, b)
+	if got, err := b.SessionPrompt(ctx, x.ID); err != nil || !slices.Equal(got.ProjectIDs, []int64{p.ID}) {
+		t.Fatalf("on b = %+v, %v", got, err)
+	}
+	ps, _ := b.SessionPrompts(ctx)
+	ps[0].Prompt = "changed on b"
+	if _, err := b.SaveSessionPrompt(ctx, ps[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.DeleteSessionPrompt(ctx, x.ID); err != nil {
+		t.Fatal(err)
+	}
+	exchange(t, a, b)
+	same(t, a, b)
+	if got, _ := a.SessionPrompts(ctx); len(got) != 1 || got[0].Prompt != "changed on b" {
+		t.Fatalf("on a = %+v", got)
+	}
+}

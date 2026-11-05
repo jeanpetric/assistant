@@ -1817,8 +1817,8 @@ async function revisionDialog(revisionId, latest, done) {
 
 async function renderSettings() {
   const b = await loadBoard();
-  const [rules, settings, skills, kinds] = await Promise.all([api('GET', '/api/rules'), api('GET', '/api/settings'), api('GET', '/api/skills'),
-    api('GET', '/api/kinds')]);
+  const [rules, settings, skills, kinds, prompts] = await Promise.all([api('GET', '/api/rules'), api('GET', '/api/settings'), api('GET', '/api/skills'),
+    api('GET', '/api/kinds'), api('GET', '/api/session-prompts')]);
   state.skills = skills;
   const rerender = () => renderSettings();
 
@@ -1928,7 +1928,7 @@ async function renderSettings() {
       : h('p', { class: 'muted' }, 'No rules yet.'));
 
   view.replaceChildren(h('div', { style: 'max-width:900px' }, projects, lanes, workdirsPanel(settings.workdirs, rerender), rulesPanel,
-    skillsPanel(skills, b, rerender), sessionPromptPanel(settings), sessionLanePanel(b.all_lanes, settings), archivePanel(b.all_lanes, settings), fields,
+    skillsPanel(skills, b, rerender), sessionPromptsPanel(prompts, b.projects, rerender), sessionLanePanel(b.all_lanes, settings), archivePanel(b.all_lanes, settings), fields,
     kindsPanel(kinds, rerender)));
 }
 
@@ -2088,19 +2088,46 @@ function workdirsPanel(dirs, rerender) {
     }));
 }
 
-// The prompt added to every agent turn, telling the agent which app and project it runs for.
-function sessionPromptPanel(settings) {
-  const text = h('textarea', { class: 'mono', rows: 8 });
-  text.value = settings.session_prompt;
-  const save = async () => {
-    const cur = await api('GET', '/api/settings');
-    await api('PUT', '/api/settings', { ...cur, session_prompt: text.value });
-    toast('Saved');
+// The prompts added to every agent turn, telling the agent which app and project it runs for:
+// each for every project or for the projects ticked.
+function sessionPromptsPanel(prompts, projects, rerender) {
+  const item = x => {
+    const name = h('input', { value: x.name, placeholder: 'Name' });
+    const text = h('textarea', { class: 'mono', rows: 8 });
+    text.value = x.prompt;
+    const all = h('input', { type: 'checkbox', checked: x.all_projects });
+    const picks = projects.map(p => h('input', { type: 'checkbox', checked: x.project_ids.includes(p.id), disabled: x.all_projects }));
+    all.addEventListener('change', () => picks.forEach(c => { c.disabled = all.checked; }));
+    const check = (box, label) => h('label', { class: 'small', style: 'display:inline-flex;gap:4px;align-items:center;margin:0 12px 0 0' }, box, label);
+    const save = async () => {
+      await api('PATCH', `/api/session-prompts/${x.id}`, {
+        name: name.value, prompt: text.value, all_projects: all.checked,
+        project_ids: projects.filter((p, i) => picks[i].checked).map(p => p.id),
+      });
+      toast('Saved');
+    };
+    const del = async () => {
+      if (!confirm(`Delete session prompt ${x.name}?`)) return;
+      await api('DELETE', `/api/session-prompts/${x.id}`);
+      rerender();
+    };
+    return h('div', { class: 'session-prompt', style: 'margin-top:12px' },
+      h('div', { class: 'row' }, h('div', { class: 'grow' }, name)), text,
+      h('div', { class: 'row', style: 'margin-top:6px;flex-wrap:wrap' }, check(all, 'All projects'),
+        projects.map((p, i) => check(picks[i], p.name))),
+      h('div', { class: 'row', style: 'margin-top:6px' }, h('button', { onclick: save }, 'Save'),
+        h('button', { class: 'danger small', onclick: del }, 'Delete')));
   };
-  return h('div', { class: 'panel' }, h('h2', {}, 'Session prompt'),
+  const add = async () => {
+    await api('POST', '/api/session-prompts', { name: 'New prompt', prompt: '', all_projects: false, project_ids: [] });
+    rerender();
+  };
+  return h('div', { class: 'panel' },
+    h('div', { class: 'row' }, h('h2', { class: 'grow' }, 'Session prompts'), h('button', { onclick: add }, '+ Add prompt')),
     h('p', { class: 'muted small' }, 'Added to the system prompt of every agent turn, so a session in another repo still knows it runs for this app. ' +
+      'Each goes to sessions in every project, or only in the projects ticked; a session gets all of its project\'s, in this order. ' +
       'Template fields: {{.Project.Name}}, {{.Project.ID}}, {{.Task.ID}}, {{.Task.Title}}, {{.Session.ID}}, {{.Session.Workdir}}. Empty sends nothing.'),
-    text, h('div', { class: 'row', style: 'margin-top:6px' }, h('button', { onclick: save }, 'Save')));
+    prompts.length ? prompts.map(item) : h('p', { class: 'muted' }, 'No session prompts.'));
 }
 
 // The lane a task made for a new agent session (⌥P) starts in.

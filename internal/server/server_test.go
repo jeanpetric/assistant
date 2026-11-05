@@ -648,17 +648,6 @@ func TestArchive(t *testing.T) {
 		t.Fatalf("after save without workdirs = %+v", set)
 	}
 
-	// The session prompt is kept when a save leaves it out and must be a valid template.
-	if set.SessionPrompt != store.DefaultSessionPrompt {
-		t.Fatalf("default session prompt = %q", set.SessionPrompt)
-	}
-	c.do("PUT", "/api/settings", map[string]any{"archive_after_minutes": 5, "session_prompt": "In {{.Project.Name}}"}, 200, &set)
-	c.do("PUT", "/api/settings", map[string]any{"archive_after_minutes": 5}, 200, nil)
-	c.do("PUT", "/api/settings", map[string]any{"archive_after_minutes": 5, "session_prompt": "{{.Project.Name"}, 400, nil)
-	c.do("GET", "/api/settings", nil, 200, &set)
-	if set.SessionPrompt != "In {{.Project.Name}}" {
-		t.Fatalf("session prompt = %q", set.SessionPrompt)
-	}
 	// New sessions' tasks start In progress; a save leaving the lane out keeps it, null means the first lane.
 	if set.SessionLaneID == nil || *set.SessionLaneID != lane["In progress"] {
 		t.Fatalf("default session lane = %v", set.SessionLaneID)
