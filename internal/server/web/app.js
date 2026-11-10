@@ -1114,17 +1114,27 @@ function newSessionPanel(task, onStarted) {
   drawContextLabel();
   const workdir = workdirSelect('', `Default (${taskWorkdir(task)})`);
   const doneLane = doneLaneSelect(state.board.all_lanes, '');
-  const start = async () => {
-    if (!prompt.value.trim()) return;
+  // With a skill the session's first turn applies it (it brings the task's context itself); the prompt, if any, goes along.
+  const start = async (skillId = null) => {
+    if (!skillId && !prompt.value.trim()) return;
     const s = await api('POST', `/api/tasks/${task.id}/sessions`, {
       prompt: prompt.value, mode: mode.value, agent: agentSel.value, model: model.value, workdir: workdir.value, include_context: ctx.checked,
-      done_lane_id: doneLaneValue(doneLane),
+      done_lane_id: doneLaneValue(doneLane), ...(skillId ? { skill_id: skillId } : {}),
     });
     prompt.value = '';
     const full = await api('GET', `/api/sessions/${s.id}`);
     onStarted(Object.assign(full.session, { messages: full.messages }));
   };
   prompt.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) start(); });
+  // Picking a skill starts a new session with it at once.
+  const runSkill = state.skills.length ? select([['', 'Run skill…'], ...state.skills.map(sk => [sk.id, sk.name])], '', {
+    class: 'small', style: 'width:auto', title: 'Start a new session that applies a skill to this task; the prompt above, if any, goes along',
+    onchange: async e => {
+      const skillId = Number(e.target.value);
+      e.target.value = '';
+      if (skillId) await start(skillId);
+    },
+  }) : null;
   const el = h('div', { class: 'panel' },
     h('h3', {}, 'New agent session'),
     prompt,
@@ -1135,7 +1145,8 @@ function newSessionPanel(task, onStarted) {
       h('div', { class: 'grow', style: 'min-width:200px' }, workdir),
       h('div', { class: 'grow', style: 'min-width:200px' }, doneLane),
       h('label', { class: 'row', style: 'margin:0' }, ctx, ctxLabel),
-      h('button', { onclick: start }, 'Start', hint('⌘↵'))));
+      runSkill,
+      h('button', { onclick: () => start() }, 'Start', hint('⌘↵'))));
   return { el, drawContextLabel };
 }
 
