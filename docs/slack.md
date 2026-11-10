@@ -3,12 +3,16 @@
 A task in the assistant can be connected to one Slack channel. From then on:
 
 - every message in the channel, top-level and in its threads, comes to the task's activity
-  thread under its author ("Ana (Slack)") and goes to the task's **orchestrator** session as its
-  next message (queued while it works);
+  thread under its author ("Ana (Slack)");
+- the messages for the bot go to the task's **orchestrator** session as its next message
+  (queued while it works): one that mentions the bot (`@bot`), and every message in a thread
+  the bot started or one of whose messages went to the orchestrator before. People talking to
+  each other without the bot stay on the task's thread only;
 - every message posted on the task's thread, by a session or by you in the assistant, goes to
   the channel (yours marked "_(iz assistenta)_", a question with "❓");
-- the orchestrator hands each request to a sub-agent (a session on a sub-task that reports back
-  to it with `report_to`) and posts the result in the request's Slack thread.
+- the orchestrator only delegates: it hands each request to a sub-agent (a session on a
+  sub-task that reports back to it with `report_to`), follow-ups to the same one, and posts the
+  result in the request's Slack thread. It does none of the work itself.
 
 Writing in Slack or on the task's thread is the same, both ways.
 
@@ -95,11 +99,20 @@ gets, after the usual activity-thread note, the orchestrator note (`Orchestrator
 `internal/app/slack_sync.go`):
 
 - messages starting with `[Slack #channel]` come from people in the channel, a line each:
-  `Name — task_message N, ts T, thread R: text`;
+  `Name — task_message N, ts T, thread R: text`; only those for the bot (see above), the rest
+  are on the task's thread (`get_task`);
+- its job is delegation only: no code, files, research or answers of its own, however short
+  the request;
 - for each new request it creates a sub-task (`create_task`, same project, `context_from` the
-  task if needed) and starts a session on it with `report_to` = its own session id, posts in
-  the request's thread that the work has started, and ends its turn;
-- short questions and clarifications it answers itself;
+  task, a description of what is asked, by whom, in which thread) and starts a session on it
+  with `report_to` = its own session id, posts in the request's thread that the work has
+  started, naming the sub-task, and ends its turn;
+- a follow-up in a request's thread goes to that request's sub-task (`send_message` to its
+  session, or a new `start_session` on it with `report_to` once that one is done), not a new one;
+- it keeps track of its sub-tasks (what each was asked, its thread, what it reported) and may
+  answer from that, with `get_task` on a sub-task for its state;
+- a request too unclear to hand over gets one question in its thread; a message that asks
+  nothing of it (people talking, a thanks) gets no reply;
 - when "Session #N … finished:" / "failed:" / "asks:" comes, it posts the resolution with
   `post_task_message` and `reply_to` the original request; a sub-agent's question goes to the
   same thread and the answer back with `send_message`;
@@ -133,7 +146,8 @@ notifies once; it is not retried.
 - The bot's own messages and system messages (joins, topic …) are skipped; `<@U…>` becomes
   `@Name`. Files, reactions and edits are not taken in.
 - Each message handed to the orchestrator gets the bot's :eyes:, so the channel sees it was
-  picked up; one that waits on the task's thread (no orchestrator) gets none. The reaction
+  picked up; one not for the bot, or one that waits on the task's thread (no orchestrator),
+  gets none. The reaction
   stays: the answer in the thread shows the rest.
 - A message over 12,000 characters goes out in parts, the rest in the first one's thread.
 - No allowlist: anyone in the channel can give the orchestrator work, which runs with the
@@ -153,10 +167,12 @@ go build -o /tmp/slack-e2e/assistant ./cmd/assistant
 
 1. [ ] Create a test task; connect it to the test channel without a session: an orchestrator
        session "Slack #…" starts, the dialog shows `#channel`, "Synced …".
-2. [ ] Write a request in the channel (as a person, not the bot): it shows on the task's thread
-       as "Name (Slack)", the bot puts :eyes: on it, the orchestrator gets it, creates a
+2. [ ] Write a message without mentioning the bot: it shows on the task's thread, no :eyes:,
+       the orchestrator gets nothing. Write a request mentioning the bot (as a person, not the
+       bot): it shows on the task's thread as "Name (Slack)", the bot puts :eyes: on it, the orchestrator gets it, creates a
        sub-task with a session reporting to it, and says in the request's thread that work started.
-3. [ ] The sub-session finishes: the orchestrator posts the result in the same thread.
+3. [ ] The sub-session finishes: the orchestrator posts the result in the same thread. A
+       follow-up there without a mention goes to the same sub-task, not a new one.
 4. [ ] A request that needs a decision: the sub-agent asks, the question shows in the thread,
        your answer there goes back to the sub-agent, and the result follows.
 5. [ ] "Write X at the top of the channel": it is posted top-level.

@@ -212,6 +212,26 @@ func (s *Store) SetSlackDelivered(ctx context.Context, channelID string, ts []st
 	})
 }
 
+// SlackEngagedThreads gives the channel's Slack threads (their roots' ts)
+// that a message of went to a session.
+func (s *Store) SlackEngagedThreads(ctx context.Context, channelID string) (map[string]bool, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT CASE thread_ts WHEN '' THEN ts ELSE thread_ts END FROM slack_messages
+		WHERE channel_id = ? AND delivered_to IS NOT NULL`, channelID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var thread string
+		if err := rows.Scan(&thread); err != nil {
+			return nil, err
+		}
+		out[thread] = true
+	}
+	return out, rows.Err()
+}
+
 // SlackLastThread gives the Slack thread (its root's ts) of the latest of
 // the channel's messages that went to the session; ErrNotFound if none did.
 func (s *Store) SlackLastThread(ctx context.Context, channelID string, sessionID int64) (string, error) {

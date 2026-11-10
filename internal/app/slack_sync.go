@@ -97,15 +97,19 @@ const OrchestratorStart = "You are connected to the Slack channel #%s and are it
 	"Nothing to do yet: don't post on the task's thread (it goes to the channel), reply in a word and end your turn."
 
 // OrchestratorNote follows the ActivityNote in the system prompt of the
-// orchestrator of the task's Slack channel: it hands each request to a
-// sub-agent and posts what comes back in the request's thread. Its verbs are
-// the MCP tools'.
-const OrchestratorNote = `You are the orchestrator of this task's Slack channel #%[1]s: what people post in the channel and its threads comes to you, and what you post on the task's thread with post_task_message goes to the channel. ` +
-	`Messages starting with "[Slack #%[1]s]" come from people in the channel, a line each with the author, its task_message id, ts and thread, and the text. ` +
-	`For each new request create a sub-task (create_task in project %[2]d, with context_from [%[3]d] if it needs this task's context) and start a session on it (start_session with report_to %[4]d, your session id); ` +
-	`then post in the request's thread that the work has started (post_task_message with reply_to its task_message id) and end your turn. ` +
-	`Short questions and clarifications you answer yourself, without a sub-agent. ` +
-	`When "Session #N … finished:", "failed:" or "asks:" comes, post the resolution with post_task_message and reply_to the original request; ` +
+// orchestrator of the task's Slack channel. It only delegates: each request
+// goes to a sub-agent, follow-ups to the same one, and it posts what comes
+// back in the request's thread; it does none of the work itself. Its verbs
+// are the MCP tools'.
+const OrchestratorNote = `You are the orchestrator of this task's Slack channel #%[1]s: what people post in the channel and its threads comes to the task's thread, and what you post there with post_task_message goes to the channel. ` +
+	`Of those messages you get the ones for you: a message mentioning the bot, and any in a thread you are in. They start with "[Slack #%[1]s]", a line each with the author, its task_message id, ts and thread, and the text; the channel's other messages are only on the task's thread (get_task %[3]d). ` +
+	`Your job is delegation only. Never do the work yourself: no reading or changing code or files, no research or searches, no answers from your own knowledge, however short the request. ` +
+	`For each new request create a sub-task (create_task in project %[2]d, with context_from [%[3]d] so it sees the channel's messages, and a description that says what is asked, by whom and the Slack thread), and start a session on it (start_session with report_to %[4]d, your session id); ` +
+	`then post in the request's thread that the work has started, naming the sub-task (post_task_message with reply_to its task_message id), and end your turn. ` +
+	`A follow-up in a request's thread (more detail, a change, "and also …") goes to that request's sub-task: send_message to its session, or start_session on the sub-task with report_to %[4]d if the session is done; a new sub-task only for a new request. ` +
+	`Keep track of your sub-tasks: what each was asked, its thread, and what it reported. You may answer from that alone, with get_task on a sub-task when you need its state: whether it is done, what it found, what it is waiting for. ` +
+	`A request too unclear to hand over gets one question in its thread; a message in a thread that asks nothing of you (people talking to each other, a thanks) gets nothing: end your turn without posting. ` +
+	`When "Session #N … finished:", "failed:" or "asks:" comes, post the result with post_task_message and reply_to the original request, as the sub-agent gave it, shortened only if long; ` +
 	`a sub-agent's question goes to that same thread, and the answer back to the sub-agent with send_message. ` +
 	`Reply in the thread of the message you answer; post at the top of the channel (top_level) only when someone explicitly asks for it. ` +
 	`Everything you post reaches the channel, so these replies are your messages on the task's thread: post no other summaries.`
@@ -242,14 +246,18 @@ func (a *App) setSlackStatus(ctx context.Context, c store.SlackChannel, err erro
 }
 
 // slackIn is a message new to a poll: a top-level one has no thread.
+// botRoot: its thread was started by the bot.
 type slackIn struct {
-	msg    slack.Message
-	thread string
+	msg     slack.Message
+	thread  string
+	botRoot bool
 }
 
-// pollSlack takes the channel's new messages in and passes them to its
-// orchestrator. It returns how that went: nil if none came, else why they
-// could not go there ("": they did).
+// pollSlack takes the channel's new messages in and passes those for the bot
+// to its orchestrator: a message mentioning the bot, and one in a thread the
+// bot started or a message of went to a session before. The others only come
+// to the task's thread. It returns how passing them went: nil if none came,
+// else why they could not go there ("": they did).
 func (a *App) pollSlack(ctx context.Context, c store.SlackChannel) (*string, error) {
 	roots, err := a.Slack.History(ctx, c.ChannelID, "", slackHistory)
 	if err != nil {
@@ -263,6 +271,10 @@ func (a *App) pollSlack(ctx context.Context, c store.SlackChannel) (*string, err
 	}
 	slices.SortFunc(roots, func(x, y slack.Message) int { return tsCmp(x.TS, y.TS) })
 	seen, err := a.Store.SlackThreads(ctx, c.ChannelID)
+	if err != nil {
+		return nil, err
+	}
+	engaged, err := a.Store.SlackEngagedThreads(ctx, c.ChannelID)
 	if err != nil {
 		return nil, err
 	}
@@ -306,7 +318,7 @@ func (a *App) pollSlack(ctx context.Context, c store.SlackChannel) (*string, err
 			if r.TS == m.TS || !tsAfter(r.TS, last) {
 				continue
 			}
-			in = append(in, slackIn{msg: r, thread: m.TS})
+			in = append(in, slackIn{msg: r, thread: m.TS, botRoot: a.slackMine(m)})
 			if tsAfter(r.TS, newest) {
 				newest = r.TS
 			}
@@ -333,11 +345,9 @@ func (a *App) pollSlack(ctx context.Context, c store.SlackChannel) (*string, err
 		if err != nil {
 			return nil, err
 		}
-		if added != nil {
-			thread := x.thread
-			if thread == "" {
-				thread = x.msg.TS
-			}
+		thread := cmp.Or(x.thread, x.msg.TS)
+		if added != nil && (a.slackMentionsMe(x.msg.Text) || x.thread != "" && (x.botRoot || engaged[thread])) {
+			engaged[thread] = true // its next replies are for the bot too
 			taken = append(taken, x.msg.TS)
 			lines = append(lines, fmt.Sprintf("[Slack #%s] %s — task_message %d, ts %s, thread %s: %s",
 				c.ChannelName, added.Author, added.ID, x.msg.TS, thread, added.Body))
@@ -404,10 +414,21 @@ var slackWritten = map[string]bool{"": true, "thread_broadcast": true, "file_sha
 // slackTakesIn reports whether the message is someone's, not the channel's
 // own or the bot's (the bot writes what the task's thread already has).
 func (a *App) slackTakesIn(m slack.Message) bool {
-	if !slackWritten[m.Subtype] {
+	return slackWritten[m.Subtype] && !a.slackMine(m)
+}
+
+// slackMine reports whether the bot wrote the message.
+func (a *App) slackMine(m slack.Message) bool {
+	return a.slackMe != nil && (m.User != "" && m.User == a.slackMe.UserID || m.BotID != "" && m.BotID == a.slackMe.BotID)
+}
+
+// slackMentionsMe reports whether Slack markup text mentions the bot.
+func (a *App) slackMentionsMe(text string) bool {
+	if a.slackMe == nil || a.slackMe.UserID == "" {
 		return false
 	}
-	return a.slackMe == nil || (m.User == "" || m.User != a.slackMe.UserID) && (m.BotID == "" || m.BotID != a.slackMe.BotID)
+	me := "<@" + a.slackMe.UserID
+	return strings.Contains(text, me+">") || strings.Contains(text, me+"|")
 }
 
 func (a *App) slackAuthor(ctx context.Context, m slack.Message) string {

@@ -76,9 +76,9 @@ func TestSlackPostSessionMessage(t *testing.T) {
 func TestSlackPostWhere(t *testing.T) {
 	s := newSlackApp(t)
 	ctx := context.Background()
-	first := s.f.post("C1", "UANA", "export fails", "")
+	first := s.f.ask("C1", "UANA", "export fails", "")
 	s.sync(t)
-	second := s.f.post("C1", "UIVO", "import too", "")
+	second := s.f.ask("C1", "UIVO", "import too", "")
 	s.f.post("C1", "UANA", "on staging", first)
 	s.sync(t)
 	xs, _ := s.a.Store.TaskMessages(ctx, s.task.ID)
@@ -129,7 +129,7 @@ func TestSlackPostWhere(t *testing.T) {
 // theirs, at the top unless reply_to says otherwise.
 func TestSlackPostUserMessage(t *testing.T) {
 	s := newSlackApp(t)
-	root := s.f.post("C1", "UANA", "status?", "")
+	root := s.f.ask("C1", "UANA", "status?", "")
 	s.sync(t)
 	xs, _ := s.a.Store.TaskMessages(context.Background(), s.task.ID)
 	s.post(t, store.TaskMessage{Body: "On it."}, PostOpts{})
@@ -148,7 +148,7 @@ func TestSlackPostUserMessage(t *testing.T) {
 // its author; a task with no channel posts nothing.
 func TestSlackPostNotBack(t *testing.T) {
 	s := newSlackApp(t)
-	s.f.post("C1", "UANA", "hi", "")
+	s.f.ask("C1", "UANA", "hi", "")
 	s.sync(t)
 	x := s.post(t, store.TaskMessage{Author: "Ana", Body: "from Slack"}, PostOpts{})
 	if s.f.count("chat.postMessage") != 0 || x.Slack != nil {

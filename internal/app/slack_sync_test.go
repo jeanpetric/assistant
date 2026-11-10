@@ -52,6 +52,11 @@ func (f *fakeSlack) post(channel, user, text, thread string) string {
 	return f.add(channel, slack.Message{User: user, Text: text, ThreadTS: thread})
 }
 
+// ask posts a message to the channel mentioning the bot, as post.
+func (f *fakeSlack) ask(channel, user, text, thread string) string {
+	return f.post(channel, user, "<@"+botUser+"> "+text, thread)
+}
+
 func (f *fakeSlack) add(channel string, m slack.Message) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -263,7 +268,7 @@ func TestSlackNewMessage(t *testing.T) {
 	f, c := newFakeSlack(t)
 	a.Slack = c
 	ctx := context.Background()
-	f.post("C1", "UANA", "before connecting", "")
+	f.ask("C1", "UANA", "before connecting", "")
 	a.Now = func() time.Time { return time.Unix(f.next, 500_000) } // just after it
 	task, _ := a.Store.CreateTask(ctx, store.Task{Title: "Support"})
 	sess, _ := a.StartSession(ctx, StartOpts{TaskID: task.ID, Prompt: "orchestrate"})
@@ -274,13 +279,13 @@ func TestSlackNewMessage(t *testing.T) {
 	}
 	s := slackSetup{a: a, r: r, f: f, task: task, sess: sess}
 
-	ts := f.post("C1", "UANA", "hey <@UIVO>, the export &amp; import fail", "")
+	ts := f.ask("C1", "UANA", "hey <@UIVO>, the export &amp; import fail", "")
 	s.sync(t)
 	xs, _ := a.Store.TaskMessages(ctx, task.ID)
-	if len(xs) != 1 || xs[0].Author != "Ana" || xs[0].Body != "hey @Ivo, the export & import fail" || xs[0].SessionID != nil {
+	if len(xs) != 1 || xs[0].Author != "Ana" || xs[0].Body != "@JeanBot hey @Ivo, the export & import fail" || xs[0].SessionID != nil {
 		t.Fatalf("thread = %+v", xs)
 	}
-	want := fmt.Sprintf("[Slack #help] Ana — task_message %d, ts %s, thread %s: hey @Ivo, the export & import fail", xs[0].ID, ts, ts)
+	want := fmt.Sprintf("[Slack #help] Ana — task_message %d, ts %s, thread %s: @JeanBot hey @Ivo, the export & import fail", xs[0].ID, ts, ts)
 	if got := s.prompts(); !slices.Equal(got, []string{want}) {
 		t.Fatalf("prompts = %q, want %q", got, want)
 	}
@@ -301,11 +306,11 @@ func TestSlackNewMessage(t *testing.T) {
 func TestSlackReplyInThread(t *testing.T) {
 	s := newSlackApp(t)
 	f := s.f
-	root := f.post("C1", "UANA", "export fails", "")
+	root := f.ask("C1", "UANA", "export fails", "")
 	quiet := f.post("C1", "UIVO", "unrelated", "")
 	f.post("C1", "UIVO", "old reply", quiet)
 	s.sync(t)
-	if got := s.thread(t); !slices.Equal(got, []string{"Ana: export fails", "Ivo: unrelated", "Ivo: old reply"}) {
+	if got := s.thread(t); !slices.Equal(got, []string{"Ana: @JeanBot export fails", "Ivo: unrelated", "Ivo: old reply"}) {
 		t.Fatalf("thread = %v", got)
 	}
 
@@ -335,16 +340,16 @@ func TestSlackReplyInThread(t *testing.T) {
 func TestSlackOneMessagePerPoll(t *testing.T) {
 	s := newSlackApp(t)
 	f := s.f
-	root := f.post("C1", "UANA", "one", "")
+	root := f.ask("C1", "UANA", "one", "")
 	f.post("C1", "UIVO", "two", root)
-	f.post("C1", "UIVO", "three", "")
+	f.ask("C1", "UIVO", "three", "")
 	s.sync(t)
 	got := s.prompts()
 	if len(got) != 1 {
 		t.Fatalf("prompts = %q", got)
 	}
 	lines := strings.Split(got[0], "\n")
-	if len(lines) != 3 || !strings.HasSuffix(lines[0], ": one") || !strings.HasSuffix(lines[1], ": two") || !strings.HasSuffix(lines[2], ": three") ||
+	if len(lines) != 3 || !strings.HasSuffix(lines[0], " one") || !strings.HasSuffix(lines[1], ": two") || !strings.HasSuffix(lines[2], " three") ||
 		!strings.Contains(lines[1], "thread "+root+":") {
 		t.Fatalf("lines = %q", lines)
 	}
@@ -356,7 +361,7 @@ func TestSlackOneMessagePerPoll(t *testing.T) {
 func TestSlackReactsToDelivered(t *testing.T) {
 	s := newSlackApp(t)
 	f := s.f
-	root := f.post("C1", "UANA", "export fails", "")
+	root := f.ask("C1", "UANA", "export fails", "")
 	reply := f.post("C1", "UIVO", "same here", root)
 	s.sync(t)
 	for _, ts := range []string{root, reply} {
@@ -371,7 +376,7 @@ func TestSlackReactsToDelivered(t *testing.T) {
 	if _, err := s.a.ConnectSlack(context.Background(), s.task.ID, "C1", nil); err != nil {
 		t.Fatal(err)
 	}
-	waiting := f.post("C1", "UANA", "anyone?", "")
+	waiting := f.ask("C1", "UANA", "anyone?", "")
 	s.sync(t)
 	if got := f.reactions("C1", waiting); got != nil {
 		t.Fatalf("reactions on an undelivered message = %q", got)
@@ -384,8 +389,8 @@ func TestSlackReactionFailureIsIgnored(t *testing.T) {
 	s := newSlackApp(t)
 	f := s.f
 	f.fail["reactions.add"] = "missing_scope"
-	f.post("C1", "UANA", "one", "")
-	f.post("C1", "UIVO", "two", "")
+	f.ask("C1", "UANA", "one", "")
+	f.ask("C1", "UIVO", "two", "")
 	s.sync(t)
 	if len(s.prompts()) != 1 || len(s.thread(t)) != 2 {
 		t.Fatalf("prompts = %q, thread = %v", s.prompts(), s.thread(t))
@@ -401,7 +406,7 @@ func TestSlackReactionFailureIsIgnored(t *testing.T) {
 	}
 
 	delete(f.fail, "reactions.add")
-	ts := f.post("C1", "UANA", "three", "")
+	ts := f.ask("C1", "UANA", "three", "")
 	f.mu.Lock()
 	f.reacted["C1 "+ts] = []string{"eyes"}
 	f.mu.Unlock()
@@ -419,17 +424,17 @@ func TestSlackBusyOrchestratorQueues(t *testing.T) {
 	if queued, err := s.a.SendMessage(ctx, s.sess.ID, "busy"); err != nil || queued {
 		t.Fatalf("send: %v %v", queued, err)
 	}
-	s.f.post("C1", "UANA", "while busy", "")
+	s.f.ask("C1", "UANA", "while busy", "")
 	if err := s.a.SyncSlack(ctx); err != nil {
 		t.Fatal(err)
 	}
 	sess, _ := s.a.Store.Session(ctx, s.sess.ID)
-	if len(sess.Queued) != 1 || !strings.HasSuffix(sess.Queued[0].Content, ": while busy") {
+	if len(sess.Queued) != 1 || !strings.HasSuffix(sess.Queued[0].Content, " while busy") {
 		t.Fatalf("queue = %+v", sess.Queued)
 	}
 	close(s.r.block)
 	s.a.Wait()
-	if got := s.prompts(); len(got) != 2 || got[0] != "busy" || !strings.HasSuffix(got[1], ": while busy") {
+	if got := s.prompts(); len(got) != 2 || got[0] != "busy" || !strings.HasSuffix(got[1], " while busy") {
 		t.Fatalf("prompts = %q", got)
 	}
 }
@@ -464,7 +469,7 @@ func TestSlackSkipsOwnAndSystemMessages(t *testing.T) {
 func TestSlackResumesAfterPause(t *testing.T) {
 	s := newSlackApp(t)
 	f := s.f
-	root := f.post("C1", "UANA", "first", "")
+	root := f.ask("C1", "UANA", "first", "")
 	s.sync(t)
 
 	// The app is down: a new app on the same database polls next.
@@ -482,9 +487,9 @@ func TestSlackResumesAfterPause(t *testing.T) {
 	}
 	a2 := restart()
 	f.post("C1", "UIVO", "reply meanwhile", root)
-	f.post("C1", "UANA", "new meanwhile", "")
+	f.ask("C1", "UANA", "new meanwhile", "")
 	poll(a2)
-	if got := s.thread(t); !slices.Equal(got, []string{"Ana: first", "Ivo: reply meanwhile", "Ana: new meanwhile"}) {
+	if got := s.thread(t); !slices.Equal(got, []string{"Ana: @JeanBot first", "Ivo: reply meanwhile", "Ana: @JeanBot new meanwhile"}) {
 		t.Fatalf("thread = %v", got)
 	}
 	poll(a2)
@@ -496,7 +501,7 @@ func TestSlackResumesAfterPause(t *testing.T) {
 	a3 := restart()
 	var many string
 	for i := range slackHistory + 20 {
-		ts := f.post("C1", "UANA", fmt.Sprint("m", i), "")
+		ts := f.ask("C1", "UANA", fmt.Sprint("m", i), "")
 		if i == 5 {
 			many = ts
 		}
@@ -504,7 +509,7 @@ func TestSlackResumesAfterPause(t *testing.T) {
 	f.post("C1", "UIVO", "reply to m5", many)
 	poll(a3)
 	got := s.thread(t)
-	if len(got) != 3+slackHistory+21 || got[3] != "Ana: m0" || got[len(got)-1] != "Ivo: reply to m5" {
+	if len(got) != 3+slackHistory+21 || got[3] != "Ana: @JeanBot m0" || got[len(got)-1] != "Ivo: reply to m5" {
 		t.Fatalf("thread has %d: %v", len(got), got[3:6])
 	}
 	if p := s.prompts(); len(p) != 3 || strings.Count(p[2], "\n") != slackHistory+20 {
@@ -520,7 +525,7 @@ func TestSlackResumesAfterPause(t *testing.T) {
 func TestSlackDisconnect(t *testing.T) {
 	s := newSlackApp(t)
 	ctx := context.Background()
-	s.f.post("C1", "UANA", "first", "")
+	s.f.ask("C1", "UANA", "first", "")
 	s.sync(t)
 	if err := s.a.DisconnectSlack(ctx, s.task.ID); err != nil {
 		t.Fatal(err)
@@ -529,7 +534,7 @@ func TestSlackDisconnect(t *testing.T) {
 		t.Fatalf("disconnect again: %v", err)
 	}
 	s.f.resetCalls()
-	s.f.post("C1", "UANA", "after", "")
+	s.f.ask("C1", "UANA", "after", "")
 	s.sync(t)
 	if s.f.count("conversations.history") != 0 || len(s.thread(t)) != 1 || len(s.prompts()) != 1 {
 		t.Fatalf("calls %v, thread %v", s.f.calls, s.thread(t))
@@ -542,13 +547,13 @@ func TestSlackDisconnect(t *testing.T) {
 // A deleted task's channel is no longer polled.
 func TestSlackDeletedTask(t *testing.T) {
 	s := newSlackApp(t)
-	s.f.post("C1", "UANA", "first", "")
+	s.f.ask("C1", "UANA", "first", "")
 	s.sync(t)
 	if err := s.a.Store.DeleteTask(context.Background(), s.task.ID); err != nil {
 		t.Fatal(err)
 	}
 	s.f.resetCalls()
-	s.f.post("C1", "UANA", "after", "")
+	s.f.ask("C1", "UANA", "after", "")
 	s.sync(t)
 	if s.f.count("conversations.history") != 0 {
 		t.Fatalf("calls %v", s.f.calls)
@@ -566,9 +571,9 @@ func TestSlackUndelivered(t *testing.T) {
 	if _, err := s.a.ConnectSlack(ctx, s.task.ID, "C1", nil); err != nil {
 		t.Fatal(err)
 	}
-	s.f.post("C1", "UANA", "anyone?", "")
+	s.f.ask("C1", "UANA", "anyone?", "")
 	s.sync(t)
-	s.f.post("C1", "UANA", "hello?", "")
+	s.f.ask("C1", "UANA", "hello?", "")
 	s.sync(t)
 	if got := s.thread(t); len(got) != 2 || len(s.prompts()) != 0 {
 		t.Fatalf("thread = %v, prompts = %q", got, s.prompts())
@@ -586,7 +591,7 @@ func TestSlackUndelivered(t *testing.T) {
 	if _, err := s.a.ConnectSlack(ctx, s.task.ID, "C1", &s.sess.ID); err != nil {
 		t.Fatal(err)
 	}
-	s.f.post("C1", "UANA", "still there?", "")
+	s.f.ask("C1", "UANA", "still there?", "")
 	s.sync(t)
 	got := notifications(t, s.a)
 	if len(got) != 2 || !strings.Contains(strings.Join(got, "|"), "session 1 can't take them: session runs on office-mac") || len(s.thread(t)) != 3 || len(s.prompts()) != 0 {
@@ -611,7 +616,7 @@ func TestSlackFailureNotifiesOnce(t *testing.T) {
 		t.Fatalf("status = %+v", st)
 	}
 	delete(s.f.fail, "conversations.history")
-	s.f.post("C1", "UANA", "back", "")
+	s.f.ask("C1", "UANA", "back", "")
 	s.sync(t)
 	if st := s.a.SlackStatus(s.task.ID); st.Error != "" || len(s.thread(t)) != 1 {
 		t.Fatalf("status = %+v, thread = %v", st, s.thread(t))
@@ -645,7 +650,7 @@ func TestSlackHubDoesNotPoll(t *testing.T) {
 	s := newSlackApp(t)
 	s.a.SyncRole = RoleHub
 	s.f.resetCalls()
-	s.f.post("C1", "UANA", "hi", "")
+	s.f.ask("C1", "UANA", "hi", "")
 	s.sync(t)
 	if len(s.f.calls) != 0 || len(s.thread(t)) != 0 {
 		t.Fatalf("calls %v", s.f.calls)
@@ -683,7 +688,7 @@ func TestOrchestratorNote(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.a.Wait()
-	s.f.post("C1", "UANA", "export fails", "")
+	s.f.ask("C1", "UANA", "export fails", "")
 	s.sync(t)
 	s.a.DisconnectSlack(ctx, s.task.ID)
 	s.a.SendMessage(ctx, s.sess.ID, "and now?")
@@ -729,7 +734,7 @@ func TestConnectSlackStarting(t *testing.T) {
 		t.Fatalf("connected = %+v, %+v, %v", ch, sess, err)
 	}
 	a.Wait()
-	f.post("C1", "UANA", "export fails", "")
+	f.ask("C1", "UANA", "export fails", "")
 	if err := a.SyncSlack(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -738,5 +743,64 @@ func TestConnectSlackStarting(t *testing.T) {
 	if len(reqs) != 2 || reqs[0].Prompt != fmt.Sprintf(OrchestratorStart, "help") || !strings.Contains(reqs[1].Prompt, "export fails") ||
 		!strings.HasSuffix(reqs[1].SystemPrompt, fmt.Sprintf(OrchestratorNote, "help", task.ProjectID, task.ID, sess.ID)) {
 		t.Fatalf("requests = %+v", reqs)
+	}
+}
+
+// Only messages for the bot go to the orchestrator: one mentioning it, and
+// any in a thread it started or a message of went to it before, also after a
+// restart. The others only come to the task's thread, without :eyes:, and
+// waiting without an orchestrator they are no undelivered work.
+func TestSlackOnlyMessagesForTheBot(t *testing.T) {
+	s := newSlackApp(t)
+	f := s.f
+	chat := f.post("C1", "UANA", "lunch?", "")
+	f.post("C1", "UIVO", "sure", chat)
+	other := f.post("C1", "UIVO", "<@UANA> can you look?", "")
+	s.sync(t)
+	if got := s.thread(t); !slices.Equal(got, []string{"Ana: lunch?", "Ivo: sure", "Ivo: @Ana can you look?"}) {
+		t.Fatalf("thread = %v", got)
+	}
+	if got := s.prompts(); len(got) != 0 {
+		t.Fatalf("prompts = %q", got)
+	}
+	if f.count("reactions.add") != 0 || f.reactions("C1", chat) != nil {
+		t.Fatalf("reacted to chatter")
+	}
+
+	// A mention in a thread brings the bot in: it and the thread's next
+	// replies go to it, mentioning it or not.
+	ask := f.post("C1", "UANA", "<@UBOT|jeanbot> book a table", chat)
+	s.sync(t)
+	if got := s.prompts(); len(got) != 1 || !strings.HasSuffix(got[0], "thread "+chat+": @JeanBot book a table") || strings.Contains(got[0], "lunch?") {
+		t.Fatalf("prompts = %q", got)
+	}
+	if got := f.reactions("C1", ask); !slices.Equal(got, []string{"eyes"}) {
+		t.Fatalf("reactions = %q", got)
+	}
+	a2 := New(s.a.Store, s.r, "/default/dir", "bypassPermissions")
+	a2.Slack, a2.Now = s.a.Slack, s.a.Now
+	f.post("C1", "UIVO", "for four", chat)
+	f.post("C1", "UANA", "no, later", other)
+	if err := a2.SyncSlack(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	a2.Wait()
+	if got := s.prompts(); len(got) != 2 || !strings.HasSuffix(got[1], "thread "+chat+": for four") {
+		t.Fatalf("prompts = %q", got)
+	}
+	if n := len(s.thread(t)); n != 6 {
+		t.Fatalf("thread = %v", s.thread(t))
+	}
+
+	// Without an orchestrator, chatter is nothing waiting.
+	if _, err := a2.ConnectSlack(context.Background(), s.task.ID, "C1", nil); err != nil {
+		t.Fatal(err)
+	}
+	f.post("C1", "UANA", "anyone for coffee?", "")
+	if err := a2.SyncSlack(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if st := a2.SlackStatus(s.task.ID); st.Undelivered != "" || len(notifications(t, a2)) != 0 {
+		t.Fatalf("status = %+v, notifications = %q", st, notifications(t, a2))
 	}
 }
