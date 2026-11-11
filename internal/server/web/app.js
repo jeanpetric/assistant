@@ -2221,6 +2221,7 @@ function reviewPage(data, others) {
     };
     input.addEventListener('keydown', e => {
       if (e.key === 'Enter') { e.preventDefault(); return submit(); }
+      if (e.key === 'Escape') { e.preventDefault(); input.blur(); }
     });
     const list = h('div', { class: 'q-list' });
     const draw = () => list.replaceChildren(...qsAt(key).slice().reverse().map(questionEl));

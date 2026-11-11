@@ -402,8 +402,9 @@ func TestStaticUI(t *testing.T) {
 	if n := bytes.Count(js, []byte("filter.focus()")); n != 3 {
 		t.Fatalf("app.js focuses a filter %d times, want List, Archive and Memory", n)
 	}
-	if bytes.Contains(js, []byte("blur()")) {
-		t.Fatal("app.js blurs a field; Esc belongs to the dialogs")
+	// Esc belongs to the dialogs; only the review page's question input (a page, no dialog) blurs on Esc.
+	if n := bytes.Count(js, []byte("blur()")); n != 1 || !bytes.Contains(js, []byte("if (e.key === 'Escape') { e.preventDefault(); input.blur(); }")) {
+		t.Fatalf("app.js blurs a field %d times; only the review question input may, Esc belongs to the dialogs", n)
 	}
 	// Every header hint names a real shortcut (or, like "[ ]", each key of one), so a hint never lies.
 	hints := regexp.MustCompile(`data-shortcut="([^"]+)"`).FindAllSubmatch(body, -1)

@@ -44,7 +44,8 @@ function mk(tag, attrs, children) {
     append(...cs) { el.children.push(...cs.map(c => typeof c === 'object' && c !== null ? c : String(c))); },
     replaceChildren(...cs) { el.children = []; el.append(...cs); },
     setAttribute(k, v) { el.attrs[k] = v; },
-    focus() {},
+    focus() { el.focused = true; },
+    blur() { el.focused = false; },
     get text() { return el.children.map(c => typeof c === 'object' ? c.text : String(c)).join(''); },
   };
   el.classList = {
@@ -164,6 +165,9 @@ eval(require('fs').readFileSync(process.argv.at(-1), 'utf8'));
 
   // Asking: the question goes to the review with its place, shows as pending, and its answer arrives.
   const input = find(box, e => e.classes.has('q-input'));
+  if (!input.focused) fail('input not focused on open');
+  input.fire('keydown', { key: 'Escape' });
+  if (input.focused || !find(box, e => e === input)) fail('Escape did not blur the input');
   input.value = 'A testovi?';
   await input.fire('keydown', { key: 'Enter' });
   const p = posts.at(-1);
