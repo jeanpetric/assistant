@@ -73,6 +73,14 @@ One Go binary, one SQLite file, no JavaScript build step.
   and runs after a successful turn on a matching task, before the task moves to its done lane;
   run one by hand with *Run skill…*. A skill can use its own model for its turn and keep the
   reply as an **artifact** shown on the task. Ships with a *Research summary* skill (off).
+- **PR reviews**: a task with a `pull_request` field has *Novi review* and *Otvori review* in its
+  details. *Novi review* starts a "PR review" session that fetches the PR with `gh`, ranks its
+  files and annotates their lines in Croatian, and saves that (`save_review`); older reviews stay.
+  The review page (`#/review/<id>`) shows the files in reading order (ranked open, the rest
+  folded), a chip per file extension to hide its files, and a **?** on every diff line and file
+  header: the question goes to that review's session with the PR, the place and the diff around
+  it, and its short answer shows under the question, the full one a click away. Read only: nothing
+  is posted to GitHub.
 - **Session prompts** (*Settings → Session prompts*): templates added to the system prompt of
   every agent turn, so a session in another repo knows it runs for this app. Each goes to every
   project or only to the projects you tick; a session gets all of its project's, in order.
@@ -189,6 +197,7 @@ Tools cover the whole app:
 - **Sessions**: `start_session`, `list_sessions`, `get_session`, `send_message`,
   `summarize_session`, `dismiss_needs_input`
 - **Skills**: `list_skills`, `create_skill`, `update_skill`, `delete_skill`, `run_skill`
+- **PR reviews**: `generate_review`, `save_review`, `get_review`, `ask_review`
 - **Session prompts**: `list_session_prompts`, `create_session_prompt`, `update_session_prompt`,
   `delete_session_prompt`
 - **Memory**: `list_memories`, `search_memories`, `get_memory`, `create_memory`,

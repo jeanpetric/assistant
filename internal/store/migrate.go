@@ -700,6 +700,41 @@ CREATE TABLE session_prompts (
 INSERT INTO session_prompts (id, name, prompt, all_projects, project_ids, created_at, updated_at)
 	SELECT 1, 'Default', session_prompt, 1, '[]', 0, 0 FROM settings WHERE id = 1 AND trim(session_prompt) != '';
 `,
+	// PR reviews: a task's pull request, ranked and annotated by the agent of
+	// its session (notes, '' until saved), with the diff they are about, and
+	// the user's questions on its lines, answered by that session. Only adds
+	// tables; rows go with their task.
+	`
+CREATE TABLE reviews (
+	id INTEGER PRIMARY KEY,
+	task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+	session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
+	pr_url TEXT NOT NULL DEFAULT '',
+	title TEXT NOT NULL DEFAULT '',
+	head_sha TEXT NOT NULL DEFAULT '',
+	notes TEXT NOT NULL DEFAULT '',
+	diff TEXT NOT NULL DEFAULT '',
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL
+);
+CREATE INDEX reviews_task ON reviews(task_id, id);
+CREATE INDEX reviews_session ON reviews(session_id);
+CREATE TABLE review_questions (
+	id INTEGER PRIMARY KEY,
+	review_id INTEGER NOT NULL REFERENCES reviews(id) ON DELETE CASCADE,
+	path TEXT NOT NULL,
+	side TEXT NOT NULL DEFAULT '',
+	line INTEGER NOT NULL DEFAULT 0,
+	question TEXT NOT NULL,
+	short_answer TEXT NOT NULL DEFAULT '',
+	full_answer TEXT NOT NULL DEFAULT '',
+	status TEXT NOT NULL DEFAULT 'pending',
+	error TEXT NOT NULL DEFAULT '',
+	created_at INTEGER NOT NULL,
+	answered_at INTEGER
+);
+CREATE INDEX review_questions_review ON review_questions(review_id, id);
+`,
 }
 
 func (s *Store) migrate(ctx context.Context) error {

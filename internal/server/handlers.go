@@ -622,6 +622,11 @@ func (s *Server) getTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	reviews, err := s.reviewRefs(ctx, id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
 	activity, err := s.app.Store.TaskMessages(ctx, id)
 	if err != nil {
 		writeErr(w, err)
@@ -643,7 +648,7 @@ func (s *Server) getTask(w http.ResponseWriter, r *http.Request) {
 	}
 	s.app.WithSlack(&t)
 	writeJSON(w, 200, map[string]any{"task": t, "sessions": out, "schedules": schedules, "builds_on": builds, "used_by": usedBy,
-		"artifacts": artifacts, "activity": activity, "memories": memories, "agent_status": agentStatus})
+		"artifacts": artifacts, "reviews": reviews, "activity": activity, "memories": memories, "agent_status": agentStatus})
 }
 
 // connectSlack connects the task to a Slack channel (its id or archive URL):

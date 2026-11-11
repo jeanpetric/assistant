@@ -71,6 +71,8 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/tasks/{id}/schedules", s.listSchedules)
 	m.HandleFunc("POST /api/tasks/{id}/schedules", s.createSchedule)
 	m.HandleFunc("GET /api/tasks/{id}/artifacts", s.listArtifacts)
+	m.HandleFunc("GET /api/tasks/{id}/reviews", s.listReviews)
+	m.HandleFunc("POST /api/tasks/{id}/reviews", s.generateReview)
 	m.HandleFunc("GET /api/tasks/{id}/messages", s.listTaskMessages)
 	m.HandleFunc("POST /api/tasks/{id}/messages", s.postTaskMessage)
 	m.HandleFunc("POST /api/tasks/{id}/slack", s.connectSlack)
@@ -104,6 +106,10 @@ func (s *Server) routes() {
 	m.HandleFunc("PATCH /api/skills/{id}", s.updateSkill)
 	m.HandleFunc("DELETE /api/skills/{id}", s.deleteSkill)
 	m.HandleFunc("DELETE /api/artifacts/{id}", s.deleteArtifact)
+	m.HandleFunc("GET /api/reviews/{id}", s.getReview)
+	m.HandleFunc("DELETE /api/reviews/{id}", s.deleteReview)
+	m.HandleFunc("PUT /api/reviews/{id}/notes", s.saveReviewNotes)
+	m.HandleFunc("POST /api/reviews/{id}/questions", s.askReview)
 
 	m.HandleFunc("GET /api/memories", s.listMemories)
 	m.HandleFunc("POST /api/memories", s.createMemory)
@@ -177,11 +183,13 @@ func writeErr(w http.ResponseWriter, err error) {
 		errors.Is(err, app.ErrBusy), errors.Is(err, app.ErrNoResume), errors.Is(err, app.ErrStopping),
 		errors.Is(err, store.ErrMemoryChanged), errors.Is(err, app.ErrForeignSession),
 		errors.Is(err, app.ErrSlackOff), errors.Is(err, store.ErrChannelTaken),
-		errors.Is(err, store.ErrKindExists), errors.Is(err, store.ErrKindBuiltIn), errors.Is(err, store.ErrKindInUse):
+		errors.Is(err, store.ErrKindExists), errors.Is(err, store.ErrKindBuiltIn), errors.Is(err, store.ErrKindInUse),
+		errors.Is(err, app.ErrReviewNotReady):
 		status = http.StatusConflict
 	case errors.As(err, new(badRequest)), errors.Is(err, app.ErrBadAction), errors.Is(err, app.ErrBadCron), errors.Is(err, store.ErrBadContext),
 		errors.Is(err, store.ErrBadMemory), errors.Is(err, store.ErrMemoryExists), errors.Is(err, app.ErrNoMemory), errors.Is(err, app.ErrBadMessage),
-		errors.Is(err, app.ErrNotOnTask), errors.Is(err, slack.ErrNotInChannel), errors.Is(err, slack.ErrChannelNotFound):
+		errors.Is(err, app.ErrNotOnTask), errors.Is(err, slack.ErrNotInChannel), errors.Is(err, slack.ErrChannelNotFound),
+		errors.Is(err, app.ErrNoPR), errors.Is(err, app.ErrBadReview):
 		status = http.StatusBadRequest
 	}
 	if status == http.StatusInternalServerError {

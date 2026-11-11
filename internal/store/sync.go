@@ -37,6 +37,8 @@ var syncTables = map[string][]string{
 	"task_messages":        {"id"},
 	"task_kinds":           {"name"},
 	"session_prompts":      {"id"},
+	"reviews":              {"id"},
+	"review_questions":     {"id"},
 }
 
 // localTables stay on their node. Every table is in exactly one of

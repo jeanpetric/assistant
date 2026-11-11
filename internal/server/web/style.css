@@ -402,3 +402,61 @@ dialog.wide { width: min(900px, 94vw); max-height: 88vh; overflow-y: auto; }
 .activity-composer .row { align-items: flex-end; }
 .activity-composer textarea { flex: 1; }
 .activity-target { margin-bottom: 4px; }
+
+/* PR review */
+.review-buttons .row { flex-wrap: wrap; }
+.review-page { max-width: 1280px; margin: 0 auto; }
+.review-meta { margin-bottom: 8px; }
+.review-summary { margin-top: 8px; }
+.review-others { margin-top: 8px; }
+.review-state { font-weight: 500; }
+.review-toolbar {
+  position: sticky; top: 49px; z-index: 3;
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+  padding: 8px 0; margin-bottom: 12px; background: var(--bg); border-bottom: 1px solid var(--border);
+}
+.review-toolbar .grow { flex: 1; }
+.chip {
+  background: transparent; color: var(--muted); border: 1px solid var(--border);
+  border-radius: 12px; padding: 1px 10px; font-size: 12px; text-decoration: line-through;
+}
+.chip.on { color: var(--text); border-color: var(--accent); text-decoration: none; }
+.review-file { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 12px; overflow: hidden; }
+.review-file-head { padding: 8px 12px; cursor: pointer; background: var(--surface-2); }
+.review-file.open .review-file-head { border-bottom: 1px solid var(--border); }
+.review-file-head .fp { font-family: var(--mono); font-weight: 600; font-size: 13px; word-break: break-all; }
+.review-file-head .caret { width: 14px; color: var(--muted); }
+.review-file-head .why { margin: 2px 0 0 22px; }
+.badge.rank { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+.add-n { color: var(--ok); }
+.del-n { color: var(--danger); }
+.review-orphans { background: rgba(201, 138, 18, .12); padding: 6px 12px; }
+.review-file-body { font-family: var(--mono); font-size: 12px; line-height: 20px; }
+.review-file-body > .muted { padding: 8px 12px; font-family: inherit; }
+.dl { display: grid; grid-template-columns: 48px 48px 1fr 40px; align-items: start; }
+.dl .n { text-align: right; padding-right: 8px; color: var(--muted); user-select: none; }
+.dl .c { white-space: pre-wrap; word-break: break-all; padding: 0 6px; }
+.dl.add { background: rgba(46, 157, 91, .12); }
+.dl.del { background: rgba(210, 60, 60, .12); }
+.dl.hunk { background: rgba(59, 110, 245, .08); color: var(--muted); }
+.dl.noted .c { box-shadow: inset 3px 0 var(--warn); }
+.ask-btn { padding: 0 6px; font-size: 11px; line-height: 18px; justify-self: end; margin-right: 4px; opacity: 0; }
+.dl:hover .ask-btn, .review-file-head .ask-btn, .ask-btn.has-q { opacity: 1; }
+.ask-btn.has-q { border-color: var(--accent); color: var(--accent); }
+.ann {
+  margin: 2px 40px 2px 96px; padding: 4px 8px; border-left: 3px solid var(--warn); background: rgba(201, 138, 18, .08);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 13px; display: flex; gap: 6px;
+}
+.ann .md > * { margin: 0; }
+.ann-kind { font-weight: 700; color: var(--warn); }
+.q-slot:empty { display: none; }
+.q-box {
+  margin: 4px 40px 8px 96px; padding: 8px 10px; border: 1px solid var(--accent); border-radius: 6px; background: var(--surface);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 13px; line-height: 1.45;
+}
+.review-file > .q-slot .q-box { margin: 8px 12px; }
+.q-item { border-top: 1px solid var(--border); margin-top: 8px; padding-top: 6px; }
+.q-text { font-weight: 600; }
+.q-short { margin: 4px 0; }
+.q-error { color: var(--danger); margin: 4px 0; }
+.q-full { margin-top: 6px; padding: 8px; background: var(--surface-2); border-radius: 6px; }

@@ -191,6 +191,7 @@ function route() {
     archive: renderArchive,
     memory: () => parts[1] ? renderMemory(Number(parts[1])) : renderMemories(),
     settings: renderSettings,
+    review: () => renderReview(Number(parts[1])),
   }[parts[0]] || renderBoard;
   r().catch(err => view.replaceChildren(h('div', { class: 'panel' }, 'Error: ' + err.message)));
 }
@@ -740,6 +741,7 @@ async function taskView(id, { every, leave, reload }) {
     h('label', {}, 'Working directory for agents'),
     localWorkdirSelect(t, `Project default (${taskWorkdir({ ...t, workdir: '' })})`, { onchange: e => save({ workdir: e.target.value }) }),
     fields,
+    reviewButtons(t, data.reviews),
     memories.el,
     buildsOn.el,
     slack.el,
@@ -2055,6 +2057,290 @@ function skillDialog(skill, b, done) {
 }
 
 // The task's artifacts, newest first; reload() fetches them again.
+// ---------- PR review ----------
+
+const reviewStateText = { generating: 'Generiram…', failed: 'Generiranje nije uspjelo' };
+
+// The task's PR review buttons, only for a task with a pull_request field: Otvori review opens the
+// latest review (with its state while it is not ready), Novi review starts a new one and opens it.
+function reviewButtons(task, reviews) {
+  if (!task.fields || !task.fields.pull_request) return null;
+  const latest = reviews && reviews[0];
+  return h('div', { class: 'review-buttons' },
+    h('label', {}, 'PR review'),
+    h('div', { class: 'row' },
+      latest ? h('a', { class: 'btn small', href: `#/review/${latest.id}` }, 'Otvori review') : null,
+      h('button', {
+        class: 'ghost small', title: 'Agent sesija na tasku napravi novi review PR-a; stari ostaju',
+        onclick: async () => {
+          const r = await api('POST', `/api/tasks/${task.id}/reviews`);
+          location.hash = `#/review/${r.review_id}`;
+        },
+      }, 'Novi review'),
+      latest && reviewStateText[latest.status] ? h('span', { class: 'muted small' }, reviewStateText[latest.status]) : null));
+}
+
+// A file's extension for the review's filter: what follows the last dot of its base name, lowercase
+// ('' for none: Makefile).
+function fileExt(path) {
+  const base = path.split('/').pop();
+  const i = base.lastIndexOf('.');
+  return i < 0 ? '' : base.slice(i + 1).toLowerCase();
+}
+
+const reviewQKey = (path, side, line) => `${path}|${side}|${line}`;
+
+// The review page: the PR's summary, a chip per file extension that shows or hides its files, Otvori sve /
+// Zatvori sve, and the files in reading order (ranked open, the rest folded), each with its diff and notes.
+// Every diff line and file header has a ? that opens a box to ask the review's session about it; the box
+// lists the questions asked there with their short answers, the full one a click away. Neither the filter
+// nor the folds are kept: a reload starts from the defaults. update(data) takes fresh questions.
+function reviewPage(data, others) {
+  const r = data.review;
+  const sessionHref = data.session ? `#/task/${r.task_id}/s/${data.session.id}` : null;
+  const sessionLink = label => sessionHref ? h('a', { href: sessionHref }, label) : null;
+  let questions = data.questions || [];
+  const fullOpen = new Set(); // questions whose full answer is shown
+  const boxes = new Map(); // key → redraw of an open question box
+  const markers = new Map(); // key → redraws of the ? buttons there
+
+  const header = h('div', { class: 'panel review-head' },
+    h('div', { class: 'row' },
+      h('h2', { class: 'grow' }, r.title || 'PR review'),
+      h('button', {
+        class: 'danger small', onclick: async () => {
+          if (!confirm('Obrisati ovaj review i njegova pitanja?')) return;
+          await api('DELETE', `/api/reviews/${r.id}`);
+          toast('Review obrisan');
+          location.hash = '#/board';
+        },
+      }, 'Obriši')),
+    h('div', { class: 'muted small review-meta' },
+      r.pr_url ? h('a', { href: r.pr_url, target: '_blank', rel: 'noopener' }, r.pr_url) : null,
+      r.head_sha ? [' · head ', h('code', {}, r.head_sha.slice(0, 10))] : null,
+      ' · ', fmtTime(r.created_at),
+      ' · ', h('a', { href: `#/task/${r.task_id}` }, `task #${r.task_id}`),
+      sessionHref ? [' · ', sessionLink(`sesija #${data.session.id}`)] : null),
+    data.summary ? h('div', { class: 'md review-summary' }, markdown(data.summary)) : null,
+    others && others.length > 1 ? h('div', { class: 'small review-others' }, 'Reviewi ovog taska: ',
+      others.map((o, i) => [i ? ' · ' : '', o.id === r.id ? h('strong', {}, fmtTime(o.created_at))
+        : h('a', { href: `#/review/${o.id}` }, fmtTime(o.created_at)), reviewStateText[o.status] ? ` (${reviewStateText[o.status]})` : ''])) : null);
+
+  if (r.status !== 'ready') {
+    return {
+      el: h('div', { class: 'review-page' }, header,
+        h('div', { class: 'panel review-state' }, reviewStateText[r.status] || r.status, ' — ', sessionLink('otvori sesiju'))),
+      update() {}, polls: () => r.status === 'generating',
+    };
+  }
+
+  const qsAt = key => questions.filter(q => reviewQKey(q.path, q.side, q.line) === key);
+
+  // The ? button at a line or file header: it shows how many questions were asked there.
+  const askButton = (key, toggle) => {
+    const b = h('button', { class: 'ghost small ask-btn', title: 'Pitaj agenta o ovome', onclick: e => { e.stopPropagation(); toggle(); } });
+    const draw = () => {
+      const n = qsAt(key).length;
+      b.replaceChildren(...['?', n ? h('span', { class: 'pill' }, n) : null].filter(Boolean));
+      b.classList.toggle('has-q', n > 0);
+    };
+    draw();
+    markers.set(key, [...(markers.get(key) || []), draw]);
+    return b;
+  };
+
+  const questionEl = q => {
+    const parts = [h('div', { class: 'q-text' }, q.question)];
+    if (q.status === 'pending') parts.push(h('div', { class: 'muted q-pending' }, 'Odgovaram…'));
+    if (q.status === 'failed') {
+      parts.push(h('div', { class: 'q-error' }, q.error || 'Nije uspjelo'),
+        h('button', { class: 'ghost small', onclick: () => send(q.path, q.side, q.line, q.question) }, 'Pošalji ponovo'));
+    }
+    if (q.status === 'answered') {
+      const shown = fullOpen.has(q.id);
+      parts.push(h('div', { class: 'q-short' }, q.short_answer),
+        h('button', {
+          class: 'ghost small q-full-btn', onclick: () => {
+            if (fullOpen.has(q.id)) fullOpen.delete(q.id); else fullOpen.add(q.id);
+            redraw(reviewQKey(q.path, q.side, q.line));
+          },
+        }, shown ? 'Sakrij puni odgovor' : 'Puni odgovor'),
+        shown ? h('div', { class: 'q-full' }, h('div', { class: 'md' }, markdown(q.full_answer)),
+          h('div', { class: 'small' }, sessionLink('Otvori sesiju'))) : null);
+    }
+    return h('div', { class: 'q-item' }, parts);
+  };
+
+  const redraw = key => {
+    (markers.get(key) || []).forEach(d => d());
+    if (boxes.has(key)) boxes.get(key)();
+  };
+
+  async function send(path, side, line, question) {
+    const q = await api('POST', `/api/reviews/${r.id}/questions`, { path, side, line, question });
+    questions = [...questions, q];
+    redraw(reviewQKey(path, side, line));
+    return q;
+  }
+
+  // The box under a line or header: the input, then the questions asked there.
+  const questionBox = (path, side, line) => {
+    const key = reviewQKey(path, side, line);
+    const input = h('input', { class: 'q-input', placeholder: line ? `Pitanje o liniji ${line}…` : 'Pitanje o cijelom fileu…' });
+    const err = h('div', { class: 'q-error hidden' });
+    const submit = async () => {
+      const text = input.value.trim();
+      if (!text) return;
+      err.classList.add('hidden');
+      try {
+        await send(path, side, line, text);
+        input.value = '';
+      } catch (e) {
+        err.replaceChildren(e.message);
+        err.classList.remove('hidden');
+      }
+    };
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); return submit(); }
+    });
+    const list = h('div', { class: 'q-list' });
+    const draw = () => list.replaceChildren(...qsAt(key).slice().reverse().map(questionEl));
+    draw();
+    boxes.set(key, draw);
+    return { el: h('div', { class: 'q-box' }, h('div', { class: 'row' }, h('div', { class: 'grow' }, input), h('button', { class: 'small', onclick: submit }, 'Pitaj')), err, list), input };
+  };
+
+  // A slot that opens and closes the question box of its place.
+  const boxSlot = (path, side, line) => {
+    const slot = h('div', { class: 'q-slot' });
+    let box = null;
+    const toggle = () => {
+      if (box) { slot.replaceChildren(); box = null; boxes.delete(reviewQKey(path, side, line)); return; }
+      box = questionBox(path, side, line);
+      slot.replaceChildren(box.el);
+      if (box.input.focus) box.input.focus();
+    };
+    return { slot, toggle };
+  };
+
+  const annEl = a => h('div', { class: `ann ann-${a.kind || 'line'}` },
+    h('span', { class: 'ann-kind' }, { class: 'C', method: 'M' }[a.kind] || 'i'), ' ', markdown(a.text));
+
+  const lineEl = (f, l, notes) => {
+    if (l.t === '\\') return h('div', { class: 'dl meta' }, h('span', { class: 'n' }), h('span', { class: 'n' }), h('span', { class: 'c' }, '\\' + l.text), h('span'));
+    const side = l.t === '-' ? 'old' : 'new';
+    const no = side === 'old' ? l.old : l.new;
+    const { slot, toggle } = boxSlot(f.path, side, no);
+    const here = notes.filter(a => a.side === side && a.line === no);
+    return h('div', { class: 'dl-wrap' },
+      h('div', { class: 'dl' + (l.t === '+' ? ' add' : l.t === '-' ? ' del' : '') + (here.length ? ' noted' : '') },
+        h('span', { class: 'n' }, l.old || ''), h('span', { class: 'n' }, l.new || ''),
+        h('span', { class: 'c' }, (l.t === ' ' ? ' ' : l.t) + l.text),
+        askButton(reviewQKey(f.path, side, no), toggle)),
+      here.map(annEl), slot);
+  };
+
+  const fileBody = f => {
+    const shown = new Set();
+    f.hunks.forEach(hk => hk.lines.forEach(l => {
+      if (l.t === '-') shown.add(`old|${l.old}`); else if (l.t !== '\\') shown.add(`new|${l.new}`);
+    }));
+    const orphans = f.annotations.filter(a => !shown.has(`${a.side}|${a.line}`));
+    return h('div', { class: 'review-file-body' },
+      orphans.length ? h('div', { class: 'review-orphans small' }, 'Bilješke bez linije u diffu: ',
+        orphans.map(a => `${a.side} ${a.line}: ${a.text}`).join('; ')) : null,
+      f.binary ? h('div', { class: 'muted small' }, 'Binarni file.') : null,
+      !f.binary && !f.hunks.length ? h('div', { class: 'muted small' }, 'Bez promjena u sadržaju.') : null,
+      f.hunks.map(hk => [h('div', { class: 'dl hunk' }, h('span', { class: 'n' }), h('span', { class: 'n' }), h('span', { class: 'c' }, hk.header), h('span')),
+        hk.lines.map(l => lineEl(f, l, f.annotations))]));
+  };
+
+  const statusLabel = { added: 'novi', deleted: 'obrisan', renamed: 'preimenovan' };
+  const files = data.files.map(f => {
+    const ext = fileExt(f.path);
+    const { slot, toggle } = boxSlot(f.path, '', 0);
+    const caret = h('span', { class: 'caret' });
+    const body = h('div');
+    let open = false, built = false;
+    const setOpen = on => {
+      open = on;
+      caret.replaceChildren(on ? '▾' : '▸');
+      if (on && !built) { body.replaceChildren(fileBody(f)); built = true; }
+      body.classList.toggle('hidden', !on);
+      el.classList.toggle('open', on);
+    };
+    const head = h('div', { class: 'review-file-head', onclick: () => setOpen(!open) },
+      h('div', { class: 'row' },
+        caret,
+        h('span', { class: 'fp grow' }, f.status === 'renamed' && f.old_path !== f.path ? `${f.old_path} → ${f.path}` : f.path),
+        f.rank ? h('span', { class: 'badge rank' }, '#' + f.rank) : null,
+        f.group === 'unimportant' ? h('span', { class: 'badge' }, 'nebitno') : null,
+        f.group === 'hidden' ? h('span', { class: 'badge', title: 'filter ' + f.hidden_by }, 'skriveno') : null,
+        statusLabel[f.status] ? h('span', { class: 'badge' }, statusLabel[f.status]) : null,
+        h('span', { class: 'small' }, h('span', { class: 'add-n' }, '+' + f.adds), ' ', h('span', { class: 'del-n' }, '−' + f.dels)),
+        f.annotations.length ? h('span', { class: 'badge' }, `${f.annotations.length} bilj.`) : null,
+        askButton(reviewQKey(f.path, '', 0), toggle)),
+      f.why ? h('div', { class: 'why small muted' }, f.why) : null);
+    const el = h('div', { class: 'review-file' }, head, slot, body);
+    setOpen(f.group === 'ranked');
+    return { f, ext, el, setOpen, isOpen: () => open };
+  });
+
+  // The extension chips: every extension in the PR with its number of files, all on at first.
+  const off = new Set();
+  const counts = new Map();
+  files.forEach(x => counts.set(x.ext, (counts.get(x.ext) || 0) + 1));
+  const exts = [...counts.keys()].sort((a, b) => counts.get(b) - counts.get(a) || (a === '' ? 1 : b === '' ? -1 : a.localeCompare(b)));
+  const chips = exts.map(ext => {
+    const chip = h('button', {
+      class: 'chip on', 'aria-pressed': 'true', onclick: () => {
+        if (off.has(ext)) off.delete(ext); else off.add(ext);
+        chip.classList.toggle('on', !off.has(ext));
+        chip.setAttribute('aria-pressed', String(!off.has(ext)));
+        drawFiles();
+      },
+    }, `${ext || 'bez ekstenzije'} (${counts.get(ext)})`);
+    chip.ext = ext;
+    return chip;
+  });
+  const visible = () => files.filter(x => !off.has(x.ext));
+  const drawFiles = () => files.forEach(x => x.el.classList.toggle('hidden', off.has(x.ext)));
+  const toolbar = h('div', { class: 'review-toolbar' }, chips,
+    h('span', { class: 'grow' }),
+    h('button', { class: 'ghost small', onclick: () => visible().forEach(x => x.setOpen(true)) }, 'Otvori sve'),
+    h('button', { class: 'ghost small', onclick: () => visible().forEach(x => x.setOpen(false)) }, 'Zatvori sve'));
+
+  return {
+    el: h('div', { class: 'review-page' }, header, toolbar, files.map(x => x.el),
+      files.length ? null : h('p', { class: 'muted' }, 'Diff nema fileova.')),
+    files, chips,
+    update(d) {
+      questions = d.questions || [];
+      new Set([...markers.keys(), ...boxes.keys()]).forEach(redraw);
+    },
+    polls: () => questions.some(q => q.status === 'pending'),
+  };
+}
+
+// #/review/7: the review's page, polled while it is being generated or a question waits for its answer.
+async function renderReview(id) {
+  const data = await api('GET', `/api/reviews/${id}`);
+  const others = await api('GET', `/api/tasks/${data.review.task_id}/reviews`);
+  let page = reviewPage(data, others);
+  view.replaceChildren(page.el);
+  every(2000, async () => {
+    if (!page.polls()) return;
+    const d = await api('GET', `/api/reviews/${id}`);
+    if (d.review.status !== data.review.status) {
+      data.review.status = d.review.status;
+      page = reviewPage(d, await api('GET', `/api/tasks/${d.review.task_id}/reviews`));
+      view.replaceChildren(page.el);
+      return;
+    }
+    page.update(d);
+  });
+}
+
 function artifactsPanel(taskId, artifacts) {
   const el = h('div');
   const draw = xs => el.replaceChildren(...(xs.length ? [h('div', { class: 'panel' }, h('h3', {}, 'Artifacts'),

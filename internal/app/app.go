@@ -661,6 +661,9 @@ func (a *App) launch(sess store.Session, prompt, resumeID string, done func(ctx 
 		}
 		a.Store.SetSessionStatus(bg, sess.ID, status, msg)
 		a.recordPR(bg, sess.TaskID, prs)
+		if answersQuestion(sess, prompt) {
+			a.answerQuestion(bg, sess, status, msg)
+		}
 		// A message the user queued meanwhile is their answer already.
 		// A question on the task's thread flagged the session already.
 		if reason := wait.reason(); status == store.StatusIdle && reason != "" && !a.hasQueued(bg, sess.ID) && !a.waitsForAnswer(bg, sess.ID) {
@@ -738,9 +741,10 @@ func (a *App) Limits(sessionID int64) agent.RateLimits {
 // A skill turn that does not finish successfully ends the chain there.
 // A session waiting for the answer to its question on the task's thread runs
 // no skills and does not move the task: its turn after the answer does.
+// A review's session only makes the review and answers its questions.
 func (a *App) afterTurn(ctx context.Context, sessionID, startLane int64) {
 	sess, err := a.Store.Session(ctx, sessionID)
-	if err != nil {
+	if err != nil || sess.Trigger == ReviewTrigger {
 		return
 	}
 	if sess.NeedsInput != "" && a.waitsForAnswer(ctx, sess.ID) {

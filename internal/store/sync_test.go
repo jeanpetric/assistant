@@ -348,7 +348,8 @@ func TestSyncTriggersOnReopen(t *testing.T) {
 		`DROP TRIGGER slack_channels_task`, `DROP TRIGGER slack_channels_session`, `DROP TRIGGER slack_messages_session`,
 		`DROP TABLE task_kinds`, `CREATE TABLE trello_cards (card_id TEXT PRIMARY KEY)`, `CREATE TABLE trello_boards (id INTEGER PRIMARY KEY)`,
 		`ALTER TABLE settings ADD COLUMN trello_board TEXT`, `ALTER TABLE settings ADD COLUMN trello_project_id INTEGER`,
-		`ALTER TABLE settings ADD COLUMN trello_lane_id INTEGER`, `ALTER TABLE settings ADD COLUMN trello_done_lane_id INTEGER`, `DROP TABLE session_prompts`)
+		`ALTER TABLE settings ADD COLUMN trello_lane_id INTEGER`, `ALTER TABLE settings ADD COLUMN trello_done_lane_id INTEGER`, `DROP TABLE session_prompts`,
+		`DROP TABLE review_questions`, `DROP TABLE reviews`)
 	migrations = append(migrations, `UPDATE lanes SET name = 'Migrated' WHERE id = 1;`)
 	defer func() { migrations = migrations[:len(migrations)-1] }()
 	s.Close()

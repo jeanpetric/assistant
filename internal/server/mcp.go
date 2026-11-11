@@ -177,7 +177,7 @@ func (s *Server) mcpTools() []mcpTool {
 		},
 		{
 			Name: "get_task",
-			Description: "One task with its schedules and agent sessions (without transcripts; use get_session for those), the tasks it builds on (builds_on), the tasks that build on it (used_by), its memories, " +
+			Description: "One task with its schedules and agent sessions (without transcripts; use get_session for those), the tasks it builds on (builds_on), the tasks that build on it (used_by), its memories, its PR reviews (reviews, newest first, with status; see get_review), " +
 				"its activity thread (activity: short messages from its sessions, session_id, and the user, session_id null, oldest first; a question is open while answered_at is null), " +
 				"agent_status (null if none; " + agentStatusDoc + ") " +
 				"and, in task, slack: its Slack channel here (channel_id, channel_name, session_id the orchestrator, url, last_sync_at, error), null if none.",
@@ -559,6 +559,49 @@ func (s *Server) mcpTools() []mcpTool {
 			InputSchema: schema([]string{"queued_message_id"}, map[string]any{"queued_message_id": prop("integer", "Queued message id")}),
 			call:        byID("DELETE", "/api/queued-messages/%d", "queued_message_id", false),
 		},
+		{
+			Name: "generate_review",
+			Description: "Start a review of the pull request in the task's pull_request field: a new review (older ones stay) and a new \"PR review\" session on the task " +
+				"that fetches the PR with gh, ranks its files, annotates their lines and saves that (save_review). Returns review_id and session_id. " +
+				"The user reads it on the review page; questions on its lines (ask_review) go to that session.",
+			InputSchema: schema([]string{"task_id"}, map[string]any{"task_id": pTaskID}),
+			call:        byID("POST", "/api/tasks/%d/reviews", "task_id", false),
+		},
+		{
+			Name: "save_review",
+			Description: "Save what you made of a pull request on the review you were asked to make (replacing an earlier save): notes as the PR review notes object " +
+				"(title, url, repo, head, summary, files [{path, rank or unimportant, why}], annotations {path: [{line, side new|old, kind class|method|line, text}]}) " +
+				"and diff_path, the absolute path of the `gh pr diff` output on this computer (2 MB at most). Returns warnings: each path or annotated line " +
+				"not in the diff; fix the notes and save again until there are none.",
+			InputSchema: schema([]string{"review_id", "notes", "diff_path"}, map[string]any{
+				"review_id": prop("integer", "Review id (from your prompt)"),
+				"notes":     prop("object", "The notes object (not a JSON string)"),
+				"diff_path": prop("string", "Absolute path of the PR's diff file"),
+			}),
+			call: byID("PUT", "/api/reviews/%d/notes", "review_id", true),
+		},
+		{
+			Name: "get_review",
+			Description: "A PR review: review (status generating, failed or ready; session_id answers its questions), summary, its files in reading order " +
+				"(group ranked, unimportant, hidden or other; rank, why, annotations; no diff) and the questions asked on it with their answers.",
+			InputSchema: schema([]string{"review_id"}, map[string]any{"review_id": prop("integer", "Review id (see get_task's reviews)")}),
+			call:        byID("GET", "/api/reviews/%d", "review_id", false),
+			post:        reviewWithoutDiff,
+		},
+		{
+			Name: "ask_review",
+			Description: "Ask the session of a ready review about a line of its diff (side new for a + or context line, old for a - line, with its line number) " +
+				"or about a whole file (no side, line 0). The question goes to the session with the diff around the line; queued while it works. " +
+				"The answer shows on the question in get_review (short_answer, full_answer) once its turn ends.",
+			InputSchema: schema([]string{"review_id", "path", "question"}, map[string]any{
+				"review_id": prop("integer", "Review id"),
+				"path":      prop("string", "File path as in the diff"),
+				"side":      prop("string", "new or old; empty for the whole file"),
+				"line":      prop("integer", "Line number on that side; 0 for the whole file"),
+				"question":  prop("string", "The question"),
+			}),
+			call: byID("POST", "/api/reviews/%d/questions", "review_id", true),
+		},
 	}
 }
 
@@ -725,6 +768,7 @@ func taskWithoutTranscripts(raw []byte) ([]byte, error) {
 		BuildsOn  json.RawMessage              `json:"builds_on"`
 		UsedBy    json.RawMessage              `json:"used_by"`
 		Artifacts json.RawMessage              `json:"artifacts"`
+		Reviews   json.RawMessage              `json:"reviews"`
 		Activity  json.RawMessage              `json:"activity"`
 		Memories  json.RawMessage              `json:"memories"`
 		Status    json.RawMessage              `json:"agent_status"`
