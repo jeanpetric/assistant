@@ -2202,8 +2202,8 @@ function reviewPage(data, others) {
     return q;
   }
 
-  // The box under a line or header: the input, then the questions asked there.
-  const questionBox = (path, side, line) => {
+  // The box under a line or header: the input, then the questions asked there. Esc in the input closes it.
+  const questionBox = (path, side, line, close) => {
     const key = reviewQKey(path, side, line);
     const input = h('input', { class: 'q-input', placeholder: line ? `Pitanje o liniji ${line}…` : 'Pitanje o cijelom fileu…' });
     const err = h('div', { class: 'q-error hidden' });
@@ -2221,7 +2221,7 @@ function reviewPage(data, others) {
     };
     input.addEventListener('keydown', e => {
       if (e.key === 'Enter') { e.preventDefault(); return submit(); }
-      if (e.key === 'Escape') { e.preventDefault(); input.blur(); }
+      if (e.key === 'Escape') { e.preventDefault(); close(); }
     });
     const list = h('div', { class: 'q-list' });
     const draw = () => list.replaceChildren(...qsAt(key).slice().reverse().map(questionEl));
@@ -2236,7 +2236,7 @@ function reviewPage(data, others) {
     let box = null;
     const toggle = () => {
       if (box) { slot.replaceChildren(); box = null; boxes.delete(reviewQKey(path, side, line)); return; }
-      box = questionBox(path, side, line);
+      box = questionBox(path, side, line, toggle);
       slot.replaceChildren(box.el);
       if (box.input.focus) box.input.focus();
     };

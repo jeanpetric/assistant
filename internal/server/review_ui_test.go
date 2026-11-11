@@ -45,7 +45,6 @@ function mk(tag, attrs, children) {
     replaceChildren(...cs) { el.children = []; el.append(...cs); },
     setAttribute(k, v) { el.attrs[k] = v; },
     focus() { el.focused = true; },
-    blur() { el.focused = false; },
     get text() { return el.children.map(c => typeof c === 'object' ? c.text : String(c)).join(''); },
   };
   el.classList = {
@@ -156,18 +155,24 @@ eval(require('fs').readFileSync(process.argv.at(-1), 'utf8'));
   if (!ask.classes.has('has-q') || !ask.text.includes('1')) fail('line not marked');
   if (find(fileEls[0], e => e.classes.has('q-box'))) fail('box open before click');
   ask.fire('click');
-  const box = find(fileEls[0], e => e.classes.has('q-box'));
+  let box = find(fileEls[0], e => e.classes.has('q-box'));
   if (!box || !find(box, e => e.classes.has('q-short') && e.text === 'Jer je kraće.')) fail('no short answer');
   if (find(box, e => e.classes.has('q-full'))) fail('full answer shown at once');
   find(box, e => e.classes.has('q-full-btn')).fire('click');
   const full = find(box, e => e.classes.has('q-full'));
   if (!full || !full.text.includes('Dugo **objašnjenje**.') || !find(full, e => e.tag === 'a' && e.attrs.href === '#/task/5/s/9')) fail('full answer');
 
+  // Esc in the input closes the box; the ? opens it again.
+  const escInput = find(box, e => e.classes.has('q-input'));
+  if (!escInput.focused) fail('input not focused on open');
+  escInput.fire('keydown', { key: 'Escape' });
+  if (find(fileEls[0], e => e.classes.has('q-box'))) fail('Escape did not close the box');
+  ask.fire('click');
+  box = find(fileEls[0], e => e.classes.has('q-box'));
+  if (!box) fail('box did not reopen after Escape');
+
   // Asking: the question goes to the review with its place, shows as pending, and its answer arrives.
   const input = find(box, e => e.classes.has('q-input'));
-  if (!input.focused) fail('input not focused on open');
-  input.fire('keydown', { key: 'Escape' });
-  if (input.focused || !find(box, e => e === input)) fail('Escape did not blur the input');
   input.value = 'A testovi?';
   await input.fire('keydown', { key: 'Enter' });
   const p = posts.at(-1);
