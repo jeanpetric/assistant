@@ -2242,8 +2242,12 @@ function reviewPage(data, others) {
     return { slot, toggle };
   };
 
-  const annEl = a => h('div', { class: `ann ann-${a.kind || 'line'}` },
-    h('span', { class: 'ann-kind' }, { class: 'C', method: 'M' }[a.kind] || 'i'), ' ', markdown(a.text));
+  // The agent's notes (classes, methods, lines) are hidden at first; the toolbar's button shows them all.
+  let notesOn = false;
+  const noteEls = [];
+  const noteEl = el => { el.classList.toggle('hidden', !notesOn); noteEls.push(el); return el; };
+  const annEl = a => noteEl(h('div', { class: `ann ann-${a.kind || 'line'}` },
+    h('span', { class: 'ann-kind' }, { class: 'C', method: 'M' }[a.kind] || 'i'), ' ', markdown(a.text)));
 
   const lineEl = (f, l, notes) => {
     if (l.t === '\\') return h('div', { class: 'dl meta' }, h('span', { class: 'n' }), h('span', { class: 'n' }), h('span', { class: 'c' }, '\\' + l.text), h('span'));
@@ -2266,8 +2270,8 @@ function reviewPage(data, others) {
     }));
     const orphans = f.annotations.filter(a => !shown.has(`${a.side}|${a.line}`));
     return h('div', { class: 'review-file-body' },
-      orphans.length ? h('div', { class: 'review-orphans small' }, 'Bilješke bez linije u diffu: ',
-        orphans.map(a => `${a.side} ${a.line}: ${a.text}`).join('; ')) : null,
+      orphans.length ? noteEl(h('div', { class: 'review-orphans small' }, 'Bilješke bez linije u diffu: ',
+        orphans.map(a => `${a.side} ${a.line}: ${a.text}`).join('; '))) : null,
       f.binary ? h('div', { class: 'muted small' }, 'Binarni file.') : null,
       !f.binary && !f.hunks.length ? h('div', { class: 'muted small' }, 'Bez promjena u sadržaju.') : null,
       f.hunks.map(hk => [h('div', { class: 'dl hunk' }, h('span', { class: 'n' }), h('span', { class: 'n' }), h('span', { class: 'c' }, hk.header), h('span')),
@@ -2324,8 +2328,18 @@ function reviewPage(data, others) {
   });
   const visible = () => files.filter(x => !off.has(x.ext));
   const drawFiles = () => files.forEach(x => x.el.classList.toggle('hidden', off.has(x.ext)));
+  const noteCount = data.files.reduce((n, f) => n + f.annotations.length, 0);
+  const notesBtn = h('button', {
+    class: 'ghost small notes-btn', disabled: !noteCount, onclick: () => {
+      notesOn = !notesOn;
+      noteEls.forEach(el => el.classList.toggle('hidden', !notesOn));
+      drawNotesBtn();
+    },
+  });
+  const drawNotesBtn = () => notesBtn.replaceChildren(`${notesOn ? 'Sakrij' : 'Prikaži'} bilješke (${noteCount})`);
+  drawNotesBtn();
   const toolbar = h('div', { class: 'review-toolbar' }, chips,
-    h('span', { class: 'grow' }),
+    h('span', { class: 'grow' }), notesBtn,
     h('button', { class: 'ghost small', onclick: () => visible().forEach(x => x.setOpen(true)) }, 'Otvori sve'),
     h('button', { class: 'ghost small', onclick: () => visible().forEach(x => x.setOpen(false)) }, 'Zatvori sve'));
 

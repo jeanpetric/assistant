@@ -107,7 +107,16 @@ eval(require('fs').readFileSync(process.argv.at(-1), 'utf8'));
   const opened = () => page.files.map(x => x.isOpen() ? 1 : 0).join('');
   if (opened() !== '110000') fail('default fold ' + opened());
   if (!find(fileEls[0], e => e.classes.has('why') && e.text === 'ranked why')) fail('no why');
-  if (!find(fileEls[0], e => e.classes.has('ann') && e.text.includes('Računa.'))) fail('no annotation');
+  // The notes are hidden at first; the toolbar's button shows and hides them.
+  const ann = find(fileEls[0], e => e.classes.has('ann') && e.text.includes('Računa.'));
+  if (!ann || !hidden(ann)) fail('annotation not hidden at first');
+  const notesBtn = find(page.el, e => e.classes.has('notes-btn'));
+  if (notesBtn.text !== 'Prikaži bilješke (1)') fail('notes button ' + notesBtn.text);
+  notesBtn.fire('click');
+  if (hidden(ann) || notesBtn.text !== 'Sakrij bilješke (1)') fail('notes not shown');
+  notesBtn.fire('click');
+  if (!hidden(ann)) fail('notes not hidden again');
+  notesBtn.fire('click');
 
   // Chips: the extensions with their counts, all on; one off hides its files, on shows them again.
   const chips = page.chips.map(c => c.text).join(' ');
