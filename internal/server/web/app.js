@@ -2149,6 +2149,331 @@ function reviewSubmitBox(r) {
     h('div', { class: 'row' }, h('span', { class: 'muted small grow' }, 'Objavi review na GitHubu'), buttons), err, done);
 }
 
+// ---- PlainLang specs on the review page ----
+
+const isSpecFile = f => fileExt(f.path) === 'plain';
+
+const specSectionNames = {
+  'definitions': 'Definicije', 'implementation reqs': 'Implementacijski zahtjevi',
+  'test reqs': 'Test zahtjevi', 'functional specs': 'Funkcionalne specifikacije',
+};
+
+// A spec's lines with the PR's change in place, each {t, old, new, text} as a diff line: the head content
+// (src) with the hunks' lines where they are, removed ones too, numbered on both sides. Without src only
+// the hunks, with a {t: 'gap', n} between them for the lines the diff leaves out.
+function specLines(f, src) {
+  const hunks = f.hunks.map(hk => {
+    const m = /^@@ -(\d+)(?:,\d+)? \+(\d+)/.exec(hk.header) || [0, 1, 1];
+    return { old: Number(m[1]), new: Number(m[2]), lines: hk.lines.filter(l => l.t !== '\\') };
+  });
+  const out = [];
+  let o = 0, n = 0; // the last old and new line emitted
+  if (src == null) {
+    hunks.forEach(hk => {
+      const skip = Math.max(hk.new - 1 - n, hk.old - 1 - o);
+      if (skip > 0) out.push({ t: 'gap', n: skip });
+      hk.lines.forEach(l => { out.push(l); if (l.old) o = l.old; if (l.new) n = l.new; });
+    });
+    return out;
+  }
+  const text = src.split('\n');
+  if (text.length && text.at(-1) === '') text.pop();
+  const context = upto => { while (n < upto && n < text.length) { n++; o++; out.push({ t: ' ', old: o, new: n, text: text[n - 1] }); } };
+  hunks.forEach(hk => {
+    context(Math.max(hk.new - 1, n));
+    hk.lines.forEach(l => { out.push(l); if (l.old) o = l.old; if (l.new) n = l.new; });
+  });
+  context(text.length);
+  return out;
+}
+
+const isBlank = l => l.t !== 'gap' && l.text.trim() === '';
+const isTop = l => l.t !== 'gap' && /^\S/.test(l.text);
+
+// A spec split as PlainLang writes it: the frontmatter (between --- lines), then sections (***name***),
+// each a list of items: a top-level bullet with its sub-bullets, nested ***acceptance tests*** and the
+// > comments that go with it (> spec: §1.2 above it, > code: below). An item, a section or the
+// frontmatter is changed when one of its lines is added or removed.
+function parsePlain(lines) {
+  const changed = ls => ls.some(l => l.t === '+' || l.t === '-');
+  const spec = { front: [], sections: [] };
+  let i = 0;
+  if (lines.length && lines[0].t !== 'gap' && lines[0].text.trim() === '---') {
+    spec.front.push(lines[0]);
+    for (i = 1; i < lines.length; i++) {
+      spec.front.push(lines[i]);
+      if (lines[i].t !== 'gap' && lines[i].text.trim() === '---' && lines[i].t !== '-') { i++; break; }
+    }
+  }
+  let sec = null, item = null, prevBlank = true;
+  // A changed line's other version (- then +) does not make a second bullet.
+  const hasBullet = (it, l) => it.lines.some(x => isTop(x) && /^- /.test(x.text) && (l.t === ' ' || x.t === ' ' || x.t === l.t));
+  for (; i < lines.length; i++) {
+    const l = lines[i];
+    const m = isTop(l) && /^\*\*\*(.+?)\*\*\*\s*$/.exec(l.text);
+    if (m) {
+      sec = { name: m[1].trim(), head: l, items: [] };
+      spec.sections.push(sec);
+      item = null;
+      prevBlank = true;
+      continue;
+    }
+    if (!sec && isBlank(l)) continue;
+    if (!sec) { sec = { name: '', head: null, items: [] }; spec.sections.push(sec); }
+    if (l.t === 'gap') { sec.items.push({ gap: l.n, lines: [] }); item = null; prevBlank = true; continue; }
+    const starts = isTop(l) && (prevBlank || !item ||
+      ((/^- /.test(l.text) || /^>\s*spec:/.test(l.text)) && hasBullet(item, l)));
+    if (starts) { item = { lines: [] }; sec.items.push(item); }
+    if (item) item.lines.push(l);
+    prevBlank = isBlank(l);
+  }
+  spec.sections.forEach(s => {
+    s.items.forEach(it => {
+      const solid = it.lines.filter(l => !isBlank(l));
+      it.changed = changed(it.lines);
+      it.state = !it.changed ? '' : solid.every(l => l.t === '+') ? 'added' : solid.every(l => l.t === '-') ? 'removed' : 'changed';
+      it.ids = [...it.lines.map(l => /^>\s*spec:\s*(.+)$/.exec(l.text)).filter(Boolean).map(m => m[1].trim())];
+      const first = it.lines.find(l => isTop(l) && /^- /.test(l.text) && l.t !== '-') || it.lines.find(l => isTop(l) && /^- /.test(l.text));
+      it.first = first || null;
+      const dm = first && /^-\s+:([^:\s]+):/.exec(first.text);
+      it.defines = s.name === 'definitions' && dm ? dm[1] : null;
+    });
+    s.changed = changed(s.head ? [s.head] : []) || s.items.some(it => it.changed);
+  });
+  spec.frontChanged = changed(spec.front);
+  return spec;
+}
+
+// Every concept defined in the PR's specs and the modules fetched with them: name → {path, item, text
+// (the definition's line), subs (its sub-bullets), code (its > code: comments), changed, inPR}. A spec
+// of the PR wins over the same module fetched as a dependency.
+function conceptIndex(files, specs) {
+  const index = new Map();
+  const add = (path, lines, inPR) => parsePlain(lines).sections.forEach(s => s.items.forEach(it => {
+    if (!it.defines || (index.has(it.defines) && index.get(it.defines).inPR && !inPR)) return;
+    if (it.state === 'removed' && index.has(it.defines)) return;
+    const live = it.lines.filter(l => l.t !== '-' || it.state === 'removed');
+    const text = it.first.text.replace(/^-\s+/, '');
+    const subs = live.filter(l => l !== it.first && /^\s+- /.test(l.text) && !/^\s+\*\*\*/.test(l.text)).map(l => l.text.trim().replace(/^- /, ''));
+    const code = live.map(l => /^>\s*code:\s*(.+)$/.exec(l.text)).filter(Boolean).map(m => m[1].trim());
+    index.set(it.defines, { name: it.defines, path, item: it, text, subs, code, changed: it.changed, removed: it.state === 'removed', inPR });
+  }));
+  Object.keys(specs).sort().forEach(p => {
+    if (!(files || []).some(f => f.path === p)) add(p, specLines({ hunks: [] }, specs[p]), false);
+  });
+  (files || []).filter(isSpecFile).forEach(f => add(f.path, specLines(f, specs[f.path]), true));
+  return index;
+}
+
+// A spec line's text with its parts marked: `code`, **bold**, :Concepts: (shown without the colons,
+// explained on hover, a click goes to the definition) and §1.2 references to a spec of the same file.
+function specText(text, ctx) {
+  const out = [];
+  text.split(/(`[^`]*`)/).forEach((part, i) => {
+    if (i % 2) { out.push(h('code', {}, part.slice(1, -1))); return; }
+    let last = 0;
+    for (const m of part.matchAll(/:([A-Z][A-Za-z0-9+.\-_]*):|(§\d+(?:\.\d+)*)|\*\*([^*]+)\*\*/g)) {
+      if (m.index > last) out.push(part.slice(last, m.index));
+      last = m.index + m[0].length;
+      if (m[1]) {
+        const name = m[1];
+        const known = ctx.index.has(name);
+        if (!ctx.live) { out.push(h('span', { class: 'concept' + (known ? '' : ' unknown') }, name)); continue; }
+        const el = h('span', {
+          class: 'concept' + (known ? '' : ' unknown'), tabindex: '0',
+          onmouseenter: () => ctx.tip.show(name, el), onmouseleave: () => ctx.tip.hide(),
+          onfocus: () => ctx.tip.show(name, el), onblur: () => ctx.tip.hide(),
+          onclick: e => { e.stopPropagation(); ctx.tip.hide(); ctx.reveal(name); },
+        }, name);
+        out.push(el);
+      } else if (m[2]) {
+        out.push(ctx.live && ctx.ref ? h('span', { class: 'spec-ref', onclick: e => { e.stopPropagation(); ctx.ref(m[2]); } }, m[2]) : h('span', { class: 'spec-ref' }, m[2]));
+      } else {
+        out.push(h('strong', {}, m[3]));
+      }
+    }
+    if (last < part.length) out.push(part.slice(last));
+  });
+  return out;
+}
+
+// The hover card of a concept: its name, the review's Croatian explanation, its definition with
+// sub-bullets and code, and the module it is defined in. One per page, moved to the concept hovered.
+function conceptTip(index, concepts) {
+  const el = h('div', { class: 'concept-tip hidden', role: 'tooltip' });
+  const card = name => {
+    const d = index.get(name);
+    const where = d ? [d.inPR ? 'u PR-u: ' : 'iz importa: ', h('code', {}, d.path), d.removed ? ' (obrisana)' : d.changed ? ' (izmijenjena u PR-u)' : ''] : null;
+    return [
+      h('div', { class: 'tip-name' }, name),
+      concepts[name] ? h('div', { class: 'tip-hr' }, concepts[name]) : null,
+      d ? h('div', { class: 'tip-def' }, specText(d.text, { index, live: false })) : h('div', { class: 'muted' }, 'Nije definiran u PR-u ni u modulima koje importa.'),
+      d && d.subs.length ? h('ul', { class: 'tip-subs' }, d.subs.slice(0, 8).map(t => h('li', {}, specText(t, { index, live: false })))) : null,
+      d && d.code.length ? h('div', { class: 'tip-code small' }, 'kod: ', d.code.map((c, i) => [i ? ', ' : '', h('code', {}, c)])) : null,
+      where ? h('div', { class: 'tip-where small muted' }, where) : null,
+    ];
+  };
+  return {
+    el, card,
+    show(name, at) {
+      el.replaceChildren(...card(name).flat().filter(Boolean));
+      el.classList.remove('hidden');
+      el.shown = name;
+      if (at && at.getBoundingClientRect) {
+        const r = at.getBoundingClientRect();
+        const left = Math.max(8, Math.min(r.left, (globalThis.innerWidth || 1200) - 440));
+        const below = r.bottom + 6 + 220 < (globalThis.innerHeight || 800);
+        el.setAttribute('style', below ? `left:${left}px;top:${r.bottom + 6}px` : `left:${left}px;bottom:${(globalThis.innerHeight || 800) - r.top + 6}px`);
+      }
+    },
+    hide() { el.classList.add('hidden'); el.shown = null; },
+  };
+}
+
+// A .plain file as a spec: the frontmatter, then each section with its items. What the PR changed is
+// open, the rest folded: an unchanged section to its header, a run of unchanged items to one "N
+// nepromijenjenih" row, an unchanged item to its first line. Every line keeps its ? (and notes) through
+// ctx.place. tools: Samo promjene (back to that) and Razmotaj sve; reveal(name) opens a definition.
+function specView(f, src, fileCtx) {
+  const lines = specLines(f, src);
+  const spec = parsePlain(lines);
+  const resets = []; // each fold's (all) => set it to its default, or open with all
+  const byId = new Map(); // §id → open its item
+  const byConcept = new Map(); // concept → open its definition
+  const ctx = { index: fileCtx.index, tip: fileCtx.tip, live: true, reveal: fileCtx.reveal, ref: id => (byId.get(id) || (() => {}))() };
+
+  const fold = (defaultOpen, head, body, onChange, caret = h('span', { class: 'caret' })) => {
+    let open = false;
+    const set = on => {
+      open = on;
+      caret.replaceChildren(on ? '▾' : '▸');
+      body.classList.toggle('hidden', !on);
+      if (onChange) onChange(on);
+    };
+    head.addEventListener('click', () => set(!open));
+    resets.push(all => set(all || defaultOpen));
+    set(defaultOpen);
+    return { caret, set, isOpen: () => open };
+  };
+
+  const lineRow = (l, extraClass, pre, post) => {
+    const side = l.t === '-' ? 'old' : 'new';
+    const no = side === 'old' ? l.old : l.new;
+    const place = fileCtx.place(f, side, no);
+    const indent = (/^\s*/.exec(l.text)[0].length) / 2;
+    const t = l.text.trim();
+    let content;
+    if (/^\*\*\*.+\*\*\*$/.test(t)) content = h('span', { class: 'spec-sub' }, specSectionNames[t.slice(3, -3).trim()] || t.slice(3, -3).trim());
+    else if (/^>/.test(t)) {
+      const m = /^>\s*(code|spec):\s*(.*)$/.exec(t);
+      content = h('span', { class: 'spec-comment' }, m ? [m[1] === 'code' ? 'kod: ' : 'spec: ', m[1] === 'code' ? h('code', {}, m[2]) : m[2]] : t.replace(/^>\s*/, ''));
+    } else if (/^- /.test(t)) content = [h('span', { class: 'bullet' }, '•'), h('span', { class: 'spec-txt' }, specText(t.slice(2), ctx))];
+    else content = h('span', { class: 'spec-txt' }, specText(t, ctx));
+    const row = h('div', { class: 'sl' + (l.t === '+' ? ' add' : l.t === '-' ? ' del' : '') + (place.noted ? ' noted' : '') + (extraClass ? ' ' + extraClass : '') },
+      h('span', { class: 'n' }, l.old || ''), h('span', { class: 'n' }, l.new || ''),
+      h('span', { class: 'sc', style: `padding-left:${8 + indent * 18}px` }, pre || null, content, post || null),
+      place.acts);
+    const wrap = h('div', { class: 'sl-wrap' }, row, place.after);
+    wrap.row = row; // the line itself: a fold's click goes there, not to its notes or question box
+    return wrap;
+  };
+  // A spec id is its item's badge: its line shows only when removed.
+  const shown = ls => ls.filter(l => !isBlank(l) && !(l.t !== '-' && /^>\s*spec:/.test(l.text)));
+  // In a new file everything is new: no badge or colour says so.
+  const allNew = f.status === 'added';
+
+  const stateLabel = { added: 'novo', removed: 'obrisano', changed: 'izmijenjeno' };
+  const itemEl = it => {
+    const rows = shown(it.lines);
+    const head = it.first || rows[0];
+    if (!head) return null;
+    const rest = rows.filter(l => l !== head);
+    const meta = h('span', { class: 'spec-meta' },
+      it.ids.map(id => h('span', { class: 'badge spec-id' }, id)),
+      it.state && !allNew ? h('span', { class: `badge spec-${it.state}` }, stateLabel[it.state]) : null);
+    const el = h('div', { class: 'spec-item' + (it.state ? ' ' + it.state : '') });
+    if (!rest.length) {
+      el.append(lineRow(head, 'spec-head', [h('span', { class: 'caret' }), meta]));
+      return el;
+    }
+    const body = h('div', { class: 'spec-item-body' }, rest.map(l => lineRow(l)));
+    const more = h('span', { class: 'muted small spec-more' }, ` +${rest.length}`);
+    const caret = h('span', { class: 'caret' });
+    const row = lineRow(head, 'spec-head folding', [caret, meta], more);
+    const fd = fold(it.changed, row.row, body, on => {
+      el.classList.toggle('folded', !on);
+      more.classList.toggle('hidden', on);
+    }, caret);
+    el.append(row, body);
+    el.open = () => fd.set(true);
+    return el;
+  };
+
+  // A run of unchanged items folds to one row; opening it shows them, each folded to its first line.
+  const runEl = items => {
+    const els = items.map(itemEl).filter(Boolean);
+    if (!els.length) return null;
+    const body = h('div', {}, els);
+    const bar = h('div', { class: 'spec-run' });
+    const fd = fold(false, bar, body);
+    bar.append(fd.caret, ` ${els.length} ${els.length === 1 ? 'nepromijenjena stavka' : 'nepromijenjenih stavki'}`);
+    const el = h('div', {}, bar, body);
+    el.open = () => fd.set(true);
+    items.forEach((it, i) => { it.run = el; it.el = els[i]; });
+    return el;
+  };
+
+  const sectionEl = s => {
+    const parts = [];
+    let run = [];
+    const flush = () => { if (run.length) parts.push(runEl(run)); run = []; };
+    s.items.forEach(it => {
+      if (it.gap) { flush(); parts.push(h('div', { class: 'spec-gap muted small' }, `⋯ ${it.gap} linija koje diff ne pokazuje`)); return; }
+      if (it.changed) { flush(); it.el = itemEl(it); parts.push(it.el); } else run.push(it);
+    });
+    flush();
+    const nChanged = s.items.filter(it => it.changed).length;
+    const nItems = s.items.filter(it => !it.gap).length;
+    const body = h('div', { class: 'spec-sec-body' }, parts);
+    if (!s.head) return h('div', { class: 'spec-sec' }, body);
+    const head = h('div', { class: 'spec-sec-head' + (s.head.t !== ' ' ? (s.head.t === '+' ? ' add' : ' del') : '') });
+    const fd = fold(s.changed, head, body);
+    head.append(...[fd.caret, h('span', { class: 'spec-sec-name' }, specSectionNames[s.name] || s.name),
+      h('span', { class: 'muted small' }, ` ***${s.name}*** · ${nItems} ${nItems === 1 ? 'stavka' : 'stavki'}`),
+      allNew ? null : nChanged ? h('span', { class: 'badge spec-changed' }, `${nChanged} izmj.`) : h('span', { class: 'muted small' }, ' · bez promjena')].filter(Boolean));
+    const open = it => { fd.set(true); if (it.run) it.run.open(); if (it.el && it.el.open) it.el.open(); };
+    s.items.forEach(it => {
+      it.ids.forEach(id => byId.set(id, () => { open(it); flash(it.el); }));
+      if (it.defines) byConcept.set(it.defines, () => { open(it); flash(it.el); });
+    });
+    return h('div', { class: 'spec-sec' }, head, body);
+  };
+  const flash = el => {
+    if (!el) return;
+    el.classList.add('flash');
+    if (el.scrollIntoView) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    setTimeout(() => el.classList.remove('flash'), 1600);
+  };
+
+  let frontEl = null;
+  if (spec.front.length) {
+    const desc = spec.front.find(l => /^description:/.test(l.text) && l.t !== '-');
+    const rows = h('div', { class: 'spec-front-body' }, shown(spec.front).filter(l => l.text.trim() !== '---' && l !== desc).map(l => lineRow(l)));
+    const head = h('div', { class: 'spec-front-head' });
+    const fd = fold(spec.frontChanged, head, rows);
+    head.append(...[fd.caret, h('span', { class: 'spec-sec-name' }, 'Modul'),
+      desc ? h('span', { class: 'spec-desc' }, ' ', specText(desc.text.replace(/^description:\s*/, ''), ctx)) : null,
+      spec.frontChanged && !allNew ? h('span', { class: 'badge spec-changed' }, 'izmj.') : null].filter(Boolean));
+    frontEl = h('div', { class: 'spec-front' }, head, rows);
+  }
+
+  const el = h('div', { class: 'spec-view' + (allNew ? ' all-new' : '') }, frontEl, spec.sections.map(sectionEl));
+  const tools = h('span', { class: 'row spec-tools' },
+    h('button', { class: 'ghost small', onclick: () => resets.forEach(r => r(false)) }, 'Samo promjene'),
+    h('button', { class: 'ghost small', onclick: () => resets.forEach(r => r(true)) }, 'Razmotaj sve'));
+  return { el, tools, spec, reveal: name => (byConcept.get(name) || (() => {}))() };
+}
+
 // The review page: the PR's summary, a chip per file extension that shows or hides its files, Otvori sve /
 // Zatvori sve, and the files in reading order (ranked open, the rest folded), each with its diff and notes.
 // Every diff line and file header has a ? that opens a box to ask the review's session about it; the box
@@ -2302,21 +2627,30 @@ function reviewPage(data, others) {
     return b;
   };
 
-  const lineEl = (f, l, notes) => {
+  // What a line of a file has beside its text: its note button and ?, and under it its notes and question box.
+  const linePlace = (f, side, no) => {
+    const { slot, toggle } = boxSlot(f.path, side, no);
+    const here = f.annotations.filter(a => a.side === side && a.line === no);
+    const anns = here.map(annEl);
+    return {
+      noted: here.length > 0,
+      acts: h('span', { class: 'acts' },
+        here.length ? noteToggle([...new Set(here.map(kindLetter))].join(''), 'Prikaži / sakrij bilješku', anns) : null,
+        askButton(reviewQKey(f.path, side, no), toggle)),
+      after: [anns, slot],
+    };
+  };
+
+  const lineEl = (f, l) => {
     if (l.t === '\\') return h('div', { class: 'dl meta' }, h('span', { class: 'n' }), h('span', { class: 'n' }), h('span', { class: 'c' }, '\\' + l.text), h('span'));
     const side = l.t === '-' ? 'old' : 'new';
-    const no = side === 'old' ? l.old : l.new;
-    const { slot, toggle } = boxSlot(f.path, side, no);
-    const here = notes.filter(a => a.side === side && a.line === no);
-    const anns = here.map(annEl);
+    const place = linePlace(f, side, side === 'old' ? l.old : l.new);
     return h('div', { class: 'dl-wrap' },
-      h('div', { class: 'dl' + (l.t === '+' ? ' add' : l.t === '-' ? ' del' : '') + (here.length ? ' noted' : '') },
+      h('div', { class: 'dl' + (l.t === '+' ? ' add' : l.t === '-' ? ' del' : '') + (place.noted ? ' noted' : '') },
         h('span', { class: 'n' }, l.old || ''), h('span', { class: 'n' }, l.new || ''),
         h('span', { class: 'c' }, (l.t === ' ' ? ' ' : l.t) + l.text),
-        h('span', { class: 'acts' },
-          here.length ? noteToggle([...new Set(here.map(kindLetter))].join(''), 'Prikaži / sakrij bilješku', anns) : null,
-          askButton(reviewQKey(f.path, side, no), toggle))),
-      anns, slot);
+        place.acts),
+      place.after);
   };
 
   const fileBody = f => {
@@ -2333,7 +2667,45 @@ function reviewPage(data, others) {
       f.binary ? h('div', { class: 'muted small' }, 'Binarni file.') : null,
       !f.binary && !f.hunks.length ? h('div', { class: 'muted small' }, 'Bez promjena u sadržaju.') : null,
       f.hunks.map(hk => [h('div', { class: 'dl hunk' }, h('span', { class: 'n' }), h('span', { class: 'n' }), h('span', { class: 'c' }, hk.header), h('span')),
-        hk.lines.map(l => lineEl(f, l, f.annotations))]));
+        hk.lines.map(l => lineEl(f, l))]));
+  };
+
+  // A .plain file reads as a spec (its diff a toggle away); the concepts of every spec in the PR and of
+  // the modules they import explain themselves on hover.
+  const specs = data.specs || {};
+  const index = conceptIndex(data.files, specs);
+  const tip = conceptTip(index, data.concepts || {});
+  const revealers = new Map(); // path → reveal(concept) of its open spec view
+  const specCtx = {
+    index, tip,
+    place: (f, side, no) => linePlace(f, side, no),
+    reveal(name) {
+      const d = index.get(name);
+      if (!d) return;
+      const x = files.find(x => x.f.path === d.path);
+      if (!x) return;
+      x.setOpen(true);
+      const r = revealers.get(d.path);
+      if (r) r(name);
+    },
+  };
+  const bodyOf = f => {
+    if (!isSpecFile(f) || f.binary) return fileBody(f);
+    let raw = false;
+    const holder = h('div');
+    const view = specView(f, specs[f.path], specCtx);
+    revealers.set(f.path, view.reveal);
+    let diffBody = null;
+    const rawBtn = h('button', { class: 'ghost small', onclick: () => { raw = !raw; draw(); } });
+    const draw = () => {
+      rawBtn.replaceChildren(raw ? 'Prikaži kao specifikaciju' : 'Sirovi diff');
+      if (raw && !diffBody) diffBody = fileBody(f);
+      holder.replaceChildren(raw ? diffBody : view.el);
+      view.tools.classList.toggle('hidden', raw);
+    };
+    const bar = h('div', { class: 'spec-bar row' }, view.tools, h('span', { class: 'grow' }), rawBtn);
+    draw();
+    return h('div', {}, bar, holder);
   };
 
   const statusLabel = { added: 'novi', deleted: 'obrisan', renamed: 'preimenovan' };
@@ -2346,7 +2718,7 @@ function reviewPage(data, others) {
     const setOpen = on => {
       open = on;
       caret.replaceChildren(on ? '▾' : '▸');
-      if (on && !built) { body.replaceChildren(fileBody(f)); built = true; }
+      if (on && !built) { body.replaceChildren(bodyOf(f)); built = true; }
       body.classList.toggle('hidden', !on);
       el.classList.toggle('open', on);
     };
@@ -2393,7 +2765,7 @@ function reviewPage(data, others) {
 
   return {
     el: h('div', { class: 'review-page' }, header, toolbar, files.map(x => x.el),
-      files.length ? null : h('p', { class: 'muted' }, 'Diff nema fileova.')),
+      files.length ? null : h('p', { class: 'muted' }, 'Diff nema fileova.'), tip.el),
     files, chips,
     update(d) {
       questions = d.questions || [];

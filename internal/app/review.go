@@ -84,6 +84,12 @@ type ReviewNotes struct {
 	Summary     string                        `json:"summary"`
 	Files       []NoteFile                    `json:"files"`
 	Annotations map[string][]ReviewAnnotation `json:"annotations"`
+	// Concepts explains, in Croatian, the :Concepts: the PR's .plain specs
+	// use, by name without colons.
+	Concepts map[string]string `json:"concepts,omitempty"`
+	// Specs is set by SaveReview, never by the agent: the head content of
+	// the PR's .plain files and the modules they import, by path.
+	Specs map[string]string `json:"specs,omitempty"`
 }
 
 // NoteFile ranks a file (1 = read first) or calls it unimportant, saying why.
@@ -341,6 +347,7 @@ Read the PR body and the whole diff of every file the filter does not hide (skim
 - **Annotations:** on every ranked file. One per new or changed class and method, on the line of its ` + "`class`/`module`/`def`/`func`" + ` (side new; a removed one on the old file's line with ` + "`\"side\": \"old\"`" + `). Add ` + "`line`" + ` notes only where a line is non-obvious: a rounding rule, a guard, an ordering, a side effect, a query. Not every line. Each text is 1-2 sentences in Croatian, natural language, saying what it does and why, not restating the code. Write identifiers in backticks.
 - ` + "`line`" + ` must be a line shown in the diff (a + or context line for side new, a - line for side old). Count from the hunk headers (` + "`@@ -a,b +c,d @@`" + `: the first new-side line is c), or open the file at the head commit to check.
 - Hidden files get no annotations and need no entry.
+- **Concepts:** when the PR changes ` + "`.plain`" + ` specs (PlainLang), add ` + "`\"concepts\": {\"Period\": \"…\"}`" + `: for every ` + "`:Concept:`" + ` their changed parts use, by name without the colons, 1-2 Croatian sentences on what it is in the product, for a reader who does not know the code (the page shows them on hover next to the concept's definition). Read the modules they import for the definitions.
 - Croatian for summary, why and notes; code stays as written. Paraphrase, don't judge: a real bug you notice goes in one clause at the end of the summary.
 
 ## 4. Save
@@ -366,7 +373,8 @@ func ReviewPrompt(taskID, reviewID int64, prURL string) (string, error) {
 // must be in the diff; the ones that are not come back as warnings (the
 // review is saved all the same) for the agent to fix.
 func (a *App) SaveReview(ctx context.Context, reviewID int64, notes json.RawMessage, diffPath string) ([]string, error) {
-	if _, err := a.Store.Review(ctx, reviewID); err != nil {
+	rev, err := a.Store.Review(ctx, reviewID)
+	if err != nil {
 		return nil, err
 	}
 	var n ReviewNotes
@@ -421,6 +429,11 @@ func (a *App) SaveReview(ctx context.Context, reviewID int64, notes json.RawMess
 	if n.Annotations == nil {
 		n.Annotations = map[string][]ReviewAnnotation{}
 	}
+	prURL := n.URL
+	if prURL == "" {
+		prURL = rev.PRURL
+	}
+	n.Specs = a.fetchSpecs(ctx, prURL, n.Head, files)
 	kept, err := json.Marshal(n)
 	if err != nil {
 		return nil, err
@@ -526,7 +539,14 @@ func QuestionPrompt(r store.Review, n ReviewNotes, q store.ReviewQuestion) (stri
 		snippet = fileSnippet(f, 200)
 	} else {
 		var ok bool
-		if snippet, ok = lineSnippet(f, q.Side, q.Line, 20); !ok {
+		if snippet, ok = lineSnippet(f, q.Side, q.Line, 20); !ok && q.Side == "new" && n.Specs[f.Path] != "" {
+			// A spec's line the diff does not show: the page shows the whole module.
+			snippet, ok = specSnippet(n.Specs[f.Path], q.Line, 20)
+			if ok {
+				snippet = "(nepromijenjeni dio specifikacije na head commitu, linija označena s >)\n" + snippet
+			}
+		}
+		if !ok {
 			return "", fmt.Errorf("%w: %s has no %s line %d in the diff", ErrBadReview, q.Path, q.Side, q.Line)
 		}
 		anns := n.Annotations[f.Path]

@@ -209,3 +209,40 @@ func TestSubmitReviewAPI(t *testing.T) {
 		t.Fatalf("error = %q", e.Error)
 	}
 }
+
+// A review of a PR with .plain specs gives the page their head content (specs) and the concepts'
+// Croatian notes; get_review keeps the concepts but not the specs.
+func TestReviewSpecsAPI(t *testing.T) {
+	c := newClient(t)
+	var task store.Task
+	c.do("POST", "/api/tasks", map[string]any{"title": "PR", "fields": map[string]string{"pull_request": "https://github.com/o/r/pull/1"}}, 201, &task)
+	r, err := c.app.Store.CreateReview(t.Context(), store.Review{TaskID: task.ID, PRURL: "https://github.com/o/r/pull/1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.app.GH = func(_ context.Context, args ...string) ([]byte, error) {
+		if strings.Contains(args[len(args)-1], "/git/trees/") {
+			return []byte(`{"tree": [{"path": "plain/a.plain", "type": "blob"}]}`), nil
+		}
+		return []byte("***definitions***\n\n- :Period: is a slice.\n"), nil
+	}
+	diff := filepath.Join(t.TempDir(), "pr.diff")
+	os.WriteFile(diff, []byte("diff --git a/plain/a.plain b/plain/a.plain\n--- a/plain/a.plain\n+++ b/plain/a.plain\n@@ -3 +3 @@\n-- :Period: is.\n+- :Period: is a slice.\n"), 0o600)
+	notes := map[string]any{"title": "t", "url": "https://github.com/o/r/pull/1", "head": "abc", "summary": "s", "files": []any{},
+		"concepts": map[string]string{"Period": "Razdoblje."}}
+	if text, isErr := c.tool("save_review", map[string]any{"review_id": r.ID, "notes": notes, "diff_path": diff}); isErr || strings.Contains(text, "not in the diff") {
+		t.Fatalf("save_review = %s", text)
+	}
+	var page struct {
+		Specs    map[string]string `json:"specs"`
+		Concepts map[string]string `json:"concepts"`
+	}
+	c.do("GET", fmt.Sprintf("/api/reviews/%d", r.ID), nil, 200, &page)
+	if page.Specs["plain/a.plain"] != "***definitions***\n\n- :Period: is a slice.\n" || page.Concepts["Period"] != "Razdoblje." {
+		t.Fatalf("page = %+v", page)
+	}
+	text, _ := c.tool("get_review", map[string]any{"review_id": r.ID})
+	if strings.Contains(text, `"specs"`) || !strings.Contains(text, "Razdoblje.") {
+		t.Fatalf("get_review = %s", text)
+	}
+}

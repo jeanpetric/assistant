@@ -14,66 +14,8 @@ import (
 // for all visible ones; the ? at a line or file header opens a box whose question goes to the review's
 // session, with the short answer and, a click away, the full one; the buttons only with a PR field.
 func TestReviewPageUI(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node not installed")
-	}
-	js, err := webFS.ReadFile("web/app.js")
-	if err != nil {
-		t.Fatal(err)
-	}
-	start := bytes.Index(js, []byte("// ---------- PR review ----------"))
-	end := bytes.Index(js, []byte("function artifactsPanel("))
-	if start < 0 || end < start {
-		t.Fatal("app.js lacks the review page")
-	}
-	src := filepath.Join(t.TempDir(), "review.js")
-	if err := os.WriteFile(src, js[start:end], 0o600); err != nil {
-		t.Fatal(err)
-	}
-	script := `
-const fail = msg => { console.log(msg); process.exitCode = 1; };
-function mk(tag, attrs, children) {
-  const on = {};
-  const el = {
-    tag, attrs, value: attrs.value || '', children: [],
-    classes: new Set((attrs.class || '').split(' ').filter(Boolean)),
-    addEventListener(ev, fn) { on[ev] = fn; },
-    fire(ev, e) { return on[ev](Object.assign({ target: el, preventDefault() {}, stopPropagation() {} }, e)); },
-    // As the DOM's: null, undefined and false become text.
-    append(...cs) { el.children.push(...cs.map(c => typeof c === 'object' && c !== null ? c : String(c))); },
-    replaceChildren(...cs) { el.children = []; el.append(...cs); },
-    setAttribute(k, v) { el.attrs[k] = v; },
-    focus() { el.focused = true; },
-    get text() { return el.children.map(c => typeof c === 'object' ? c.text : String(c)).join(''); },
-  };
-  el.classList = {
-    toggle(c, on) { if (on === undefined) on = !el.classes.has(c); if (on) el.classes.add(c); else el.classes.delete(c); },
-    add(c) { el.classes.add(c); }, remove(c) { el.classes.delete(c); }, contains: c => el.classes.has(c),
-  };
-  for (const [k, v] of Object.entries(attrs)) if (k.startsWith('on') && typeof v === 'function') on[k.slice(2)] = v;
-  el.append(...children.flat(Infinity).filter(c => c != null && c !== false));
-  return el;
-}
-const h = (tag, attrs, ...children) => mk(tag, attrs || {}, children);
-const markdown = text => h('div', { class: 'markdown' }, text);
-const fmtTime = ts => 'T' + ts;
-const toasts = [];
-const toast = m => toasts.push(m);
-const sessionHref = s => '#/task/' + s.task_id + '/s/' + s.id;
-const find = (el, pred) => {
-  if (!el || typeof el !== 'object') return null;
-  if (pred(el)) return el;
-  for (const c of el.children) { const f = find(c, pred); if (f) return f; }
-  return null;
-};
-const findAll = (el, pred, out = []) => {
-  if (!el || typeof el !== 'object') return out;
-  if (pred(el)) out.push(el);
-  el.children.forEach(c => findAll(c, pred, out));
-  return out;
-};
-const hidden = el => el.classes.has('hidden');
+	node, src := reviewJS(t)
+	script := reviewDOM + `
 const location = { hash: '' };
 let confirmed = true;
 const confirms = [];
@@ -267,3 +209,73 @@ eval(require('fs').readFileSync(process.argv.at(-1), 'utf8'));
 		t.Fatalf("review page: %v\n%s", err, strings.TrimSpace(string(out)))
 	}
 }
+
+// reviewJS is node and a file with app.js's PR review part, for a test to eval; it skips the test
+// without node.
+func reviewJS(t *testing.T) (node, src string) {
+	t.Helper()
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed")
+	}
+	js, err := webFS.ReadFile("web/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := bytes.Index(js, []byte("// ---------- PR review ----------"))
+	end := bytes.Index(js, []byte("function artifactsPanel("))
+	if start < 0 || end < start {
+		t.Fatal("app.js lacks the review page")
+	}
+	src = filepath.Join(t.TempDir(), "review.js")
+	if err := os.WriteFile(src, js[start:end], 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return node, src
+}
+
+// reviewDOM is the fake DOM and helpers the review UI tests run on: h, find, findAll, hidden, fail.
+const reviewDOM = `
+const fail = msg => { console.log(msg); process.exitCode = 1; };
+function mk(tag, attrs, children) {
+  const on = {};
+  const el = {
+    tag, attrs, value: attrs.value || '', children: [],
+    classes: new Set((attrs.class || '').split(' ').filter(Boolean)),
+    addEventListener(ev, fn) { on[ev] = fn; },
+    fire(ev, e) { return on[ev](Object.assign({ target: el, preventDefault() {}, stopPropagation() {} }, e)); },
+    // As the DOM's: null, undefined and false become text.
+    append(...cs) { el.children.push(...cs.map(c => typeof c === 'object' && c !== null ? c : String(c))); },
+    replaceChildren(...cs) { el.children = []; el.append(...cs); },
+    setAttribute(k, v) { el.attrs[k] = v; },
+    focus() { el.focused = true; },
+    get text() { return el.children.map(c => typeof c === 'object' ? c.text : String(c)).join(''); },
+  };
+  el.classList = {
+    toggle(c, on) { if (on === undefined) on = !el.classes.has(c); if (on) el.classes.add(c); else el.classes.delete(c); },
+    add(c) { el.classes.add(c); }, remove(c) { el.classes.delete(c); }, contains: c => el.classes.has(c),
+  };
+  for (const [k, v] of Object.entries(attrs)) if (k.startsWith('on') && typeof v === 'function') on[k.slice(2)] = v;
+  el.append(...children.flat(Infinity).filter(c => c != null && c !== false));
+  return el;
+}
+const h = (tag, attrs, ...children) => mk(tag, attrs || {}, children);
+const markdown = text => h('div', { class: 'markdown' }, text);
+const fmtTime = ts => 'T' + ts;
+const toasts = [];
+const toast = m => toasts.push(m);
+const sessionHref = s => '#/task/' + s.task_id + '/s/' + s.id;
+const find = (el, pred) => {
+  if (!el || typeof el !== 'object') return null;
+  if (pred(el)) return el;
+  for (const c of el.children) { const f = find(c, pred); if (f) return f; }
+  return null;
+};
+const findAll = (el, pred, out = []) => {
+  if (!el || typeof el !== 'object') return out;
+  if (pred(el)) out.push(el);
+  el.children.forEach(c => findAll(c, pred, out));
+  return out;
+};
+const hidden = el => el.classes.has('hidden');
+`

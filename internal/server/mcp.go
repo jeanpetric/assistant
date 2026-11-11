@@ -570,7 +570,7 @@ func (s *Server) mcpTools() []mcpTool {
 		{
 			Name: "save_review",
 			Description: "Save what you made of a pull request on the review you were asked to make (replacing an earlier save): notes as the PR review notes object " +
-				"(title, url, repo, head, summary, files [{path, rank or unimportant, why}], annotations {path: [{line, side new|old, kind class|method|line, text}]}) " +
+				"(title, url, repo, head, summary, files [{path, rank or unimportant, why}], annotations {path: [{line, side new|old, kind class|method|line, text}]}, concepts {Name: Croatian explanation} for a PR with .plain specs) " +
 				"and diff_path, the absolute path of the `gh pr diff` output on this computer (2 MB at most). Returns warnings: each path or annotated line " +
 				"not in the diff; fix the notes and save again until there are none.",
 			InputSchema: schema([]string{"review_id", "notes", "diff_path"}, map[string]any{

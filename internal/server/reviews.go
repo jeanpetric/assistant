@@ -100,7 +100,7 @@ func (s *Server) getReview(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, map[string]any{
 		"review": reviewRef{rev, s.app.ReviewStatusOf(ctx, rev)}, "summary": notes.Summary, "files": files,
-		"questions": questions, "session": session,
+		"questions": questions, "session": session, "specs": notes.Specs, "concepts": notes.Concepts,
 	})
 }
 
@@ -189,7 +189,8 @@ func (s *Server) submitReview(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"submitted": true, "event": in.Event})
 }
 
-// reviewWithoutDiff keeps get_review small: the files without their hunks.
+// reviewWithoutDiff keeps get_review small: the files without their hunks,
+// no spec sources.
 func reviewWithoutDiff(raw []byte) ([]byte, error) {
 	var out map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &out); err != nil {
@@ -207,5 +208,6 @@ func reviewWithoutDiff(raw []byte) ([]byte, error) {
 		return nil, err
 	}
 	out["files"] = b
+	delete(out, "specs")
 	return json.Marshal(out)
 }
