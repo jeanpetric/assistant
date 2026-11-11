@@ -58,7 +58,9 @@ function mk(tag, attrs, children) {
 const h = (tag, attrs, ...children) => mk(tag, attrs || {}, children);
 const markdown = text => h('div', { class: 'markdown' }, text);
 const fmtTime = ts => 'T' + ts;
-const toast = () => {};
+const toasts = [];
+const toast = m => toasts.push(m);
+const sessionHref = s => '#/task/' + s.task_id + '/s/' + s.id;
 const find = (el, pred) => {
   if (!el || typeof el !== 'object') return null;
   if (pred(el)) return el;
@@ -75,8 +77,10 @@ const hidden = el => el.classes.has('hidden');
 const location = { hash: '' };
 const posts = [];
 let nextQ = 100;
+let taskReviews = [];
 const api = async (method, path, body) => {
   posts.push([method, path, body]);
+  if (method === 'GET' && path.endsWith('/reviews')) return taskReviews;
   if (path.endsWith('/questions')) return Object.assign({ id: nextQ++, status: 'pending', short_answer: '', full_answer: '', error: '' }, body);
   return { review_id: 42, session_id: 9 };
 };
@@ -179,12 +183,28 @@ eval(require('fs').readFileSync(process.argv.at(-1), 'utf8'));
 
   // The task's buttons: none without a PR field; Novi review alone before the first one.
   if (reviewButtons({ id: 5, fields: {} }, [])) fail('buttons without PR');
-  const first = reviewButtons({ id: 5, fields: { pull_request: 'https://github.com/o/r/pull/1' } }, []);
+  const ticks = [];
+  const every = (ms, fn) => ticks.push(fn);
+  const first = reviewButtons({ id: 5, fields: { pull_request: 'https://github.com/o/r/pull/1' } }, [], every);
   if (find(first, e => e.text === 'Otvori review')) fail('Otvori review without a review');
+  // Novi review stays in the task: Generiram… with the session, Novi review waits, no Otvori review yet.
+  taskReviews = [{ id: 42, session_id: 9, status: 'generating' }];
   await find(first, e => e.tag === 'button' && e.text === 'Novi review').fire('click');
-  if (posts.at(-1)[1] !== '/api/tasks/5/reviews' || location.hash !== '#/review/42') fail('Novi review ' + JSON.stringify(posts.at(-1)) + location.hash);
-  const more = reviewButtons({ id: 5, fields: { pull_request: 'x' } }, [{ id: 8, status: 'generating' }, { id: 3, status: 'ready' }]);
-  if (!find(more, e => e.tag === 'a' && e.attrs.href === '#/review/8' && e.text === 'Otvori review') || !find(more, e => e.text === 'Generiram…')) fail('Otvori review');
+  if (!posts.some(p => p[0] === 'POST' && p[1] === '/api/tasks/5/reviews') || location.hash !== '') fail('Novi review ' + JSON.stringify(posts.at(-1)) + location.hash);
+  const genState = find(first, e => e.classes.has('review-gen-state'));
+  if (!genState || !genState.text.includes('Generiram…') || !find(genState, e => e.tag === 'a' && e.attrs.href === '#/task/5/s/9')) fail('generating state');
+  if (!find(first, e => e.tag === 'button' && e.text === 'Novi review').attrs.disabled) fail('Novi review not disabled while generating');
+  if (find(first, e => e.text === 'Otvori review')) fail('Otvori review while generating');
+  // Once it is ready, a poll brings Otvori review to it.
+  taskReviews = [{ id: 42, session_id: 9, status: 'ready' }];
+  for (const f of ticks) await f();
+  if (!find(first, e => e.tag === 'a' && e.attrs.href === '#/review/42' && e.text === 'Otvori review') || find(first, e => e.classes.has('review-gen-state'))) fail('ready after poll');
+  if (find(first, e => e.tag === 'button' && e.text === 'Novi review').attrs.disabled || toasts.at(-1) !== 'Review je gotov') fail('ready state');
+  // A new one generating next to an older ready one: Otvori review opens the ready one.
+  const more = reviewButtons({ id: 5, fields: { pull_request: 'x' } }, [{ id: 8, session_id: 11, status: 'generating' }, { id: 3, status: 'ready' }]);
+  if (!find(more, e => e.tag === 'a' && e.attrs.href === '#/review/3' && e.text === 'Otvori review') || !find(more, e => e.text.includes('Generiram…'))) fail('Otvori review');
+  const failedBtns = reviewButtons({ id: 5, fields: { pull_request: 'x' } }, [{ id: 8, session_id: 11, status: 'failed' }]);
+  if (find(failedBtns, e => e.text === 'Otvori review') || !find(failedBtns, e => e.text.includes('Generiranje nije uspjelo')) || find(failedBtns, e => e.text === 'Novi review').attrs.disabled) fail('failed buttons');
 })();
 `
 	out, err := exec.Command(node, "-e", script, "--", src).CombinedOutput()

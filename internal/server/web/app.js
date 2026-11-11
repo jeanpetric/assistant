@@ -741,7 +741,7 @@ async function taskView(id, { every, leave, reload }) {
     h('label', {}, 'Working directory for agents'),
     localWorkdirSelect(t, `Project default (${taskWorkdir({ ...t, workdir: '' })})`, { onchange: e => save({ workdir: e.target.value }) }),
     fields,
-    reviewButtons(t, data.reviews),
+    reviewButtons(t, data.reviews, every),
     memories.el,
     buildsOn.el,
     slack.el,
@@ -2061,23 +2061,42 @@ function skillDialog(skill, b, done) {
 
 const reviewStateText = { generating: 'Generiram…', failed: 'Generiranje nije uspjelo' };
 
-// The task's PR review buttons, only for a task with a pull_request field: Otvori review opens the
-// latest review (with its state while it is not ready), Novi review starts a new one and opens it.
-function reviewButtons(task, reviews) {
+// The task's PR review buttons, only for a task with a pull_request field. Novi review starts a new
+// review and stays in the task: while the latest one is generating (polled through `every`) it shows
+// Generiram… with its session, and Novi review waits. Otvori review opens the latest ready review.
+function reviewButtons(task, reviews, every) {
   if (!task.fields || !task.fields.pull_request) return null;
-  const latest = reviews && reviews[0];
-  return h('div', { class: 'review-buttons' },
-    h('label', {}, 'PR review'),
-    h('div', { class: 'row' },
-      latest ? h('a', { class: 'btn small', href: `#/review/${latest.id}` }, 'Otvori review') : null,
-      h('button', {
-        class: 'ghost small', title: 'Agent sesija na tasku napravi novi review PR-a; stari ostaju',
-        onclick: async () => {
-          const r = await api('POST', `/api/tasks/${task.id}/reviews`);
-          location.hash = `#/review/${r.review_id}`;
-        },
-      }, 'Novi review'),
-      latest && reviewStateText[latest.status] ? h('span', { class: 'muted small' }, reviewStateText[latest.status]) : null));
+  let list = reviews || [];
+  const el = h('div', { class: 'review-buttons' });
+  const generating = () => list[0] && list[0].status === 'generating';
+  const draw = () => {
+    const ready = list.find(r => r.status === 'ready');
+    const latest = list[0];
+    const state = latest && reviewStateText[latest.status];
+    el.replaceChildren(
+      h('label', {}, 'PR review'),
+      h('div', { class: 'row' },
+        ready ? h('a', { class: 'btn small', href: `#/review/${ready.id}` }, 'Otvori review') : null,
+        h('button', {
+          class: 'ghost small', disabled: generating(),
+          title: 'Agent sesija na tasku napravi novi review PR-a; stari ostaju',
+          onclick: async () => {
+            await api('POST', `/api/tasks/${task.id}/reviews`);
+            list = await api('GET', `/api/tasks/${task.id}/reviews`);
+            draw();
+          },
+        }, 'Novi review'),
+        state ? h('span', { class: 'muted small review-gen-state' }, state,
+          latest.session_id ? [' — ', h('a', { href: sessionHref({ task_id: task.id, id: latest.session_id }) }, `sesija #${latest.session_id}`)] : null) : null));
+  };
+  if (every) every(3000, async () => {
+    if (!generating()) return;
+    list = await api('GET', `/api/tasks/${task.id}/reviews`);
+    if (list[0] && list[0].status === 'ready') toast('Review je gotov');
+    draw();
+  });
+  draw();
+  return el;
 }
 
 // A file's extension for the review's filter: what follows the last dot of its base name, lowercase
