@@ -107,16 +107,26 @@ eval(require('fs').readFileSync(process.argv.at(-1), 'utf8'));
   const opened = () => page.files.map(x => x.isOpen() ? 1 : 0).join('');
   if (opened() !== '110000') fail('default fold ' + opened());
   if (!find(fileEls[0], e => e.classes.has('why') && e.text === 'ranked why')) fail('no why');
-  // The notes are hidden at first; the toolbar's button shows and hides them.
+  // A note is hidden at first; its line's note button (the kind's letter) shows and hides it.
   const ann = find(fileEls[0], e => e.classes.has('ann') && e.text.includes('Računa.'));
   if (!ann || !hidden(ann)) fail('annotation not hidden at first');
-  const notesBtn = find(page.el, e => e.classes.has('notes-btn'));
-  if (notesBtn.text !== 'Prikaži bilješke (1)') fail('notes button ' + notesBtn.text);
-  notesBtn.fire('click');
-  if (hidden(ann) || notesBtn.text !== 'Sakrij bilješke (1)') fail('notes not shown');
-  notesBtn.fire('click');
-  if (!hidden(ann)) fail('notes not hidden again');
-  notesBtn.fire('click');
+  const notedLine = find(fileEls[0], e => e.classes.has('dl') && e.classes.has('noted'));
+  const noteBtn = find(notedLine, e => e.classes.has('note-btn'));
+  if (!noteBtn || noteBtn.text !== 'M') fail('note button ' + (noteBtn && noteBtn.text));
+  if (findAll(fileEls[0], e => e.classes.has('note-btn')).length !== 1) fail('note button on a line without notes');
+  noteBtn.fire('click');
+  if (hidden(ann) || !noteBtn.classes.has('on')) fail('note not shown');
+  noteBtn.fire('click');
+  if (!hidden(ann)) fail('note not hidden again');
+  noteBtn.fire('click');
+  if (find(page.el, e => e.classes.has('notes-btn'))) fail('a show-all notes button');
+  // Notes without a diff line are behind their own button.
+  const orphanPage = reviewPage(Object.assign({}, data, { files: [file('x.rb', 'ranked', 1, payHunks, [{ line: 99, side: 'new', text: 'Daleko.' }])] }), []);
+  const orphans = find(orphanPage.el, e => e.classes.has('review-orphans'));
+  const orphanBtn = find(orphanPage.el, e => e.classes.has('note-btn'));
+  if (!orphans || !hidden(orphans) || orphanBtn.text !== 'Bilješke bez linije u diffu (1)') fail('orphans not hidden');
+  orphanBtn.fire('click');
+  if (hidden(orphans)) fail('orphans not shown');
 
   // Chips: the extensions with their counts, all on; one off hides its files, on shows them again.
   const chips = page.chips.map(c => c.text).join(' ');

@@ -433,14 +433,18 @@ dialog.wide { width: min(900px, 94vw); max-height: 88vh; overflow-y: auto; }
 .review-orphans { background: rgba(201, 138, 18, .12); padding: 6px 12px; }
 .review-file-body { font-family: var(--mono); font-size: 12px; line-height: 20px; }
 .review-file-body > .muted { padding: 8px 12px; font-family: inherit; }
-.dl { display: grid; grid-template-columns: 48px 48px 1fr 40px; align-items: start; }
+.dl { display: grid; grid-template-columns: 48px 48px 1fr 72px; align-items: start; }
+.dl .acts { display: flex; justify-content: flex-end; gap: 4px; margin-right: 4px; }
 .dl .n { text-align: right; padding-right: 8px; color: var(--muted); user-select: none; }
 .dl .c { white-space: pre-wrap; word-break: break-all; padding: 0 6px; }
 .dl.add { background: rgba(46, 157, 91, .12); }
 .dl.del { background: rgba(210, 60, 60, .12); }
 .dl.hunk { background: rgba(59, 110, 245, .08); color: var(--muted); }
 .dl.noted .c { box-shadow: inset 3px 0 var(--warn); }
-.ask-btn { padding: 0 6px; font-size: 11px; line-height: 18px; justify-self: end; margin-right: 4px; opacity: 0; }
+.ask-btn, .note-btn { padding: 0 6px; font-size: 11px; line-height: 18px; }
+.ask-btn { opacity: 0; }
+.note-btn { color: var(--warn); border-color: var(--warn); font-weight: 700; }
+.note-btn.on { background: rgba(201, 138, 18, .15); }
 .dl:hover .ask-btn, .review-file-head .ask-btn, .ask-btn.has-q { opacity: 1; }
 .ask-btn.has-q { border-color: var(--accent); color: var(--accent); }
 .ann {
