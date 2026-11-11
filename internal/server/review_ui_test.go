@@ -75,12 +75,16 @@ const findAll = (el, pred, out = []) => {
 };
 const hidden = el => el.classes.has('hidden');
 const location = { hash: '' };
+let confirmed = true;
+const confirms = [];
+const confirm = m => { confirms.push(m); return confirmed; };
 const posts = [];
 let nextQ = 100;
 let taskReviews = [];
 const api = async (method, path, body) => {
   posts.push([method, path, body]);
   if (method === 'GET' && path.endsWith('/reviews')) return taskReviews;
+  if (path.endsWith('/submit') && body.body === 'gh fails') throw new Error('Can not approve your own pull request');
   if (path.endsWith('/questions')) return Object.assign({ id: nextQ++, status: 'pending', short_answer: '', full_answer: '', error: '' }, body);
   return { review_id: 42, session_id: 9 };
 };
@@ -202,6 +206,29 @@ eval(require('fs').readFileSync(process.argv.at(-1), 'utf8'));
 
   btn('Otvori sve').fire('click');
   if (find(page.el, e => e.children.some(c => c === 'null' || c === 'undefined' || c === 'false'))) fail('null rendered as text');
+
+  // Posting the review to GitHub: Comment and Request changes need a message; each asks first; what was
+  // posted shows under the box; gh's error shows there too.
+  const sub = find(page.el, e => e.classes.has('review-submit'));
+  const subBody = find(sub, e => e.classes.has('review-submit-body'));
+  const verdict = label => find(sub, e => e.tag === 'button' && e.text === label);
+  const nPosts = posts.length;
+  await verdict('Request changes').fire('click');
+  if (posts.length !== nPosts || hidden(find(sub, e => e.classes.has('q-error')))) fail('request changes without a message');
+  subBody.value = 'Fali test.';
+  confirmed = false;
+  await verdict('Request changes').fire('click');
+  if (posts.length !== nPosts || !confirms.at(-1).includes('https://github.com/o/r/pull/1')) fail('posted without confirm');
+  confirmed = true;
+  await verdict('Request changes').fire('click');
+  if (JSON.stringify(posts.at(-1)) !== JSON.stringify(['POST', '/api/reviews/7/submit', { event: 'request_changes', body: 'Fali test.' }])) fail('submit ' + JSON.stringify(posts.at(-1)));
+  if (subBody.value !== '' || !find(sub, e => e.classes.has('review-submitted') && e.text.includes('Zatražene izmjene: Fali test.')) || toasts.at(-1) !== 'Zatražene izmjene na GitHubu') fail('after submit');
+  if (!hidden(find(sub, e => e.classes.has('q-error')))) fail('error left after submit');
+  await verdict('Approve').fire('click');
+  if (JSON.stringify(posts.at(-1)[2]) !== JSON.stringify({ event: 'approve', body: '' })) fail('approve ' + JSON.stringify(posts.at(-1)));
+  subBody.value = 'gh fails';
+  await verdict('Comment').fire('click');
+  if (!find(sub, e => e.classes.has('q-error') && !hidden(e) && e.text.includes('own pull request')) || subBody.value !== 'gh fails' || verdict('Comment').disabled) fail('gh error');
 
   // Not ready: the state with the session, no files.
   const gen = reviewPage(Object.assign({}, data, { review: Object.assign({}, data.review, { status: 'generating' }) }), []);

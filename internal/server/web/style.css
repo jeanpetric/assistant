@@ -409,6 +409,9 @@ dialog.wide { width: min(900px, 94vw); max-height: 88vh; overflow-y: auto; }
 .review-meta { margin-bottom: 8px; }
 .review-summary { margin-top: 8px; }
 .review-others { margin-top: 8px; }
+.review-submit { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
+.review-submit-body { width: 100%; box-sizing: border-box; }
+.review-submitted:empty { display: none; }
 .review-state { font-weight: 500; }
 .review-toolbar {
   position: sticky; top: 49px; z-index: 3;

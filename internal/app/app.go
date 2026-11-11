@@ -89,6 +89,10 @@ type App struct {
 	// nil while the database is not in sync yet.
 	SyncServer string
 	SyncClient func(context.Context) (ClientStatus, error)
+
+	// GH runs the GitHub CLI with these arguments, returning its stdout;
+	// nil runs gh on the PATH (see App.gh).
+	GH func(ctx context.Context, args ...string) ([]byte, error)
 }
 
 const (

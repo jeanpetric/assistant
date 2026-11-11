@@ -166,6 +166,29 @@ func (s *Server) askReview(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 201, q)
 }
 
+// submitReview posts the user's verdict on the review's PR to GitHub:
+// event approve, comment or request_changes, with body as its message.
+func (s *Server) submitReview(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	var in struct {
+		Event string `json:"event"`
+		Body  string `json:"body"`
+	}
+	if err := decode(r, &in); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := s.app.SubmitReview(r.Context(), id, in.Event, in.Body); err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"submitted": true, "event": in.Event})
+}
+
 // reviewWithoutDiff keeps get_review small: the files without their hunks.
 func reviewWithoutDiff(raw []byte) ([]byte, error) {
 	var out map[string]json.RawMessage

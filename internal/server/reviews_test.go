@@ -1,7 +1,9 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -168,4 +170,42 @@ func TestReviewForeignSession(t *testing.T) {
 	sess, _ := c.app.Store.Session(ctx, started.SessionID)
 	foreign(t, c, sess)
 	c.do("POST", fmt.Sprintf("/api/reviews/%d/questions", started.ReviewID), map[string]any{"path": "app/pay.rb", "question": "?"}, 409, nil)
+}
+
+// Submitting a review: the verdict and message go to gh pr review on the
+// review's PR (API and MCP); bad input is 400, gh's refusal 502.
+func TestSubmitReviewAPI(t *testing.T) {
+	c := newClient(t)
+	ctx := t.Context()
+	task, _ := c.app.Store.CreateTask(ctx, store.Task{Title: "PR"})
+	rev, _ := c.app.Store.CreateReview(ctx, store.Review{TaskID: task.ID, PRURL: "https://github.com/o/r/pull/3/changes"})
+	var calls []string
+	var ghErr error
+	c.app.GH = func(_ context.Context, args ...string) ([]byte, error) {
+		calls = append(calls, strings.Join(args, " "))
+		return nil, ghErr
+	}
+	submit := fmt.Sprintf("/api/reviews/%d/submit", rev.ID)
+	var out struct {
+		Submitted bool   `json:"submitted"`
+		Event     string `json:"event"`
+	}
+	c.do("POST", submit, map[string]any{"event": "request_changes", "body": "Fali test."}, 200, &out)
+	if !out.Submitted || out.Event != "request_changes" || len(calls) != 1 || calls[0] != "pr review 3 -R o/r --request-changes --body Fali test." {
+		t.Fatalf("out = %+v, calls = %q", out, calls)
+	}
+	c.do("POST", submit, map[string]any{"event": "comment"}, 400, nil)
+	c.do("POST", submit, map[string]any{"event": "merge", "body": "x"}, 400, nil)
+	c.do("POST", "/api/reviews/999/submit", map[string]any{"event": "approve"}, 404, nil)
+	if text, isErr := c.tool("submit_review", map[string]any{"review_id": rev.ID, "event": "approve"}); isErr || len(calls) != 2 || calls[1] != "pr review 3 -R o/r --approve" {
+		t.Fatalf("submit_review = %s, calls = %q", text, calls)
+	}
+	ghErr = errors.New("Can not approve your own pull request")
+	var e struct {
+		Error string `json:"error"`
+	}
+	c.do("POST", submit, map[string]any{"event": "approve"}, 502, &e)
+	if !strings.Contains(e.Error, "own pull request") {
+		t.Fatalf("error = %q", e.Error)
+	}
 }

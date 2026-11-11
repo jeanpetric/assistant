@@ -110,6 +110,7 @@ func (s *Server) routes() {
 	m.HandleFunc("DELETE /api/reviews/{id}", s.deleteReview)
 	m.HandleFunc("PUT /api/reviews/{id}/notes", s.saveReviewNotes)
 	m.HandleFunc("POST /api/reviews/{id}/questions", s.askReview)
+	m.HandleFunc("POST /api/reviews/{id}/submit", s.submitReview)
 
 	m.HandleFunc("GET /api/memories", s.listMemories)
 	m.HandleFunc("POST /api/memories", s.createMemory)
@@ -191,6 +192,8 @@ func writeErr(w http.ResponseWriter, err error) {
 		errors.Is(err, app.ErrNotOnTask), errors.Is(err, slack.ErrNotInChannel), errors.Is(err, slack.ErrChannelNotFound),
 		errors.Is(err, app.ErrNoPR), errors.Is(err, app.ErrBadReview):
 		status = http.StatusBadRequest
+	case errors.Is(err, app.ErrGitHub):
+		status = http.StatusBadGateway
 	}
 	if status == http.StatusInternalServerError {
 		log.Printf("error: %v", err)

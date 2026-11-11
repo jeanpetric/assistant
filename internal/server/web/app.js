@@ -2109,6 +2109,46 @@ function fileExt(path) {
 
 const reviewQKey = (path, side, line) => `${path}|${side}|${line}`;
 
+const reviewVerdicts = [
+  { event: 'approve', label: 'Approve', cls: 'small', done: 'Odobreno' },
+  { event: 'comment', label: 'Comment', cls: 'ghost small', done: 'Komentirano' },
+  { event: 'request_changes', label: 'Request changes', cls: 'danger small', done: 'Zatražene izmjene' },
+];
+
+// The box that posts the user's review of the PR to GitHub: a message and Approve, Comment or Request
+// changes, each asking first since it is public. Comment and Request changes need the message. What was
+// posted shows under it until the page is left.
+function reviewSubmitBox(r) {
+  const body = h('textarea', { class: 'review-submit-body', rows: 3, placeholder: 'Poruka uz review (Markdown; za Approve nije obavezna)…' });
+  const err = h('div', { class: 'q-error hidden' });
+  const done = h('div', { class: 'small review-submitted' });
+  const buttons = reviewVerdicts.map(v => h('button', { class: v.cls, onclick: () => submit(v) }, v.label));
+  async function submit(v) {
+    const text = body.value.trim();
+    err.classList.add('hidden');
+    if (!text && v.event !== 'approve') {
+      err.replaceChildren(`${v.label} treba poruku.`);
+      err.classList.remove('hidden');
+      return;
+    }
+    if (!confirm(`${v.label} na GitHubu za ${r.pr_url}?` + (text ? `\n\n${text}` : ''))) return;
+    buttons.forEach(b => { b.disabled = true; });
+    try {
+      await api('POST', `/api/reviews/${r.id}/submit`, { event: v.event, body: text });
+      body.value = '';
+      toast(`${v.done} na GitHubu`);
+      done.append(h('div', {}, `✓ ${v.done}`, text ? `: ${text}` : ''));
+    } catch (e) {
+      err.replaceChildren(e.message);
+      err.classList.remove('hidden');
+    } finally {
+      buttons.forEach(b => { b.disabled = false; });
+    }
+  }
+  return h('div', { class: 'review-submit' }, body,
+    h('div', { class: 'row' }, h('span', { class: 'muted small grow' }, 'Objavi review na GitHubu'), buttons), err, done);
+}
+
 // The review page: the PR's summary, a chip per file extension that shows or hides its files, Otvori sve /
 // Zatvori sve, and the files in reading order (ranked open, the rest folded), each with its diff and notes.
 // Every diff line and file header has a ? that opens a box to ask the review's session about it; the box
@@ -2143,7 +2183,8 @@ function reviewPage(data, others) {
     data.summary ? h('div', { class: 'md review-summary' }, markdown(data.summary)) : null,
     others && others.length > 1 ? h('div', { class: 'small review-others' }, 'Reviewi ovog taska: ',
       others.map((o, i) => [i ? ' · ' : '', o.id === r.id ? h('strong', {}, fmtTime(o.created_at))
-        : h('a', { href: `#/review/${o.id}` }, fmtTime(o.created_at)), reviewStateText[o.status] ? ` (${reviewStateText[o.status]})` : ''])) : null);
+        : h('a', { href: `#/review/${o.id}` }, fmtTime(o.created_at)), reviewStateText[o.status] ? ` (${reviewStateText[o.status]})` : ''])) : null,
+    r.pr_url ? reviewSubmitBox(r) : null);
 
   if (r.status !== 'ready') {
     return {

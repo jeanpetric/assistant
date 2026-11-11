@@ -602,6 +602,17 @@ func (s *Server) mcpTools() []mcpTool {
 			}),
 			call: byID("POST", "/api/reviews/%d/questions", "review_id", true),
 		},
+		{
+			Name: "submit_review",
+			Description: "Post a review of a review's pull request on GitHub as the user gh is logged in as: approve, comment or request_changes, with body as its message " +
+				"(required but for approve). It is public and cannot be taken back: only when the user asked for exactly this verdict and message.",
+			InputSchema: schema([]string{"review_id", "event"}, map[string]any{
+				"review_id": prop("integer", "Review id"),
+				"event":     prop("string", "approve, comment or request_changes"),
+				"body":      prop("string", "The review's message (Markdown)"),
+			}),
+			call: byID("POST", "/api/reviews/%d/submit", "review_id", true),
+		},
 	}
 }
 
