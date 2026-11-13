@@ -82,9 +82,7 @@ func TestForeignSessionUI(t *testing.T) {
 	for _, want := range []string{
 		"const sessionNode = s => s.node_name || `node ${s.node_id}`;",
 		"const resumable = owned && ['interrupted', 'cancelled', 'error'].includes(s.status);",
-		"const resumeCmd = owned && s.claude_session_id ?",
 		"running && owned ? h('button', { class: 'danger small'",
-		"owned && !running && s.claude_session_id ? h('button', {",
 		"readOnly.textContent = owned ? '' : `Started on ${sessionNode(s)} — read-only here`;",
 		"for (const x of [input, send, runSkill]) if (x) x.hidden = !owned;",
 		"hidden: c.session.owned === false,",

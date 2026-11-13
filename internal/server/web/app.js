@@ -1332,21 +1332,13 @@ function sessionComponent(session, messages, task) {
     const owned = s.owned !== false;
     const running = s.status === 'running';
     const resumable = owned && ['interrupted', 'cancelled', 'error'].includes(s.status);
-    const resumeCmd = owned && s.claude_session_id ? `cd ${JSON.stringify(s.workdir)} && ${s.agent || 'claude'} --resume ${s.claude_session_id}` : '';
-    head.replaceChildren(...[
-      h('span', { class: 'title', onclick: () => c.setCollapsed(!el.classList.contains('collapsed')) }, s.title || `Session ${s.id}`),
+    // The title and the session's facts wrap on their own; the buttons sit in a fixed group on the
+    // right of the first line, the collapse toggle always last, so it never moves when a badge grows.
+    const info = h('div', { class: 'session-info' }, ...[
       h('span', { class: 'badge status-' + s.status }, running ? h('span', { class: 'pulse' }) : null, s.status),
       needsInputBadge(s.needs_input ? 1 : 0, 'The agent ' + s.needs_input),
-      s.needs_input || (!running && !s.seen && s.task_id) ? h('button', {
-        class: 'ghost small', title: s.needs_input ? 'No answer needed: clear the tag' : 'Seen how the turn ended: clear the task\'s status',
-        onclick: async () => {
-          await api('DELETE', `/api/sessions/${s.id}/needs-input`);
-          Object.assign(c.session, { needs_input: '', seen: true });
-          drawHead();
-        },
-      }, 'Dismiss') : null,
       s.agent && s.agent !== 'claude' ? h('span', { class: 'badge' }, agentLabels[s.agent] || s.agent) : null,
-      h('span', { class: 'badge' }, s.mode),
+      s.mode && s.mode !== 'bypassPermissions' ? h('span', { class: 'badge' }, s.mode) : null,
       s.model ? h('span', { class: 'badge' }, s.model) : null,
       s.trigger !== 'manual' ? h('span', { class: 'badge' }, s.trigger) : null,
       s.parent_id ? h('a', { class: 'small', href: sessionHref({ task_id: s.task_id, id: s.parent_id }) }, `← from #${s.parent_id}`) : null,
@@ -1354,13 +1346,11 @@ function sessionComponent(session, messages, task) {
       s.report_to ? h('a', { class: 'small', href: `#/session/${s.report_to}`, title: 'This session reports how each turn ends to that one' }, `reports to #${s.report_to}`) : null,
       s.cost_usd ? h('span', { class: 'muted small' }, '$' + s.cost_usd.toFixed(2)) : null,
       h('span', { class: 'muted small' }, fmtTime(s.created_at)),
-      resumeCmd ? h('button', {
-        class: 'ghost small', title: resumeCmd,
-        onclick: () => navigator.clipboard.writeText(resumeCmd).then(() => toast('Resume command copied')),
-      }, 'Copy resume cmd') : null,
+      s.memorizing ? h('span', { class: 'badge' }, h('span', { class: 'pulse' }), 'updating memory') : null,
+    ].filter(Boolean));
+    const actions = h('div', { class: 'session-actions' }, ...[
       running && owned ? h('button', { class: 'danger small', onclick: () => api('POST', `/api/sessions/${s.id}/cancel`) }, 'Stop') : null,
       resumable ? h('button', { class: 'small', title: 'Continue this session where it stopped', onclick: doResume }, 'Resume') : null,
-      s.memorizing ? h('span', { class: 'badge' }, h('span', { class: 'pulse' }), 'updating memory') : null,
       !running && !s.memorizing && task?.memories.length && s.claude_session_id ? h('button', {
         class: 'ghost small', title: 'Update the task\'s memories with what this session found out (it also happens after every turn)',
         onclick: async () => {
@@ -1370,10 +1360,6 @@ function sessionComponent(session, messages, task) {
           toast('Updating the memories…');
         },
       }, 'Update memory') : null,
-      owned && !running && s.claude_session_id ? h('button', {
-        class: 'ghost small', title: 'Have the agent write a brief and continue in a new session with a fresh context',
-        onclick: () => handoffDialog(s, refresh),
-      }, 'Hand off') : null,
       !el.classList.contains('collapsed') && body.querySelectorAll(':scope > .turn').length > 1 ? h('button', {
         class: 'ghost small', title: 'Fold the prompt and the reply of every turn but the last',
         onclick: () => [...body.querySelectorAll(':scope > .turn')].slice(0, -1).forEach(t => setTurn(t, true)),
@@ -1382,6 +1368,9 @@ function sessionComponent(session, messages, task) {
         ? h('button', { class: 'ghost small', title: 'Expand the session', onclick: () => c.setCollapsed(false) }, '▸')
         : h('button', { class: 'ghost small', title: 'Collapse the session to its head', onclick: () => c.setCollapsed(true) }, '▾'),
     ].filter(Boolean));
+    head.replaceChildren(
+      h('span', { class: 'title', onclick: () => c.setCollapsed(!el.classList.contains('collapsed')) }, s.title || `Session ${s.id}`),
+      info, actions);
     // While the agent works a reply is queued; the first turn may not have its agent session yet.
     send.disabled = !running && !s.claude_session_id;
     input.placeholder = running ? 'The agent is working: a reply waits in the queue until it finishes… (⌘↵ to queue)'
@@ -1472,26 +1461,6 @@ function sessionComponent(session, messages, task) {
 function summaryChanged(a, b) {
   return a.summarizing !== b.summarizing || a.summary_at !== b.summary_at || a.summary_stale !== b.summary_stale ||
     a.memorizing !== b.memorizing;
-}
-
-// Hand a session off to a fresh one: its agent writes a brief, and a new
-// session starts from it. The new one shows up once the brief is written.
-function handoffDialog(session, onStarted) {
-  const dlg = document.getElementById('dialog');
-  const note = h('textarea', { rows: 4, placeholder: 'Optional: what the new session should do next' });
-  const start = async () => {
-    await api('POST', `/api/sessions/${session.id}/handoff`, { note: note.value });
-    dlg.close();
-    toast('Writing the handoff brief…');
-    onStarted();
-  };
-  note.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) start(); });
-  dlg.replaceChildren(h('h2', {}, 'Continue in a new session'),
-    h('p', { class: 'muted small' }, 'The agent writes a brief of its work in this session; a new session with the same settings starts from that brief and a fresh context.'),
-    h('label', {}, 'Next'), note,
-    h('div', { class: 'dialog-actions' }, cancelButton(dlg), h('button', { onclick: start }, 'Hand off', hint('⌘↵'))));
-  dlg.showModal();
-  note.focus();
 }
 
 function schedulesPanel(taskId, schedules) {

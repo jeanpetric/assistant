@@ -190,8 +190,11 @@ tr.clickable:hover td { background: var(--surface-2); }
   border-radius: var(--radius);
   margin-bottom: 16px;
 }
-.session-head { display: flex; gap: 10px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
-.session-head .title { font-weight: 600; flex: 1; min-width: 200px; }
+.session-head { display: flex; gap: 10px; align-items: flex-start; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+.session-head .title { font-weight: 600; flex: 1 1 200px; min-width: 120px; line-height: 24px; }
+/* The facts wrap among themselves; the buttons keep their place at the right of the first line. */
+.session-info { display: flex; flex: 0 1 auto; min-width: 0; flex-wrap: wrap; gap: 4px 10px; align-items: center; justify-content: flex-end; min-height: 24px; }
+.session-actions { display: flex; flex: none; gap: 6px; align-items: center; min-height: 24px; }
 .session-body { padding: 10px 14px; }
 .session.collapsed > :not(.session-head) { display: none; }
 .session.collapsed .session-head { border-bottom: none; }

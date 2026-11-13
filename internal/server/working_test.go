@@ -23,7 +23,6 @@ func TestWorkingIndicator(t *testing.T) {
 		"if (m.id <= last) continue;",
 		"input.value = '';\n    await refresh();",
 		"await api('POST', `/api/sessions/${c.session.id}/resume`);\n    await refresh();",
-		"handoffDialog(s, refresh)",
 	} {
 		if !bytes.Contains(js, []byte(want)) {
 			t.Fatalf("app.js lacks %q", want)

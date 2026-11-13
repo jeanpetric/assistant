@@ -49,9 +49,12 @@ One Go binary, one SQLite file, no JavaScript build step.
   directory; it starts in the background and shows on the *Sessions* page.
 - **Agent status** on every card and task: running, ✋ *needs you* (the turn ended with a
   question, a permission denial or a plan to approve — also a notification), turn finished,
-  done, failed or cancelled, until you've seen it. *Dismiss* on the session clears it.
-- **Hand off**: when a session's context fills up, its agent writes a self-contained brief and a
-  fresh session continues from it, with the same task, mode, model and directory.
+  done, failed or cancelled, until you've seen it.
+- **Hand off** (API only, `POST /api/sessions/{id}/handoff`): when a session's context fills up, its agent writes a
+  self-contained brief and a fresh session continues from it, with the same task, mode, model and directory.
+- **Session head**: title, then status, cost and date (and any badge that differs from the
+  usual: agent, a mode other than bypassPermissions, model, trigger); its buttons sit on the
+  right of the first line with the collapse toggle always last, so it never moves.
 - **Usage limits**: Claude's 5-hour and weekly usage left is shown under a running session.
 - **Sessions overview**: every session across all tasks with status and latest message.
 - **Working directories**: list the directories agents may run in under *Settings → Working
